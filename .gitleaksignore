@@ -1,0 +1,5 @@
+# Fingerprints of acknowledged findings (commit:file:rule:line).
+# Historical access_token example in a since-untracked agent skill doc.
+# If the token was real, it must be rotated — ignoring it here only
+# unblocks CI; it does not remove it from git history.
+4b70ce5fb1e02d0f6f901e01a9b4f54b454f1991:.claude/skills/e2e-test.md:generic-api-key:143

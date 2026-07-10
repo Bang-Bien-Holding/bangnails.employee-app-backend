@@ -1,0 +1,39 @@
+name: Gitleaks
+
+# Secret scanning runs on every push to every branch (not just PRs): a secret
+# is already on GitHub's servers the moment it's pushed, so it must be flagged
+# for rotation immediately — even if no PR is ever opened for the branch.
+on:
+  push:
+    branches: ['**']
+
+concurrency:
+  group: gitleaks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          # Full history so leaks buried in earlier commits are caught too
+          fetch-depth: 0
+      # Raw binary instead of gitleaks/gitleaks-action: the action requires a
+      # paid GITLEAKS_LICENSE for org-owned repos; the tool itself is free.
+      # Acknowledged historical findings live in .gitleaksignore.
+      - name: Run gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -sSfL -O "${base}/${tarball}"
+          curl -sSfL "${base}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" | grep " ${tarball}\$" | sha256sum -c -
+          tar -xzf "${tarball}" gitleaks
+          ./gitleaks git --redact --no-banner --verbose .

@@ -1,0 +1,44 @@
+.env
+.envrc
+bin/
+tmp/
+# Compiled binaries (anchored: cmd/migrate/seed is a source dir)
+/api
+/seed
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+*.pem
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Coding agent harness (local only, not pushed)
+CLAUDE.md
+AGENTS.md
+feature_list.json
+progress.md
+session-handoff.md
+init.sh
+docs/harness-report.html
+docs/harness-benchmark.json
