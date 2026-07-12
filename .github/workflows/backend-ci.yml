@@ -1,0 +1,189 @@
+name: Backend CI
+
+# Full CI runs where merge decisions and deploys happen: on PRs (which test
+# the merge result) and on pushes to the long-lived branches that trigger
+# migrations/deploys. Secret scanning is the exception — it runs on every
+# push to every branch via gitleaks.yml.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, staging]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Never cancel main/staging runs: an in-flight migrate job must not be
+  # killed mid-migration by a follow-up push.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/staging' }}
+
+# Least-privilege default: every job here only needs to read the repo
+# (checkout, build, test, migrate). None push commits, comment on PRs, or
+# publish packages, so no job needs an elevated override.
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint & Vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          staticcheck ./...
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build
+        run: go build -v ./...
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Run tests
+        run: go test -race -count=1 ./...
+
+  security:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  # Secret scanning (gitleaks) lives in its own workflow, gitleaks.yml,
+  # so it runs on every push to every branch independently of this CI.
+  trivy:
+    name: Container Scan (trivy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        run: docker build -t bangnails-api:ci .
+
+      # Catches vulnerable OS packages / binaries in the final image that
+      # govulncheck (source-level, Go-only) does not see.
+      - name: Scan image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: bangnails-api:ci
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Scan Dockerfile & config for misconfigurations
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+  migrate:
+    name: Apply Migrations (production)
+    runs-on: ubuntu-latest
+    # Runs only on merge to main, after all checks pass. Railway's
+    # "Wait for CI" holds the deploy until this job succeeds, so new
+    # code never starts against an un-migrated database.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, test, security, trivy]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@latest
+
+      - name: Run migrations
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: goose -dir internal/adapters/postgresql/migrations up
+
+  migrate-staging:
+    name: Apply Migrations (staging)
+    runs-on: ubuntu-latest
+    # Runs only on merge to staging, after all checks pass. Railway's
+    # "Wait for CI" on the staging environment holds the deploy until this
+    # job succeeds, so new code never starts against an un-migrated database.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
+    needs: [build, test, security, trivy]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Install goose
+        run: go install github.com/pressly/goose/v3/cmd/goose@latest
+
+      - name: Run migrations
+        env:
+          GOOSE_DRIVER: postgres
+          GOOSE_DBSTRING: ${{ secrets.RAILWAY_STAGING_DATABASE_URL }}
+        run: goose -dir internal/adapters/postgresql/migrations up

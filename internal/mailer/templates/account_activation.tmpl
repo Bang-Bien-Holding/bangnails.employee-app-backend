@@ -1,0 +1,16 @@
+{{define "subject"}}Kích hoạt tài khoản Bangnails của bạn{{end}}
+
+{{define "plainBody"}}Xin chào {{.FullName}},
+
+Tài khoản nhân viên của bạn tại Bangnails đã được tạo. Vui lòng đặt mật khẩu trong vòng {{.TTLMinutes}} phút bằng đường liên kết dưới đây:
+
+{{.Link}}
+
+Nếu bạn không yêu cầu tài khoản này, vui lòng bỏ qua email này.
+{{end}}
+
+{{define "htmlBody"}}<p>Xin chào {{.FullName}},</p>
+<p>Tài khoản nhân viên của bạn tại Bangnails đã được tạo. Vui lòng đặt mật khẩu trong vòng {{.TTLMinutes}} phút bằng đường liên kết dưới đây:</p>
+<p><a href="{{.Link}}">{{.Link}}</a></p>
+<p>Nếu bạn không yêu cầu tài khoản này, vui lòng bỏ qua email này.</p>
+{{end}}
