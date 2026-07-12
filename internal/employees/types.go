@@ -63,9 +63,11 @@ type setEmployeePasswordParams struct {
 
 // setEmployeeActiveParams is the body for PATCH /employees/{id}/status —
 // "active status" is treated as its own sub-resource rather than
-// verb-style /activate, /deactivate endpoints.
+// verb-style /activate, /deactivate endpoints. IsActive is a pointer so
+// validate:"required" can reject an omitted field instead of silently
+// defaulting to false.
 type setEmployeeActiveParams struct {
-	IsActive bool `json:"isActive"`
+	IsActive *bool `json:"isActive" validate:"required"`
 }
 
 // bulkDeleteEmployeesParams is the body for DELETE /employees (bulk).

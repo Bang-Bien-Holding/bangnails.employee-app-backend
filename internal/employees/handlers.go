@@ -144,7 +144,12 @@ func (h *Handler) SetEmployeeActive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.SetEmployeeActive(r.Context(), id, params.IsActive); err != nil {
+	if err := validate.Struct(params); err != nil {
+		http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := h.service.SetEmployeeActive(r.Context(), id, *params.IsActive); err != nil {
 		status := http.StatusInternalServerError
 		if errors.Is(err, ErrEmployeeNotFound) {
 			status = http.StatusNotFound

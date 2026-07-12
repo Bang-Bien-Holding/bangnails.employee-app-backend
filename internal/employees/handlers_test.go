@@ -24,6 +24,10 @@ func withURLParam(r *http.Request, key, value string) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
 }
 
+func boolPtr(b bool) *bool {
+	return &b
+}
+
 func TestEmployeeHandler_GetEmployeeByID(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -291,16 +295,17 @@ func TestEmployeeHandler_UpdateEmployee(t *testing.T) {
 
 func TestEmployeeHandler_SetEmployeeActive(t *testing.T) {
 	tests := []struct {
-		name         string
-		idParam      string
-		bodyPayload  any
-		setupMock    func(mockSvc *MockService)
-		expectedCode int
+		name          string
+		idParam       string
+		bodyPayload   any
+		setupMock     func(mockSvc *MockService)
+		expectedCode  int
+		checkResponse func(t *testing.T, rec *httptest.ResponseRecorder)
 	}{
 		{
 			name:        "TS-HDL-26: Deactivate an existing employee",
 			idParam:     "1",
-			bodyPayload: setEmployeeActiveParams{IsActive: false},
+			bodyPayload: setEmployeeActiveParams{IsActive: boolPtr(false)},
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					SetEmployeeActive(gomock.Any(), int64(1), false).
@@ -311,7 +316,7 @@ func TestEmployeeHandler_SetEmployeeActive(t *testing.T) {
 		{
 			name:        "TS-HDL-27: Activate an existing employee",
 			idParam:     "1",
-			bodyPayload: setEmployeeActiveParams{IsActive: true},
+			bodyPayload: setEmployeeActiveParams{IsActive: boolPtr(true)},
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					SetEmployeeActive(gomock.Any(), int64(1), true).
@@ -322,7 +327,7 @@ func TestEmployeeHandler_SetEmployeeActive(t *testing.T) {
 		{
 			name:        "TS-HDL-28: Non-numeric id path param returns 400",
 			idParam:     "not-a-number",
-			bodyPayload: setEmployeeActiveParams{IsActive: true},
+			bodyPayload: setEmployeeActiveParams{IsActive: boolPtr(true)},
 			setupMock: func(mockSvc *MockService) {
 				// Service should NOT be called because parsing fails at the handler layer
 			},
@@ -331,7 +336,7 @@ func TestEmployeeHandler_SetEmployeeActive(t *testing.T) {
 		{
 			name:        "TS-HDL-29: Unknown id maps ErrEmployeeNotFound to 404",
 			idParam:     "999",
-			bodyPayload: setEmployeeActiveParams{IsActive: true},
+			bodyPayload: setEmployeeActiveParams{IsActive: boolPtr(true)},
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					SetEmployeeActive(gomock.Any(), int64(999), true).
@@ -342,13 +347,27 @@ func TestEmployeeHandler_SetEmployeeActive(t *testing.T) {
 		{
 			name:        "TS-HDL-30: Map internal server error on database failure",
 			idParam:     "1",
-			bodyPayload: setEmployeeActiveParams{IsActive: true},
+			bodyPayload: setEmployeeActiveParams{IsActive: boolPtr(true)},
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					SetEmployeeActive(gomock.Any(), int64(1), true).
 					Return(errors.New("connection refused"))
 			},
 			expectedCode: http.StatusInternalServerError,
+		},
+		{
+			name:        "TS-HDL-30b: Missing isActive field returns 400 instead of defaulting to false",
+			idParam:     "1",
+			bodyPayload: struct{}{},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called because validation happens at the Handler layer
+			},
+			expectedCode: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				if !bytes.Contains(rec.Body.Bytes(), []byte("validation")) {
+					t.Errorf("expected response to mention validation, got %q", rec.Body.String())
+				}
+			},
 		},
 	}
 
@@ -373,6 +392,10 @@ func TestEmployeeHandler_SetEmployeeActive(t *testing.T) {
 
 			if rec.Code != tc.expectedCode {
 				t.Errorf("expected status %d, got %d", tc.expectedCode, rec.Code)
+			}
+
+			if tc.checkResponse != nil {
+				tc.checkResponse(t, rec)
 			}
 		})
 	}
