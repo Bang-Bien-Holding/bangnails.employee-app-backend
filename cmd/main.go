@@ -36,7 +36,8 @@ func main() {
 		panic(err)
 	}
 
-	logger.Info("connected to database", "dsn", cfg.db.dsn)
+	connConfig := pool.Config().ConnConfig
+	logger.Info("connected to database", "host", connConfig.Host, "port", connConfig.Port, "database", connConfig.Database)
 
 	// Mailer
 	mailClient, err := mailer.New(mailer.Config{
