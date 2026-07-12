@@ -16,6 +16,12 @@ concurrency:
   # killed mid-migration by a follow-up push.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/staging' }}
 
+# Least-privilege default: every job here only needs to read the repo
+# (checkout, build, test, migrate). None push commits, comment on PRs, or
+# publish packages, so no job needs an elevated override.
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint & Vet
