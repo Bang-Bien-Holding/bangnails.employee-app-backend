@@ -1,6 +1,6 @@
 module github.com/Bang-Bien-Holding/bangnails.employee-app-backend
 
-go 1.25.4
+go 1.25.12
 
 require (
 	github.com/go-chi/chi/v5 v5.3.1
