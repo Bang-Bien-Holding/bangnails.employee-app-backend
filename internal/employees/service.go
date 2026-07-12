@@ -260,7 +260,7 @@ func (s *service) sendActivationEmail(ctx context.Context, employee repo.Employe
 	}
 
 	if err := s.mailer.Send(ctx, employee.Email, mailer.AccountActivationTemplate, data); err != nil {
-		slog.Error("employees: send activation email", "employee_id", employee.ID, "email", employee.Email, "error", err)
+		slog.Error("employees: send activation email", "employee_id", employee.ID, "error", err)
 	}
 }
 
