@@ -50,24 +50,24 @@ func (q *Queries) CreateEmployee(ctx context.Context, arg CreateEmployeeParams) 
 }
 
 const createPasswordResetToken = `-- name: CreatePasswordResetToken :one
-INSERT INTO password_reset_tokens (employee_id, token, expires_at)
+INSERT INTO password_reset_tokens (employee_id, token_hash, expires_at)
 VALUES ($1, $2, $3)
-RETURNING id, employee_id, token, expires_at, used_at, created_at
+RETURNING id, employee_id, token_hash, expires_at, used_at, created_at
 `
 
 type CreatePasswordResetTokenParams struct {
 	EmployeeID int64              `json:"employee_id"`
-	Token      string             `json:"token"`
+	TokenHash  string             `json:"token_hash"`
 	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
 }
 
 func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) (PasswordResetToken, error) {
-	row := q.db.QueryRow(ctx, createPasswordResetToken, arg.EmployeeID, arg.Token, arg.ExpiresAt)
+	row := q.db.QueryRow(ctx, createPasswordResetToken, arg.EmployeeID, arg.TokenHash, arg.ExpiresAt)
 	var i PasswordResetToken
 	err := row.Scan(
 		&i.ID,
 		&i.EmployeeID,
-		&i.Token,
+		&i.TokenHash,
 		&i.ExpiresAt,
 		&i.UsedAt,
 		&i.CreatedAt,
@@ -196,22 +196,23 @@ func (q *Queries) ListEmployees(ctx context.Context) ([]Employee, error) {
 const redeemPasswordResetToken = `-- name: RedeemPasswordResetToken :one
 UPDATE password_reset_tokens
 SET used_at = now()
-WHERE token = $1
+WHERE token_hash = $1
   AND used_at IS NULL
   AND expires_at > now()
-RETURNING id, employee_id, token, expires_at, used_at, created_at
+RETURNING id, employee_id, token_hash, expires_at, used_at, created_at
 `
 
 // Atomically claims a valid, unused token: the UPDATE's row lock ensures
 // only one concurrent caller can match the WHERE clause and get a row back,
 // so CompleteActivation can't be raced into redeeming the same token twice.
-func (q *Queries) RedeemPasswordResetToken(ctx context.Context, token string) (PasswordResetToken, error) {
-	row := q.db.QueryRow(ctx, redeemPasswordResetToken, token)
+// Callers pass the SHA-256 digest of the bearer token, not the raw value.
+func (q *Queries) RedeemPasswordResetToken(ctx context.Context, tokenHash string) (PasswordResetToken, error) {
+	row := q.db.QueryRow(ctx, redeemPasswordResetToken, tokenHash)
 	var i PasswordResetToken
 	err := row.Scan(
 		&i.ID,
 		&i.EmployeeID,
-		&i.Token,
+		&i.TokenHash,
 		&i.ExpiresAt,
 		&i.UsedAt,
 		&i.CreatedAt,

@@ -3,6 +3,7 @@ package employees
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -160,7 +161,7 @@ func (s *service) BulkDeleteEmployees(ctx context.Context, ids []int64) []BulkAc
 // means only one concurrent caller can redeem a given token, so the password
 // update below only ever runs after that caller has exclusively claimed it.
 func (s *service) CompleteActivation(ctx context.Context, params completeActivationParams) error {
-	resetToken, err := s.repo.RedeemPasswordResetToken(ctx, params.Token)
+	resetToken, err := s.repo.RedeemPasswordResetToken(ctx, hashToken(params.Token))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInvalidOrExpiredToken
@@ -260,12 +261,16 @@ func (s *service) sendActivationEmail(ctx context.Context, employee repo.Employe
 	}
 }
 
-// issuePasswordResetToken generates a random token, persists it via
-// CreatePasswordResetToken with the shared activationTokenTTL, and returns
-// the link an employee follows to set/reset their password. linkPath
-// distinguishes first-activation ("/activate") from an admin-triggered
-// reset ("/reset-password") on the frontend, though both consume the same
-// password_reset_tokens row via feat-008's completion endpoint.
+// issuePasswordResetToken generates a random token, persists only its
+// SHA-256 digest via CreatePasswordResetToken with the shared
+// activationTokenTTL, and returns the link an employee follows to
+// set/reset their password. The raw token never touches the database — it
+// only ever leaves this function inside the emailed link — so a leak of the
+// password_reset_tokens table (backup, replica, etc.) can't be used to
+// redeem anyone's token. linkPath distinguishes first-activation
+// ("/activate") from an admin-triggered reset ("/reset-password") on the
+// frontend, though both consume the same password_reset_tokens row via
+// feat-008's completion endpoint.
 func (s *service) issuePasswordResetToken(ctx context.Context, employee repo.Employee, linkPath string) (string, error) {
 	token, err := generateActivationToken()
 	if err != nil {
@@ -274,7 +279,7 @@ func (s *service) issuePasswordResetToken(ctx context.Context, employee repo.Emp
 
 	_, err = s.repo.CreatePasswordResetToken(ctx, repo.CreatePasswordResetTokenParams{
 		EmployeeID: employee.ID,
-		Token:      token,
+		TokenHash:  hashToken(token),
 		ExpiresAt:  pgtype.Timestamptz{Time: time.Now().Add(activationTokenTTL), Valid: true},
 	})
 	if err != nil {
@@ -292,6 +297,13 @@ func generateActivationToken() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// hashToken returns the hex-encoded SHA-256 digest of a bearer token, as
+// stored in and looked up from password_reset_tokens.token_hash.
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 // translateEmployeeUniqueViolation maps known Postgres unique-violation

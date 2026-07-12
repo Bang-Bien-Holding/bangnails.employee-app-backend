@@ -24,7 +24,7 @@ type Employee struct {
 type PasswordResetToken struct {
 	ID         int64              `json:"id"`
 	EmployeeID int64              `json:"employee_id"`
-	Token      string             `json:"token"`
+	TokenHash  string             `json:"token_hash"`
 	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
 	UsedAt     pgtype.Timestamptz `json:"used_at"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`

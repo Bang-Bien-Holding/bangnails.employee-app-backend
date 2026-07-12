@@ -19,7 +19,8 @@ type Querier interface {
 	// Atomically claims a valid, unused token: the UPDATE's row lock ensures
 	// only one concurrent caller can match the WHERE clause and get a row back,
 	// so CompleteActivation can't be raced into redeeming the same token twice.
-	RedeemPasswordResetToken(ctx context.Context, token string) (PasswordResetToken, error)
+	// Callers pass the SHA-256 digest of the bearer token, not the raw value.
+	RedeemPasswordResetToken(ctx context.Context, tokenHash string) (PasswordResetToken, error)
 	SetEmployeeActive(ctx context.Context, arg SetEmployeeActiveParams) (int64, error)
 	SetEmployeePassword(ctx context.Context, arg SetEmployeePasswordParams) (int64, error)
 	UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) (Employee, error)
