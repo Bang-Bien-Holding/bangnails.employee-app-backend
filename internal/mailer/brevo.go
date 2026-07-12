@@ -74,7 +74,9 @@ func (c *BrevoClient) Send(ctx context.Context, to, templateFile string, data an
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	// Close error is intentionally discarded: response body content already
+	// consumed, and Close failing here has no actionable recovery for the caller.
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))

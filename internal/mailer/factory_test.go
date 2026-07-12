@@ -26,13 +26,18 @@ func TestNew(t *testing.T) {
 			wantMailpit: true,
 		},
 		{
-			name:      "production uses Brevo when an API key is set",
-			cfg:       Config{Env: EnvProduction, BrevoAPIKey: "test-key"},
+			name:      "production uses Brevo when an API key and sender are set",
+			cfg:       Config{Env: EnvProduction, BrevoAPIKey: "test-key", FromEmail: "noreply@example.com"},
 			wantBrevo: true,
 		},
 		{
 			name:    "production without an API key fails fast",
-			cfg:     Config{Env: EnvProduction},
+			cfg:     Config{Env: EnvProduction, FromEmail: "noreply@example.com"},
+			wantErr: true,
+		},
+		{
+			name:    "production without a sender email fails fast",
+			cfg:     Config{Env: EnvProduction, BrevoAPIKey: "test-key"},
 			wantErr: true,
 		},
 		{

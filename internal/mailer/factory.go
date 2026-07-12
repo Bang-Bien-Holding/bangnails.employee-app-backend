@@ -30,6 +30,9 @@ func New(cfg Config) (Client, error) {
 		if cfg.BrevoAPIKey == "" {
 			return nil, fmt.Errorf("mailer: BREVO_API_KEY is required when APP_ENV=%s", EnvProduction)
 		}
+		if cfg.FromEmail == "" {
+			return nil, fmt.Errorf("mailer: FromEmail is required when APP_ENV=%s", EnvProduction)
+		}
 		return NewBrevo(cfg.BrevoAPIKey, cfg.FromEmail, cfg.FromName), nil
 	case EnvDevelopment, EnvStaging, "":
 		return NewMailpit(cfg.MailpitAddr, cfg.FromEmail, cfg.FromName), nil
