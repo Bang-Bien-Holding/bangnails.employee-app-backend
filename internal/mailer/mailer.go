@@ -7,6 +7,7 @@ import (
 	"context"
 	"embed"
 	"html/template"
+	texttemplate "text/template"
 )
 
 //go:embed templates
@@ -52,9 +53,22 @@ func renderTemplate(templateFile string, data any) (*message, error) {
 		return nil, err
 	}
 
+	plainTmpl, err := texttemplate.New("email").ParseFS(templateFS, "templates/"+templateFile)
+	if err != nil {
+		return nil, err
+	}
+
 	render := func(name string) (string, error) {
 		var buf bytes.Buffer
 		if err := tmpl.ExecuteTemplate(&buf, name, data); err != nil {
+			return "", err
+		}
+		return buf.String(), nil
+	}
+
+	renderPlain := func(name string) (string, error) {
+		var buf bytes.Buffer
+		if err := plainTmpl.ExecuteTemplate(&buf, name, data); err != nil {
 			return "", err
 		}
 		return buf.String(), nil
@@ -64,7 +78,7 @@ func renderTemplate(templateFile string, data any) (*message, error) {
 	if msg.subject, err = render("subject"); err != nil {
 		return nil, err
 	}
-	if msg.plainBody, err = render("plainBody"); err != nil {
+	if msg.plainBody, err = renderPlain("plainBody"); err != nil {
 		return nil, err
 	}
 	if msg.htmlBody, err = render("htmlBody"); err != nil {
