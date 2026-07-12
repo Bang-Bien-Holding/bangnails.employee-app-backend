@@ -4,10 +4,10 @@ services:
     container_name: employees-postgres
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set (see .env)}
       POSTGRES_DB: employees
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
@@ -15,8 +15,8 @@ services:
     image: axllent/mailpit
     container_name: mailpit
     ports:
-      - "1025:1025" # SMTP
-      - "8025:8025" # web UI
+      - "127.0.0.1:1025:1025" # SMTP
+      - "127.0.0.1:8025:8025" # web UI
 
 volumes:
   postgres-data:
