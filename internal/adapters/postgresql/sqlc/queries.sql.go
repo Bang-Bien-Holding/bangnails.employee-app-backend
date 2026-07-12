@@ -157,27 +157,6 @@ func (q *Queries) GetEmployeeByUsername(ctx context.Context, username string) (E
 	return i, err
 }
 
-const getValidPasswordResetToken = `-- name: GetValidPasswordResetToken :one
-SELECT id, employee_id, token, expires_at, used_at, created_at FROM password_reset_tokens
-WHERE token = $1
-  AND used_at IS NULL
-  AND expires_at > now()
-`
-
-func (q *Queries) GetValidPasswordResetToken(ctx context.Context, token string) (PasswordResetToken, error) {
-	row := q.db.QueryRow(ctx, getValidPasswordResetToken, token)
-	var i PasswordResetToken
-	err := row.Scan(
-		&i.ID,
-		&i.EmployeeID,
-		&i.Token,
-		&i.ExpiresAt,
-		&i.UsedAt,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
 const listEmployees = `-- name: ListEmployees :many
 SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at FROM employees
 ORDER BY id
@@ -214,15 +193,30 @@ func (q *Queries) ListEmployees(ctx context.Context) ([]Employee, error) {
 	return items, nil
 }
 
-const markPasswordResetTokenUsed = `-- name: MarkPasswordResetTokenUsed :exec
+const redeemPasswordResetToken = `-- name: RedeemPasswordResetToken :one
 UPDATE password_reset_tokens
 SET used_at = now()
-WHERE id = $1
+WHERE token = $1
+  AND used_at IS NULL
+  AND expires_at > now()
+RETURNING id, employee_id, token, expires_at, used_at, created_at
 `
 
-func (q *Queries) MarkPasswordResetTokenUsed(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, markPasswordResetTokenUsed, id)
-	return err
+// Atomically claims a valid, unused token: the UPDATE's row lock ensures
+// only one concurrent caller can match the WHERE clause and get a row back,
+// so CompleteActivation can't be raced into redeeming the same token twice.
+func (q *Queries) RedeemPasswordResetToken(ctx context.Context, token string) (PasswordResetToken, error) {
+	row := q.db.QueryRow(ctx, redeemPasswordResetToken, token)
+	var i PasswordResetToken
+	err := row.Scan(
+		&i.ID,
+		&i.EmployeeID,
+		&i.Token,
+		&i.ExpiresAt,
+		&i.UsedAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const setEmployeeActive = `-- name: SetEmployeeActive :execrows

@@ -25,7 +25,7 @@ var (
 	// deactivated employee must be reactivated first.
 	ErrEmployeeNotActive = errors.New("employee is not active")
 	// ErrInvalidOrExpiredToken is returned by CompleteActivation when the
-	// token doesn't match GetValidPasswordResetToken's criteria (unknown,
+	// token doesn't match RedeemPasswordResetToken's criteria (unknown,
 	// already used, or past its expiry) — deliberately one generic error
 	// rather than three distinct ones, so the public endpoint never reveals
 	// which specific reason a token didn't work.

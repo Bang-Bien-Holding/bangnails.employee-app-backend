@@ -131,21 +131,6 @@ func (mr *MockQuerierMockRecorder) GetEmployeeByUsername(ctx, username any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEmployeeByUsername", reflect.TypeOf((*MockQuerier)(nil).GetEmployeeByUsername), ctx, username)
 }
 
-// GetValidPasswordResetToken mocks base method.
-func (m *MockQuerier) GetValidPasswordResetToken(ctx context.Context, token string) (repo.PasswordResetToken, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetValidPasswordResetToken", ctx, token)
-	ret0, _ := ret[0].(repo.PasswordResetToken)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetValidPasswordResetToken indicates an expected call of GetValidPasswordResetToken.
-func (mr *MockQuerierMockRecorder) GetValidPasswordResetToken(ctx, token any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetValidPasswordResetToken", reflect.TypeOf((*MockQuerier)(nil).GetValidPasswordResetToken), ctx, token)
-}
-
 // ListEmployees mocks base method.
 func (m *MockQuerier) ListEmployees(ctx context.Context) ([]repo.Employee, error) {
 	m.ctrl.T.Helper()
@@ -161,18 +146,19 @@ func (mr *MockQuerierMockRecorder) ListEmployees(ctx any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEmployees", reflect.TypeOf((*MockQuerier)(nil).ListEmployees), ctx)
 }
 
-// MarkPasswordResetTokenUsed mocks base method.
-func (m *MockQuerier) MarkPasswordResetTokenUsed(ctx context.Context, id int64) error {
+// RedeemPasswordResetToken mocks base method.
+func (m *MockQuerier) RedeemPasswordResetToken(ctx context.Context, token string) (repo.PasswordResetToken, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "MarkPasswordResetTokenUsed", ctx, id)
-	ret0, _ := ret[0].(error)
-	return ret0
+	ret := m.ctrl.Call(m, "RedeemPasswordResetToken", ctx, token)
+	ret0, _ := ret[0].(repo.PasswordResetToken)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
 }
 
-// MarkPasswordResetTokenUsed indicates an expected call of MarkPasswordResetTokenUsed.
-func (mr *MockQuerierMockRecorder) MarkPasswordResetTokenUsed(ctx, id any) *gomock.Call {
+// RedeemPasswordResetToken indicates an expected call of RedeemPasswordResetToken.
+func (mr *MockQuerierMockRecorder) RedeemPasswordResetToken(ctx, token any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "MarkPasswordResetTokenUsed", reflect.TypeOf((*MockQuerier)(nil).MarkPasswordResetTokenUsed), ctx, id)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RedeemPasswordResetToken", reflect.TypeOf((*MockQuerier)(nil).RedeemPasswordResetToken), ctx, token)
 }
 
 // SetEmployeeActive mocks base method.

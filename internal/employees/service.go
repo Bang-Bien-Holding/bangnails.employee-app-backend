@@ -152,16 +152,15 @@ func (s *service) BulkDeleteEmployees(ctx context.Context, ids []int64) []BulkAc
 	return results
 }
 
-// CompleteActivation validates the token (unexpired, unused), sets the
-// employee's password (bcrypt-hashed), and marks the token used. Serves
-// both first-time activation and an admin-triggered reset — both send the
-// employee the same kind of token, and completing either is the same
-// operation from the DB's point of view. Not wrapped in a DB transaction:
-// SetEmployeePassword and MarkPasswordResetTokenUsed are two separate
-// calls, same as the rest of this service today (see the deferred
-// CreateEmployee+CreatePasswordResetToken transaction note from feat-007).
+// CompleteActivation redeems the token (unexpired, unused) and sets the
+// employee's password (bcrypt-hashed). Serves both first-time activation and
+// an admin-triggered reset — both send the employee the same kind of token,
+// and completing either is the same operation from the DB's point of view.
+// RedeemPasswordResetToken's UPDATE...RETURNING is atomic: its row lock
+// means only one concurrent caller can redeem a given token, so the password
+// update below only ever runs after that caller has exclusively claimed it.
 func (s *service) CompleteActivation(ctx context.Context, params completeActivationParams) error {
-	resetToken, err := s.repo.GetValidPasswordResetToken(ctx, params.Token)
+	resetToken, err := s.repo.RedeemPasswordResetToken(ctx, params.Token)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInvalidOrExpiredToken
@@ -174,14 +173,11 @@ func (s *service) CompleteActivation(ctx context.Context, params completeActivat
 		return err
 	}
 
-	if _, err := s.repo.SetEmployeePassword(ctx, repo.SetEmployeePasswordParams{
+	_, err = s.repo.SetEmployeePassword(ctx, repo.SetEmployeePasswordParams{
 		ID:       resetToken.EmployeeID,
 		Password: hashed,
-	}); err != nil {
-		return err
-	}
-
-	return s.repo.MarkPasswordResetTokenUsed(ctx, resetToken.ID)
+	})
+	return err
 }
 
 func (s *service) GetEmployeeByID(ctx context.Context, id int64) (repo.Employee, error) {

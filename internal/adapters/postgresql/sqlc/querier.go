@@ -15,9 +15,11 @@ type Querier interface {
 	GetEmployeeByEmail(ctx context.Context, email string) (Employee, error)
 	GetEmployeeByID(ctx context.Context, id int64) (Employee, error)
 	GetEmployeeByUsername(ctx context.Context, username string) (Employee, error)
-	GetValidPasswordResetToken(ctx context.Context, token string) (PasswordResetToken, error)
 	ListEmployees(ctx context.Context) ([]Employee, error)
-	MarkPasswordResetTokenUsed(ctx context.Context, id int64) error
+	// Atomically claims a valid, unused token: the UPDATE's row lock ensures
+	// only one concurrent caller can match the WHERE clause and get a row back,
+	// so CompleteActivation can't be raced into redeeming the same token twice.
+	RedeemPasswordResetToken(ctx context.Context, token string) (PasswordResetToken, error)
 	SetEmployeeActive(ctx context.Context, arg SetEmployeeActiveParams) (int64, error)
 	SetEmployeePassword(ctx context.Context, arg SetEmployeePasswordParams) (int64, error)
 	UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) (Employee, error)

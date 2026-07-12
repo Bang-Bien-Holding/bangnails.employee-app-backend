@@ -51,13 +51,13 @@ INSERT INTO password_reset_tokens (employee_id, token, expires_at)
 VALUES ($1, $2, $3)
 RETURNING *;
 
--- name: GetValidPasswordResetToken :one
-SELECT * FROM password_reset_tokens
-WHERE token = $1
-  AND used_at IS NULL
-  AND expires_at > now();
-
--- name: MarkPasswordResetTokenUsed :exec
+-- name: RedeemPasswordResetToken :one
+-- Atomically claims a valid, unused token: the UPDATE's row lock ensures
+-- only one concurrent caller can match the WHERE clause and get a row back,
+-- so CompleteActivation can't be raced into redeeming the same token twice.
 UPDATE password_reset_tokens
 SET used_at = now()
-WHERE id = $1;
+WHERE token = $1
+  AND used_at IS NULL
+  AND expires_at > now()
+RETURNING *;

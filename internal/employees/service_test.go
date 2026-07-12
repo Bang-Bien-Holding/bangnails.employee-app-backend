@@ -1192,7 +1192,7 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 			name:        "TC-ACTIVATE-01: Completes activation successfully",
 			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
-				mockRepo.EXPECT().GetValidPasswordResetToken(gomock.Any(), "sometoken").Return(validToken, nil)
+				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), "sometoken").Return(validToken, nil)
 				mockRepo.EXPECT().
 					SetEmployeePassword(gomock.Any(), gomock.Any()).
 					DoAndReturn(func(_ context.Context, arg repo.SetEmployeePasswordParams) (int64, error) {
@@ -1204,7 +1204,6 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 						}
 						return 1, nil
 					})
-				mockRepo.EXPECT().MarkPasswordResetTokenUsed(gomock.Any(), validToken.ID).Return(nil)
 			},
 			expectedErr: nil,
 		},
@@ -1212,15 +1211,15 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 			name:        "TC-ACTIVATE-02: Unknown/expired/used token translates to ErrInvalidOrExpiredToken",
 			inputParams: completeActivationParams{Token: "badtoken", Password: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
-				mockRepo.EXPECT().GetValidPasswordResetToken(gomock.Any(), "badtoken").Return(repo.PasswordResetToken{}, pgx.ErrNoRows)
+				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), "badtoken").Return(repo.PasswordResetToken{}, pgx.ErrNoRows)
 			},
 			expectedErr: ErrInvalidOrExpiredToken,
 		},
 		{
-			name:        "TC-ACTIVATE-03: Fails on database error looking up the token",
+			name:        "TC-ACTIVATE-03: Fails on database error redeeming the token",
 			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
-				mockRepo.EXPECT().GetValidPasswordResetToken(gomock.Any(), "sometoken").Return(repo.PasswordResetToken{}, dbErr)
+				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), "sometoken").Return(repo.PasswordResetToken{}, dbErr)
 			},
 			expectedErr: dbErr,
 		},
@@ -1228,18 +1227,8 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 			name:        "TC-ACTIVATE-04: Fails on database error setting the password",
 			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
-				mockRepo.EXPECT().GetValidPasswordResetToken(gomock.Any(), "sometoken").Return(validToken, nil)
+				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), "sometoken").Return(validToken, nil)
 				mockRepo.EXPECT().SetEmployeePassword(gomock.Any(), gomock.Any()).Return(int64(0), dbErr)
-			},
-			expectedErr: dbErr,
-		},
-		{
-			name:        "TC-ACTIVATE-05: Fails on database error marking the token used",
-			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret"},
-			setupMock: func(mockRepo *mocks.MockQuerier) {
-				mockRepo.EXPECT().GetValidPasswordResetToken(gomock.Any(), "sometoken").Return(validToken, nil)
-				mockRepo.EXPECT().SetEmployeePassword(gomock.Any(), gomock.Any()).Return(int64(1), nil)
-				mockRepo.EXPECT().MarkPasswordResetTokenUsed(gomock.Any(), validToken.ID).Return(dbErr)
 			},
 			expectedErr: dbErr,
 		},
