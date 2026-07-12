@@ -667,6 +667,19 @@ func TestEmployeeHandler_BulkSendPasswordResetLinks(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:        "TS-HDL-39: Ids list over the batch limit returns 400",
+			bodyPayload: bulkSendPasswordResetLinksParams{IDs: make([]int64, 101)},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called because validation happens at the Handler layer
+			},
+			expectedCode: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				if !bytes.Contains(rec.Body.Bytes(), []byte("validation")) {
+					t.Errorf("expected response to mention validation, got %q", rec.Body.String())
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {

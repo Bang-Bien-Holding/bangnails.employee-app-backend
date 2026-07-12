@@ -84,9 +84,12 @@ type BulkActionResult struct {
 }
 
 // bulkSendPasswordResetLinksParams is the body for
-// POST /employees/password-reset-links.
+// POST /employees/password-reset-links. max=100 bounds one request to a
+// sane batch size — BulkSendPasswordResetLinks sends each mail
+// synchronously and sequentially, so an unbounded list ties up the request
+// for arbitrarily long.
 type bulkSendPasswordResetLinksParams struct {
-	IDs []int64 `json:"ids" validate:"required,min=1"`
+	IDs []int64 `json:"ids" validate:"required,min=1,max=100"`
 }
 
 // completeActivationParams is the body for the public POST /activate
