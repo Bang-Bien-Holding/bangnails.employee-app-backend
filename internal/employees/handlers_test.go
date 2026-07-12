@@ -956,6 +956,16 @@ func TestEmployeeHandler_CreateEmployee(t *testing.T) {
 			expectedCode: http.StatusConflict,
 		},
 		{
+			name:        "TS-HDL-04c: Map conflict error when username already exists",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					CreateEmployee(gomock.Any(), validParams).
+					Return(repo.Employee{}, ErrUsernameAlreadyExists)
+			},
+			expectedCode: http.StatusConflict,
+		},
+		{
 			name:        "TS-HDL-12: Map internal server error on database failure",
 			bodyPayload: validParams,
 			setupMock: func(mockSvc *MockService) {

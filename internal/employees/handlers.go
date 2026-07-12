@@ -35,7 +35,7 @@ func (h *Handler) CreateEmployee(w http.ResponseWriter, r *http.Request) {
 	employee, err := h.service.CreateEmployee(r.Context(), params)
 	if err != nil {
 		status := http.StatusInternalServerError
-		if errors.Is(err, ErrEmailAlreadyExists) || errors.Is(err, ErrEmployeeIDAlreadyExists) {
+		if errors.Is(err, ErrEmailAlreadyExists) || errors.Is(err, ErrUsernameAlreadyExists) || errors.Is(err, ErrEmployeeIDAlreadyExists) {
 			status = http.StatusConflict
 		}
 		http.Error(w, err.Error(), status)
