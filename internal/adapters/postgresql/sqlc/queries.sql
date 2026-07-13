@@ -46,6 +46,29 @@ WHERE id = $1;
 DELETE FROM employees
 WHERE id = $1;
 
+-- name: ListEmployeeIDsByIDs :many
+-- Translates the internal ids a SyncEmployees caller supplies into the
+-- Odoo-facing employee_id values runSync actually sends to Odoo. An id with
+-- no matching row is silently omitted from the result.
+SELECT employee_id FROM employees
+WHERE id = ANY(sqlc.arg(ids)::bigint[]);
+
+-- name: UpsertEmployees :many
+-- Bulk-upserts one batch of Odoo employees (at most 50, see
+-- employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
+-- trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
+-- without a second query. employee_id is the shared key with Odoo (see
+-- odoo.Employee), so it's the conflict target.
+INSERT INTO employees (employee_id, full_name, email, username, role)
+SELECT unnest(@employee_ids::varchar[]), unnest(@full_names::varchar[]), unnest(@emails::citext[]), unnest(@usernames::varchar[]), unnest(@roles::varchar[])
+ON CONFLICT (employee_id) DO UPDATE
+SET full_name = EXCLUDED.full_name,
+    email = EXCLUDED.email,
+    username = EXCLUDED.username,
+    role = EXCLUDED.role,
+    updated_at = now()
+RETURNING id, employee_id, (xmax = 0) AS inserted;
+
 -- name: CreatePasswordResetToken :one
 INSERT INTO password_reset_tokens (employee_id, token_hash, expires_at)
 VALUES ($1, $2, $3)

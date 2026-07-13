@@ -191,6 +191,34 @@ func (q *Queries) GetEmployeeByUsername(ctx context.Context, username string) (E
 	return i, err
 }
 
+const listEmployeeIDsByIDs = `-- name: ListEmployeeIDsByIDs :many
+SELECT employee_id FROM employees
+WHERE id = ANY($1::bigint[])
+`
+
+// Translates the internal ids a SyncEmployees caller supplies into the
+// Odoo-facing employee_id values runSync actually sends to Odoo. An id with
+// no matching row is silently omitted from the result.
+func (q *Queries) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]string, error) {
+	rows, err := q.db.Query(ctx, listEmployeeIDsByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var employee_id string
+		if err := rows.Scan(&employee_id); err != nil {
+			return nil, err
+		}
+		items = append(items, employee_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEmployees = `-- name: ListEmployees :many
 SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
 ORDER BY id
@@ -354,6 +382,63 @@ func (q *Queries) UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) 
 		&i.StoreID,
 	)
 	return i, err
+}
+
+const upsertEmployees = `-- name: UpsertEmployees :many
+INSERT INTO employees (employee_id, full_name, email, username, role)
+SELECT unnest($1::varchar[]), unnest($2::varchar[]), unnest($3::citext[]), unnest($4::varchar[]), unnest($5::varchar[])
+ON CONFLICT (employee_id) DO UPDATE
+SET full_name = EXCLUDED.full_name,
+    email = EXCLUDED.email,
+    username = EXCLUDED.username,
+    role = EXCLUDED.role,
+    updated_at = now()
+RETURNING id, employee_id, (xmax = 0) AS inserted
+`
+
+type UpsertEmployeesParams struct {
+	EmployeeIds []string `json:"employee_ids"`
+	FullNames   []string `json:"full_names"`
+	Emails      []string `json:"emails"`
+	Usernames   []string `json:"usernames"`
+	Roles       []string `json:"roles"`
+}
+
+type UpsertEmployeesRow struct {
+	ID         int64  `json:"id"`
+	EmployeeID string `json:"employee_id"`
+	Inserted   bool   `json:"inserted"`
+}
+
+// Bulk-upserts one batch of Odoo employees (at most 50, see
+// employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
+// trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
+// without a second query. employee_id is the shared key with Odoo (see
+// odoo.Employee), so it's the conflict target.
+func (q *Queries) UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams) ([]UpsertEmployeesRow, error) {
+	rows, err := q.db.Query(ctx, upsertEmployees,
+		arg.EmployeeIds,
+		arg.FullNames,
+		arg.Emails,
+		arg.Usernames,
+		arg.Roles,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UpsertEmployeesRow
+	for rows.Next() {
+		var i UpsertEmployeesRow
+		if err := rows.Scan(&i.ID, &i.EmployeeID, &i.Inserted); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const upsertStores = `-- name: UpsertStores :many

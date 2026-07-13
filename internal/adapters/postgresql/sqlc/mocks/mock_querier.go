@@ -146,6 +146,21 @@ func (mr *MockQuerierMockRecorder) GetEmployeeByUsername(ctx, username any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEmployeeByUsername", reflect.TypeOf((*MockQuerier)(nil).GetEmployeeByUsername), ctx, username)
 }
 
+// ListEmployeeIDsByIDs mocks base method.
+func (m *MockQuerier) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListEmployeeIDsByIDs", ctx, ids)
+	ret0, _ := ret[0].([]string)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListEmployeeIDsByIDs indicates an expected call of ListEmployeeIDsByIDs.
+func (mr *MockQuerierMockRecorder) ListEmployeeIDsByIDs(ctx, ids any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEmployeeIDsByIDs", reflect.TypeOf((*MockQuerier)(nil).ListEmployeeIDsByIDs), ctx, ids)
+}
+
 // ListEmployees mocks base method.
 func (m *MockQuerier) ListEmployees(ctx context.Context) ([]repo.Employee, error) {
 	m.ctrl.T.Helper()
@@ -234,6 +249,21 @@ func (m *MockQuerier) UpdateEmployee(ctx context.Context, arg repo.UpdateEmploye
 func (mr *MockQuerierMockRecorder) UpdateEmployee(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateEmployee", reflect.TypeOf((*MockQuerier)(nil).UpdateEmployee), ctx, arg)
+}
+
+// UpsertEmployees mocks base method.
+func (m *MockQuerier) UpsertEmployees(ctx context.Context, arg repo.UpsertEmployeesParams) ([]repo.UpsertEmployeesRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpsertEmployees", ctx, arg)
+	ret0, _ := ret[0].([]repo.UpsertEmployeesRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpsertEmployees indicates an expected call of UpsertEmployees.
+func (mr *MockQuerierMockRecorder) UpsertEmployees(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpsertEmployees", reflect.TypeOf((*MockQuerier)(nil).UpsertEmployees), ctx, arg)
 }
 
 // UpsertStores mocks base method.

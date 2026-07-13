@@ -41,6 +41,21 @@ func (m *MockClient) EXPECT() *MockClientMockRecorder {
 	return m.recorder
 }
 
+// FetchEmployeesByEmployeeIDs mocks base method.
+func (m *MockClient) FetchEmployeesByEmployeeIDs(ctx context.Context, employeeIDs []string) ([]odoo.Employee, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FetchEmployeesByEmployeeIDs", ctx, employeeIDs)
+	ret0, _ := ret[0].([]odoo.Employee)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FetchEmployeesByEmployeeIDs indicates an expected call of FetchEmployeesByEmployeeIDs.
+func (mr *MockClientMockRecorder) FetchEmployeesByEmployeeIDs(ctx, employeeIDs any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FetchEmployeesByEmployeeIDs", reflect.TypeOf((*MockClient)(nil).FetchEmployeesByEmployeeIDs), ctx, employeeIDs)
+}
+
 // FetchStores mocks base method.
 func (m *MockClient) FetchStores(ctx context.Context) ([]odoo.Store, error) {
 	m.ctrl.T.Helper()

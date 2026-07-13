@@ -57,7 +57,11 @@ func (app *application) mount() http.Handler {
 			}
 		})
 
-		employeeService := employees.NewService(repo.New(app.db), app.mailer)
+		// odoo.NewFakeClient stands in for a real Odoo connection — no live
+		// integration exists yet (see internal/odoo).
+		odooClient := odoo.NewFakeClient()
+
+		employeeService := employees.NewService(repo.New(app.db), app.mailer, odooClient)
 		employeeHandler := employees.NewHandler(employeeService)
 		r.Post("/employees", employeeHandler.CreateEmployee)
 		r.Get("/employees", employeeHandler.ListEmployees)
@@ -68,15 +72,15 @@ func (app *application) mount() http.Handler {
 		r.Delete("/employees/{id}", employeeHandler.DeleteEmployee)
 		r.Delete("/employees", employeeHandler.BulkDeleteEmployees)
 		r.Post("/employees/password-reset-links", employeeHandler.BulkSendPasswordResetLinks)
+		r.Post("/employees/syncs", employeeHandler.SyncEmployees)
+		r.Get("/employees/syncs", employeeHandler.SyncStatus)
 
 		// Public, unauthenticated — not nested under /employees since
 		// it's not a CRUD action on a specific employee resource; the
 		// token in the body identifies the employee.
 		r.Post("/activate", employeeHandler.CompleteActivation)
 
-		// odoo.NewFakeClient stands in for a real Odoo connection — no live
-		// integration exists yet (see internal/odoo).
-		storesService := stores.NewService(app.db, odoo.NewFakeClient())
+		storesService := stores.NewService(app.db, odooClient)
 		storesHandler := stores.NewHandler(storesService)
 		r.Post("/stores/syncs", storesHandler.SyncStores)
 	})

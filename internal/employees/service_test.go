@@ -10,6 +10,8 @@ import (
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc/mocks"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/mailer"
 	mailermocks "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/mailer/mocks"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
+	odoomocks "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo/mocks"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/mock/gomock"
@@ -297,6 +299,7 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			mockMailer := mailermocks.NewMockClient(ctrl)
+			mockOdoo := odoomocks.NewMockClient(ctrl)
 
 			tc.setupMock(mockRepo)
 			var mailerDone <-chan struct{}
@@ -304,7 +307,7 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 				mailerDone = tc.setupMailerMock(mockMailer)
 			}
 
-			svc := NewService(mockRepo, mockMailer)
+			svc := NewService(mockRepo, mockMailer, mockOdoo)
 
 			// Execute
 			emp, err := svc.CreateEmployee(ctx, tc.inputParams)
@@ -401,10 +404,11 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			mockMailer := mailermocks.NewMockClient(ctrl)
+			mockOdoo := odoomocks.NewMockClient(ctrl)
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer)
+			svc := NewService(mockRepo, mockMailer, mockOdoo)
 
 			employees, err := svc.ListEmployees(ctx)
 
@@ -490,10 +494,11 @@ func TestEmployeeService_GetEmployeeByID(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			mockMailer := mailermocks.NewMockClient(ctrl)
+			mockOdoo := odoomocks.NewMockClient(ctrl)
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer)
+			svc := NewService(mockRepo, mockMailer, mockOdoo)
 
 			emp, err := svc.GetEmployeeByID(ctx, tc.inputID)
 
@@ -629,10 +634,11 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			mockMailer := mailermocks.NewMockClient(ctrl)
+			mockOdoo := odoomocks.NewMockClient(ctrl)
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer)
+			svc := NewService(mockRepo, mockMailer, mockOdoo)
 
 			emp, err := svc.UpdateEmployee(ctx, 1, inputParams)
 
@@ -746,10 +752,11 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			mockMailer := mailermocks.NewMockClient(ctrl)
+			mockOdoo := odoomocks.NewMockClient(ctrl)
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer)
+			svc := NewService(mockRepo, mockMailer, mockOdoo)
 
 			_, err := svc.UpdateEmployee(ctx, 1, tc.params)
 
@@ -841,10 +848,11 @@ func TestEmployeeService_SetEmployeeActive(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			mockMailer := mailermocks.NewMockClient(ctrl)
+			mockOdoo := odoomocks.NewMockClient(ctrl)
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer)
+			svc := NewService(mockRepo, mockMailer, mockOdoo)
 
 			err := svc.SetEmployeeActive(ctx, tc.inputID, tc.inputActive)
 
@@ -922,10 +930,11 @@ func TestEmployeeService_SetEmployeePassword(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			mockMailer := mailermocks.NewMockClient(ctrl)
+			mockOdoo := odoomocks.NewMockClient(ctrl)
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer)
+			svc := NewService(mockRepo, mockMailer, mockOdoo)
 
 			err := svc.SetEmployeePassword(ctx, tc.inputID, tc.inputPass)
 
@@ -991,10 +1000,11 @@ func TestEmployeeService_DeleteEmployee(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			mockMailer := mailermocks.NewMockClient(ctrl)
+			mockOdoo := odoomocks.NewMockClient(ctrl)
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer)
+			svc := NewService(mockRepo, mockMailer, mockOdoo)
 
 			err := svc.DeleteEmployee(ctx, tc.inputID)
 
@@ -1068,10 +1078,11 @@ func TestEmployeeService_BulkDeleteEmployees(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			mockMailer := mailermocks.NewMockClient(ctrl)
+			mockOdoo := odoomocks.NewMockClient(ctrl)
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer)
+			svc := NewService(mockRepo, mockMailer, mockOdoo)
 
 			results := svc.BulkDeleteEmployees(ctx, tc.inputIDs)
 
@@ -1156,10 +1167,11 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			mockMailer := mailermocks.NewMockClient(ctrl)
+			mockOdoo := odoomocks.NewMockClient(ctrl)
 
 			tc.setupMock(mockRepo, mockMailer)
 
-			svc := NewService(mockRepo, mockMailer)
+			svc := NewService(mockRepo, mockMailer, mockOdoo)
 
 			results := svc.BulkSendPasswordResetLinks(ctx, tc.inputIDs)
 
@@ -1239,10 +1251,11 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			mockMailer := mailermocks.NewMockClient(ctrl)
+			mockOdoo := odoomocks.NewMockClient(ctrl)
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer)
+			svc := NewService(mockRepo, mockMailer, mockOdoo)
 
 			err := svc.CompleteActivation(ctx, tc.inputParams)
 
@@ -1287,6 +1300,7 @@ func TestEmployeeService_CreateEmployee_SendsActivationEmailAsynchronously(t *te
 	ctrl := gomock.NewController(t)
 	mockRepo := mocks.NewMockQuerier(ctrl)
 	mockMailer := mailermocks.NewMockClient(ctrl)
+	mockOdoo := odoomocks.NewMockClient(ctrl)
 
 	mockRepo.EXPECT().
 		CreateEmployee(gomock.Any(), repoParams).
@@ -1314,7 +1328,7 @@ func TestEmployeeService_CreateEmployee_SendsActivationEmailAsynchronously(t *te
 			return nil
 		})
 
-	svc := NewService(mockRepo, mockMailer)
+	svc := NewService(mockRepo, mockMailer, mockOdoo)
 
 	returned := make(chan struct{})
 	var emp repo.Employee
@@ -1349,4 +1363,215 @@ func TestEmployeeService_CreateEmployee_SendsActivationEmailAsynchronously(t *te
 	case <-time.After(mailerWaitTimeout):
 		t.Fatal("timed out waiting for the background mailer send to finish")
 	}
+}
+
+// waitForSyncStatus polls SyncStatus until syncing matches want or
+// mailerWaitTimeout elapses — unlock() runs asynchronously, right after a
+// mocked call's DoAndReturn returns, in the background goroutine.
+func waitForSyncStatus(t *testing.T, svc Service, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(mailerWaitTimeout)
+	for time.Now().Before(deadline) {
+		if svc.SyncStatus(context.Background()).Syncing == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for syncing=%v", want)
+}
+
+func TestEmployeeService_SyncEmployees(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("TC-SYNC-01: returns quickly, upserts found ids, and reports not-found ids without failing", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := mocks.NewMockQuerier(ctrl)
+		mockMailer := mailermocks.NewMockClient(ctrl)
+		mockOdoo := odoomocks.NewMockClient(ctrl)
+
+		ids := []int64{1, 2, 3}
+		employeeIDs := []string{"EMP-001", "EMP-002", "EMP-999"}
+
+		mockRepo.EXPECT().
+			ListEmployeeIDsByIDs(gomock.Any(), ids).
+			Return(employeeIDs, nil)
+
+		fetchStarted := make(chan struct{})
+		release := make(chan struct{})
+		mockOdoo.EXPECT().
+			FetchEmployeesByEmployeeIDs(gomock.Any(), employeeIDs).
+			DoAndReturn(func(context.Context, []string) ([]odoo.Employee, error) {
+				close(fetchStarted)
+				<-release
+				return []odoo.Employee{
+					{EmployeeID: "EMP-001", FullName: "Nguyen Van A", Email: "van-a@example.com", Username: "nguyenvana", Role: "technician"},
+					{EmployeeID: "EMP-002", FullName: "Tran Thi B", Email: "tran-b@example.com", Username: "tranthib", Role: "manager"},
+				}, nil
+			})
+
+		upsertDone := make(chan struct{})
+		mockRepo.EXPECT().
+			UpsertEmployees(gomock.Any(), repo.UpsertEmployeesParams{
+				EmployeeIds: []string{"EMP-001", "EMP-002"},
+				FullNames:   []string{"Nguyen Van A", "Tran Thi B"},
+				Emails:      []string{"van-a@example.com", "tran-b@example.com"},
+				Usernames:   []string{"nguyenvana", "tranthib"},
+				Roles:       []string{"technician", "manager"},
+			}).
+			DoAndReturn(func(context.Context, repo.UpsertEmployeesParams) ([]repo.UpsertEmployeesRow, error) {
+				defer close(upsertDone)
+				return []repo.UpsertEmployeesRow{
+					{ID: 1, EmployeeID: "EMP-001", Inserted: true},
+					{ID: 2, EmployeeID: "EMP-002", Inserted: false},
+				}, nil
+			})
+
+		svc := NewService(mockRepo, mockMailer, mockOdoo)
+
+		if svc.SyncStatus(ctx).Syncing {
+			t.Fatal("expected syncing=false before SyncEmployees is called")
+		}
+
+		if err := svc.SyncEmployees(ctx, ids); err != nil {
+			t.Fatalf("SyncEmployees() error = %v", err)
+		}
+
+		select {
+		case <-fetchStarted:
+		case <-time.After(mailerWaitTimeout):
+			t.Fatal("SyncEmployees did not return before Odoo was fetched; it appears to be blocking instead of running in the background")
+		}
+
+		if !svc.SyncStatus(ctx).Syncing {
+			t.Error("expected syncing=true while the background sync is in flight")
+		}
+
+		close(release)
+
+		select {
+		case <-upsertDone:
+		case <-time.After(mailerWaitTimeout):
+			t.Fatal("timed out waiting for the background upsert to run")
+		}
+
+		waitForSyncStatus(t, svc, false)
+	})
+
+	t.Run("TC-SYNC-02: a second call while a sync is in flight is rejected with ErrSyncInProgress, and the lock is released after completion", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := mocks.NewMockQuerier(ctrl)
+		mockMailer := mailermocks.NewMockClient(ctrl)
+		mockOdoo := odoomocks.NewMockClient(ctrl)
+
+		mockRepo.EXPECT().
+			ListEmployeeIDsByIDs(gomock.Any(), []int64{1}).
+			Return([]string{"EMP-001"}, nil)
+		mockRepo.EXPECT().
+			ListEmployeeIDsByIDs(gomock.Any(), []int64{2}).
+			Return([]string{"EMP-002"}, nil)
+
+		fetchStarted := make(chan struct{})
+		release := make(chan struct{})
+		mockOdoo.EXPECT().
+			FetchEmployeesByEmployeeIDs(gomock.Any(), []string{"EMP-001"}).
+			DoAndReturn(func(context.Context, []string) ([]odoo.Employee, error) {
+				close(fetchStarted)
+				<-release
+				return nil, nil
+			})
+		thirdCallDone := make(chan struct{})
+		mockOdoo.EXPECT().
+			FetchEmployeesByEmployeeIDs(gomock.Any(), []string{"EMP-002"}).
+			DoAndReturn(func(context.Context, []string) ([]odoo.Employee, error) {
+				defer close(thirdCallDone)
+				return nil, nil
+			})
+
+		svc := NewService(mockRepo, mockMailer, mockOdoo)
+
+		if err := svc.SyncEmployees(ctx, []int64{1}); err != nil {
+			t.Fatalf("first SyncEmployees() error = %v", err)
+		}
+
+		select {
+		case <-fetchStarted:
+		case <-time.After(mailerWaitTimeout):
+			t.Fatal("timed out waiting for the first sync to reach Odoo")
+		}
+
+		if err := svc.SyncEmployees(ctx, []int64{2}); !errors.Is(err, ErrSyncInProgress) {
+			t.Errorf("second SyncEmployees() error = %v, want ErrSyncInProgress", err)
+		}
+
+		close(release)
+		waitForSyncStatus(t, svc, false)
+
+		if err := svc.SyncEmployees(ctx, []int64{2}); err != nil {
+			t.Errorf("SyncEmployees() after completion, error = %v, want nil", err)
+		}
+
+		select {
+		case <-thirdCallDone:
+		case <-time.After(mailerWaitTimeout):
+			t.Fatal("timed out waiting for the third sync to reach Odoo")
+		}
+		waitForSyncStatus(t, svc, false)
+	})
+
+	t.Run("TC-SYNC-03: an Odoo error is logged and releases the lock without upserting", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := mocks.NewMockQuerier(ctrl)
+		mockMailer := mailermocks.NewMockClient(ctrl)
+		mockOdoo := odoomocks.NewMockClient(ctrl)
+
+		mockRepo.EXPECT().
+			ListEmployeeIDsByIDs(gomock.Any(), []int64{1}).
+			Return([]string{"EMP-001"}, nil)
+
+		done := make(chan struct{})
+		mockOdoo.EXPECT().
+			FetchEmployeesByEmployeeIDs(gomock.Any(), []string{"EMP-001"}).
+			DoAndReturn(func(context.Context, []string) ([]odoo.Employee, error) {
+				defer close(done)
+				return nil, errors.New("odoo: connection refused")
+			})
+		// No UpsertEmployees expectation: calling it would fail the mock
+		// controller, asserting the upsert never runs after a fetch error.
+
+		svc := NewService(mockRepo, mockMailer, mockOdoo)
+
+		if err := svc.SyncEmployees(ctx, []int64{1}); err != nil {
+			t.Fatalf("SyncEmployees() error = %v", err)
+		}
+
+		select {
+		case <-done:
+		case <-time.After(mailerWaitTimeout):
+			t.Fatal("timed out waiting for the background fetch to run")
+		}
+
+		waitForSyncStatus(t, svc, false)
+	})
+
+	t.Run("TC-SYNC-04: a ListEmployeeIDsByIDs error is returned synchronously and releases the lock without reaching Odoo", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := mocks.NewMockQuerier(ctrl)
+		mockMailer := mailermocks.NewMockClient(ctrl)
+		mockOdoo := odoomocks.NewMockClient(ctrl)
+
+		mockRepo.EXPECT().
+			ListEmployeeIDsByIDs(gomock.Any(), []int64{1}).
+			Return(nil, errors.New("db: connection refused"))
+		// No FetchEmployeesByEmployeeIDs expectation: calling it would fail
+		// the mock controller, asserting the sync never reaches Odoo after a
+		// lookup error.
+
+		svc := NewService(mockRepo, mockMailer, mockOdoo)
+
+		if err := svc.SyncEmployees(ctx, []int64{1}); err == nil {
+			t.Fatal("expected SyncEmployees() to return the lookup error, got nil")
+		}
+
+		waitForSyncStatus(t, svc, false)
+	})
 }

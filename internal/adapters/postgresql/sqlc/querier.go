@@ -19,6 +19,10 @@ type Querier interface {
 	GetEmployeeByEmail(ctx context.Context, email string) (Employee, error)
 	GetEmployeeByID(ctx context.Context, id int64) (Employee, error)
 	GetEmployeeByUsername(ctx context.Context, username string) (Employee, error)
+	// Translates the internal ids a SyncEmployees caller supplies into the
+	// Odoo-facing employee_id values runSync actually sends to Odoo. An id with
+	// no matching row is silently omitted from the result.
+	ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]string, error)
 	ListEmployees(ctx context.Context) ([]Employee, error)
 	// Atomically claims a valid, unused token: the UPDATE's row lock ensures
 	// only one concurrent caller can match the WHERE clause and get a row back,
@@ -29,6 +33,12 @@ type Querier interface {
 	SetEmployeePassword(ctx context.Context, arg SetEmployeePasswordParams) (int64, error)
 	SoftDeleteStores(ctx context.Context, storeIds []int64) (int64, error)
 	UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) (Employee, error)
+	// Bulk-upserts one batch of Odoo employees (at most 50, see
+	// employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
+	// trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
+	// without a second query. employee_id is the shared key with Odoo (see
+	// odoo.Employee), so it's the conflict target.
+	UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams) ([]UpsertEmployeesRow, error)
 	// Bulk-upserts one page of Odoo stores in a single round trip. "(xmax = 0)"
 	// is Postgres' standard trick for distinguishing an INSERT from an
 	// ON CONFLICT UPDATE in the same statement: xmax is only set by an UPDATE,

@@ -251,3 +251,45 @@ func (h *Handler) ListEmployees(w http.ResponseWriter, r *http.Request) {
 
 	json.Write(w, http.StatusOK, newEmployeeResponses(employees))
 }
+
+type syncEmployeesResponse struct {
+	Status  string `json:"status"`
+	Message string `json:"message"`
+}
+
+// SyncEmployees kicks off a background pull from Odoo for the employees
+// matching the given internal ids and returns immediately — it does not
+// wait for the sync to finish. The frontend polls SyncStatus to know when
+// it's done.
+func (h *Handler) SyncEmployees(w http.ResponseWriter, r *http.Request) {
+	var params syncEmployeesParams
+	if err := json.Read(w, r, &params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := validate.Struct(params); err != nil {
+		http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := h.service.SyncEmployees(r.Context(), params.IDs); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, ErrSyncInProgress) {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+
+	json.Write(w, http.StatusAccepted, syncEmployeesResponse{
+		Status:  "accepted",
+		Message: "Employee sync started.",
+	})
+}
+
+// SyncStatus reports whether a SyncEmployees job is still running, for the
+// frontend to poll while its trigger button is disabled.
+func (h *Handler) SyncStatus(w http.ResponseWriter, r *http.Request) {
+	json.Write(w, http.StatusOK, h.service.SyncStatus(r.Context()))
+}

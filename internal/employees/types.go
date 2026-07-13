@@ -30,6 +30,9 @@ var (
 	// rather than three distinct ones, so the public endpoint never reveals
 	// which specific reason a token didn't work.
 	ErrInvalidOrExpiredToken = errors.New("invalid or expired token")
+	// ErrSyncInProgress is returned by SyncEmployees when a previous call's
+	// background sync hasn't finished yet — only one runs at a time.
+	ErrSyncInProgress = errors.New("employee sync already in progress")
 )
 
 type createEmployeeParams struct {
@@ -103,6 +106,22 @@ type completeActivationParams struct {
 	Password string `json:"password" validate:"required,min=8"`
 }
 
+// syncEmployeesParams is the body for POST /employees/syncs. IDs are internal
+// employees.id values (same convention as bulkDeleteEmployeesParams), not
+// Odoo employee_ids — SyncEmployees looks up each one's employee_id before
+// calling Odoo. There's no upper bound here — SyncEmployees paginates
+// internally, fetching employeeSyncBatchSize ids from Odoo per round trip.
+type syncEmployeesParams struct {
+	IDs []int64 `json:"ids" validate:"required,min=1"`
+}
+
+// SyncStatus reports whether a SyncEmployees background job is currently
+// running, for the frontend to poll and disable its trigger button
+// accordingly.
+type SyncStatus struct {
+	Syncing bool `json:"syncing"`
+}
+
 // employeeResponse mirrors repo.Employee for HTTP responses, minus
 // Password — repo.Employee.Password is tagged json:"password" with no
 // omitempty (it's sqlc-generated, out of this package's control), so
@@ -154,4 +173,6 @@ type Service interface {
 	BulkDeleteEmployees(ctx context.Context, ids []int64) []BulkActionResult
 	BulkSendPasswordResetLinks(ctx context.Context, ids []int64) []BulkActionResult
 	CompleteActivation(ctx context.Context, params completeActivationParams) error
+	SyncEmployees(ctx context.Context, ids []int64) error
+	SyncStatus(ctx context.Context) SyncStatus
 }
