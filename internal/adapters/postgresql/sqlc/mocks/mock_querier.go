@@ -41,6 +41,48 @@ func (m *MockQuerier) EXPECT() *MockQuerierMockRecorder {
 	return m.recorder
 }
 
+// AssignEmployeesToStore mocks base method.
+func (m *MockQuerier) AssignEmployeesToStore(ctx context.Context, arg repo.AssignEmployeesToStoreParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "AssignEmployeesToStore", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// AssignEmployeesToStore indicates an expected call of AssignEmployeesToStore.
+func (mr *MockQuerierMockRecorder) AssignEmployeesToStore(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssignEmployeesToStore", reflect.TypeOf((*MockQuerier)(nil).AssignEmployeesToStore), ctx, arg)
+}
+
+// ClearEmployeeAssignmentsForStores mocks base method.
+func (m *MockQuerier) ClearEmployeeAssignmentsForStores(ctx context.Context, storeIds []int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ClearEmployeeAssignmentsForStores", ctx, storeIds)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ClearEmployeeAssignmentsForStores indicates an expected call of ClearEmployeeAssignmentsForStores.
+func (mr *MockQuerierMockRecorder) ClearEmployeeAssignmentsForStores(ctx, storeIds any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClearEmployeeAssignmentsForStores", reflect.TypeOf((*MockQuerier)(nil).ClearEmployeeAssignmentsForStores), ctx, storeIds)
+}
+
+// ClearStoreAssignmentsNotInOdoo mocks base method.
+func (m *MockQuerier) ClearStoreAssignmentsNotInOdoo(ctx context.Context, arg repo.ClearStoreAssignmentsNotInOdooParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ClearStoreAssignmentsNotInOdoo", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ClearStoreAssignmentsNotInOdoo indicates an expected call of ClearStoreAssignmentsNotInOdoo.
+func (mr *MockQuerierMockRecorder) ClearStoreAssignmentsNotInOdoo(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClearStoreAssignmentsNotInOdoo", reflect.TypeOf((*MockQuerier)(nil).ClearStoreAssignmentsNotInOdoo), ctx, arg)
+}
+
 // CreateEmployee mocks base method.
 func (m *MockQuerier) CreateEmployee(ctx context.Context, arg repo.CreateEmployeeParams) (repo.Employee, error) {
 	m.ctrl.T.Helper()
@@ -84,6 +126,21 @@ func (m *MockQuerier) DeleteEmployee(ctx context.Context, id int64) (int64, erro
 func (mr *MockQuerierMockRecorder) DeleteEmployee(ctx, id any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteEmployee", reflect.TypeOf((*MockQuerier)(nil).DeleteEmployee), ctx, id)
+}
+
+// FindStoresNotInOdoo mocks base method.
+func (m *MockQuerier) FindStoresNotInOdoo(ctx context.Context, activeOdooStoreIds []string) ([]int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "FindStoresNotInOdoo", ctx, activeOdooStoreIds)
+	ret0, _ := ret[0].([]int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// FindStoresNotInOdoo indicates an expected call of FindStoresNotInOdoo.
+func (mr *MockQuerierMockRecorder) FindStoresNotInOdoo(ctx, activeOdooStoreIds any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FindStoresNotInOdoo", reflect.TypeOf((*MockQuerier)(nil).FindStoresNotInOdoo), ctx, activeOdooStoreIds)
 }
 
 // GetEmployeeByEmail mocks base method.
@@ -147,18 +204,18 @@ func (mr *MockQuerierMockRecorder) ListEmployees(ctx any) *gomock.Call {
 }
 
 // RedeemPasswordResetToken mocks base method.
-func (m *MockQuerier) RedeemPasswordResetToken(ctx context.Context, token string) (repo.PasswordResetToken, error) {
+func (m *MockQuerier) RedeemPasswordResetToken(ctx context.Context, tokenHash string) (repo.PasswordResetToken, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "RedeemPasswordResetToken", ctx, token)
+	ret := m.ctrl.Call(m, "RedeemPasswordResetToken", ctx, tokenHash)
 	ret0, _ := ret[0].(repo.PasswordResetToken)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // RedeemPasswordResetToken indicates an expected call of RedeemPasswordResetToken.
-func (mr *MockQuerierMockRecorder) RedeemPasswordResetToken(ctx, token any) *gomock.Call {
+func (mr *MockQuerierMockRecorder) RedeemPasswordResetToken(ctx, tokenHash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RedeemPasswordResetToken", reflect.TypeOf((*MockQuerier)(nil).RedeemPasswordResetToken), ctx, token)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RedeemPasswordResetToken", reflect.TypeOf((*MockQuerier)(nil).RedeemPasswordResetToken), ctx, tokenHash)
 }
 
 // SetEmployeeActive mocks base method.
@@ -191,6 +248,21 @@ func (mr *MockQuerierMockRecorder) SetEmployeePassword(ctx, arg any) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetEmployeePassword", reflect.TypeOf((*MockQuerier)(nil).SetEmployeePassword), ctx, arg)
 }
 
+// SoftDeleteStores mocks base method.
+func (m *MockQuerier) SoftDeleteStores(ctx context.Context, storeIds []int64) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SoftDeleteStores", ctx, storeIds)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SoftDeleteStores indicates an expected call of SoftDeleteStores.
+func (mr *MockQuerierMockRecorder) SoftDeleteStores(ctx, storeIds any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SoftDeleteStores", reflect.TypeOf((*MockQuerier)(nil).SoftDeleteStores), ctx, storeIds)
+}
+
 // UpdateEmployee mocks base method.
 func (m *MockQuerier) UpdateEmployee(ctx context.Context, arg repo.UpdateEmployeeParams) (repo.Employee, error) {
 	m.ctrl.T.Helper()
@@ -204,4 +276,19 @@ func (m *MockQuerier) UpdateEmployee(ctx context.Context, arg repo.UpdateEmploye
 func (mr *MockQuerierMockRecorder) UpdateEmployee(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateEmployee", reflect.TypeOf((*MockQuerier)(nil).UpdateEmployee), ctx, arg)
+}
+
+// UpsertStores mocks base method.
+func (m *MockQuerier) UpsertStores(ctx context.Context, arg repo.UpsertStoresParams) ([]repo.UpsertStoresRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpsertStores", ctx, arg)
+	ret0, _ := ret[0].([]repo.UpsertStoresRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpsertStores indicates an expected call of UpsertStores.
+func (mr *MockQuerierMockRecorder) UpsertStores(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpsertStores", reflect.TypeOf((*MockQuerier)(nil).UpsertStores), ctx, arg)
 }

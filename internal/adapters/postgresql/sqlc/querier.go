@@ -9,9 +9,21 @@ import (
 )
 
 type Querier interface {
+	AssignEmployeesToStore(ctx context.Context, arg AssignEmployeesToStoreParams) error
+	ClearEmployeeAssignmentsForStores(ctx context.Context, storeIds []int64) error
+	// Unassigns any employee currently linked to store_id whose employee_id is
+	// not in keep_employee_ids (Odoo's current odoo_user_ids for that store,
+	// cast to text). An empty keep_employee_ids clears every employee
+	// currently assigned to the store, which is correct: Odoo reports nobody
+	// assigned there anymore.
+	ClearStoreAssignmentsNotInOdoo(ctx context.Context, arg ClearStoreAssignmentsNotInOdooParams) error
 	CreateEmployee(ctx context.Context, arg CreateEmployeeParams) (Employee, error)
 	CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) (PasswordResetToken, error)
 	DeleteEmployee(ctx context.Context, id int64) (int64, error)
+	// Locally-created stores that have never been linked to Odoo
+	// (odoo_store_id IS NULL) are deliberately excluded — only stores Odoo
+	// once reported and has since stopped reporting count as deleted.
+	FindStoresNotInOdoo(ctx context.Context, activeOdooStoreIds []string) ([]int64, error)
 	GetEmployeeByEmail(ctx context.Context, email string) (Employee, error)
 	GetEmployeeByID(ctx context.Context, id int64) (Employee, error)
 	GetEmployeeByUsername(ctx context.Context, username string) (Employee, error)
@@ -23,7 +35,14 @@ type Querier interface {
 	RedeemPasswordResetToken(ctx context.Context, tokenHash string) (PasswordResetToken, error)
 	SetEmployeeActive(ctx context.Context, arg SetEmployeeActiveParams) (int64, error)
 	SetEmployeePassword(ctx context.Context, arg SetEmployeePasswordParams) (int64, error)
+	SoftDeleteStores(ctx context.Context, storeIds []int64) (int64, error)
 	UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) (Employee, error)
+	// Bulk-upserts one page of Odoo stores in a single round trip. "(xmax = 0)"
+	// is Postgres' standard trick for distinguishing an INSERT from an
+	// ON CONFLICT UPDATE in the same statement: xmax is only set by an UPDATE,
+	// so a fresh row's xmax is 0. The store-sync service uses it to report
+	// inserted_stores vs updated_stores without a second query.
+	UpsertStores(ctx context.Context, arg UpsertStoresParams) ([]UpsertStoresRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

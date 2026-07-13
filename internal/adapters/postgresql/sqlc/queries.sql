@@ -62,3 +62,53 @@ WHERE token_hash = $1
   AND used_at IS NULL
   AND expires_at > now()
 RETURNING *;
+
+-- name: UpsertStores :many
+-- Bulk-upserts one page of Odoo stores in a single round trip. "(xmax = 0)"
+-- is Postgres' standard trick for distinguishing an INSERT from an
+-- ON CONFLICT UPDATE in the same statement: xmax is only set by an UPDATE,
+-- so a fresh row's xmax is 0. The store-sync service uses it to report
+-- inserted_stores vs updated_stores without a second query.
+INSERT INTO store (odoo_store_id, store_name, city)
+SELECT unnest(@odoo_store_ids::varchar[]), unnest(@store_names::varchar[]), unnest(@cities::varchar[])
+ON CONFLICT (odoo_store_id) DO UPDATE
+SET store_name = EXCLUDED.store_name,
+    city = EXCLUDED.city,
+    is_active = true,
+    updated_at = now()
+RETURNING id, odoo_store_id, (xmax = 0) AS inserted;
+
+-- name: ClearStoreAssignmentsNotInOdoo :exec
+-- Unassigns any employee currently linked to store_id whose employee_id is
+-- not in keep_employee_ids (Odoo's current odoo_user_ids for that store,
+-- cast to text). An empty keep_employee_ids clears every employee
+-- currently assigned to the store, which is correct: Odoo reports nobody
+-- assigned there anymore.
+UPDATE employees
+SET store_id = NULL, updated_at = now()
+WHERE store_id = sqlc.arg(store_id)
+  AND employee_id != ALL(sqlc.arg(keep_employee_ids)::varchar[]);
+
+-- name: AssignEmployeesToStore :exec
+UPDATE employees
+SET store_id = sqlc.arg(store_id), updated_at = now()
+WHERE employee_id = ANY(sqlc.arg(assign_employee_ids)::varchar[]);
+
+-- name: FindStoresNotInOdoo :many
+-- Locally-created stores that have never been linked to Odoo
+-- (odoo_store_id IS NULL) are deliberately excluded — only stores Odoo
+-- once reported and has since stopped reporting count as deleted.
+SELECT id FROM store
+WHERE is_active = true
+  AND odoo_store_id IS NOT NULL
+  AND odoo_store_id != ALL(sqlc.arg(active_odoo_store_ids)::varchar[]);
+
+-- name: ClearEmployeeAssignmentsForStores :exec
+UPDATE employees
+SET store_id = NULL, updated_at = now()
+WHERE store_id = ANY(sqlc.arg(store_ids)::bigint[]);
+
+-- name: SoftDeleteStores :execrows
+UPDATE store
+SET is_active = false, updated_at = now()
+WHERE id = ANY(sqlc.arg(store_ids)::bigint[]);

@@ -11,6 +11,55 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const assignEmployeesToStore = `-- name: AssignEmployeesToStore :exec
+UPDATE employees
+SET store_id = $1, updated_at = now()
+WHERE employee_id = ANY($2::varchar[])
+`
+
+type AssignEmployeesToStoreParams struct {
+	StoreID           pgtype.Int8 `json:"store_id"`
+	AssignEmployeeIds []string    `json:"assign_employee_ids"`
+}
+
+func (q *Queries) AssignEmployeesToStore(ctx context.Context, arg AssignEmployeesToStoreParams) error {
+	_, err := q.db.Exec(ctx, assignEmployeesToStore, arg.StoreID, arg.AssignEmployeeIds)
+	return err
+}
+
+const clearEmployeeAssignmentsForStores = `-- name: ClearEmployeeAssignmentsForStores :exec
+UPDATE employees
+SET store_id = NULL, updated_at = now()
+WHERE store_id = ANY($1::bigint[])
+`
+
+func (q *Queries) ClearEmployeeAssignmentsForStores(ctx context.Context, storeIds []int64) error {
+	_, err := q.db.Exec(ctx, clearEmployeeAssignmentsForStores, storeIds)
+	return err
+}
+
+const clearStoreAssignmentsNotInOdoo = `-- name: ClearStoreAssignmentsNotInOdoo :exec
+UPDATE employees
+SET store_id = NULL, updated_at = now()
+WHERE store_id = $1
+  AND employee_id != ALL($2::varchar[])
+`
+
+type ClearStoreAssignmentsNotInOdooParams struct {
+	StoreID         pgtype.Int8 `json:"store_id"`
+	KeepEmployeeIds []string    `json:"keep_employee_ids"`
+}
+
+// Unassigns any employee currently linked to store_id whose employee_id is
+// not in keep_employee_ids (Odoo's current odoo_user_ids for that store,
+// cast to text). An empty keep_employee_ids clears every employee
+// currently assigned to the store, which is correct: Odoo reports nobody
+// assigned there anymore.
+func (q *Queries) ClearStoreAssignmentsNotInOdoo(ctx context.Context, arg ClearStoreAssignmentsNotInOdooParams) error {
+	_, err := q.db.Exec(ctx, clearStoreAssignmentsNotInOdoo, arg.StoreID, arg.KeepEmployeeIds)
+	return err
+}
+
 const createEmployee = `-- name: CreateEmployee :one
 INSERT INTO employees (employee_id, full_name, email, username, role)
 VALUES ($1, $2, $3, $4, $5)
@@ -87,6 +136,36 @@ func (q *Queries) DeleteEmployee(ctx context.Context, id int64) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const findStoresNotInOdoo = `-- name: FindStoresNotInOdoo :many
+SELECT id FROM store
+WHERE is_active = true
+  AND odoo_store_id IS NOT NULL
+  AND odoo_store_id != ALL($1::varchar[])
+`
+
+// Locally-created stores that have never been linked to Odoo
+// (odoo_store_id IS NULL) are deliberately excluded — only stores Odoo
+// once reported and has since stopped reporting count as deleted.
+func (q *Queries) FindStoresNotInOdoo(ctx context.Context, activeOdooStoreIds []string) ([]int64, error) {
+	rows, err := q.db.Query(ctx, findStoresNotInOdoo, activeOdooStoreIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getEmployeeByEmail = `-- name: GetEmployeeByEmail :one
@@ -265,6 +344,20 @@ func (q *Queries) SetEmployeePassword(ctx context.Context, arg SetEmployeePasswo
 	return result.RowsAffected(), nil
 }
 
+const softDeleteStores = `-- name: SoftDeleteStores :execrows
+UPDATE store
+SET is_active = false, updated_at = now()
+WHERE id = ANY($1::bigint[])
+`
+
+func (q *Queries) SoftDeleteStores(ctx context.Context, storeIds []int64) (int64, error) {
+	result, err := q.db.Exec(ctx, softDeleteStores, storeIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateEmployee = `-- name: UpdateEmployee :one
 UPDATE employees
 SET employee_id = $2,
@@ -310,4 +403,52 @@ func (q *Queries) UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) 
 		&i.StoreID,
 	)
 	return i, err
+}
+
+const upsertStores = `-- name: UpsertStores :many
+INSERT INTO store (odoo_store_id, store_name, city)
+SELECT unnest($1::varchar[]), unnest($2::varchar[]), unnest($3::varchar[])
+ON CONFLICT (odoo_store_id) DO UPDATE
+SET store_name = EXCLUDED.store_name,
+    city = EXCLUDED.city,
+    is_active = true,
+    updated_at = now()
+RETURNING id, odoo_store_id, (xmax = 0) AS inserted
+`
+
+type UpsertStoresParams struct {
+	OdooStoreIds []string `json:"odoo_store_ids"`
+	StoreNames   []string `json:"store_names"`
+	Cities       []string `json:"cities"`
+}
+
+type UpsertStoresRow struct {
+	ID          int64       `json:"id"`
+	OdooStoreID pgtype.Text `json:"odoo_store_id"`
+	Inserted    bool        `json:"inserted"`
+}
+
+// Bulk-upserts one page of Odoo stores in a single round trip. "(xmax = 0)"
+// is Postgres' standard trick for distinguishing an INSERT from an
+// ON CONFLICT UPDATE in the same statement: xmax is only set by an UPDATE,
+// so a fresh row's xmax is 0. The store-sync service uses it to report
+// inserted_stores vs updated_stores without a second query.
+func (q *Queries) UpsertStores(ctx context.Context, arg UpsertStoresParams) ([]UpsertStoresRow, error) {
+	rows, err := q.db.Query(ctx, upsertStores, arg.OdooStoreIds, arg.StoreNames, arg.Cities)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UpsertStoresRow
+	for rows.Next() {
+		var i UpsertStoresRow
+		if err := rows.Scan(&i.ID, &i.OdooStoreID, &i.Inserted); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
