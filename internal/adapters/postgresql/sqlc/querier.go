@@ -9,14 +9,6 @@ import (
 )
 
 type Querier interface {
-	AssignEmployeesToStore(ctx context.Context, arg AssignEmployeesToStoreParams) error
-	ClearEmployeeAssignmentsForStores(ctx context.Context, storeIds []int64) error
-	// Unassigns any employee currently linked to store_id whose employee_id is
-	// not in keep_employee_ids (Odoo's current odoo_user_ids for that store,
-	// cast to text). An empty keep_employee_ids clears every employee
-	// currently assigned to the store, which is correct: Odoo reports nobody
-	// assigned there anymore.
-	ClearStoreAssignmentsNotInOdoo(ctx context.Context, arg ClearStoreAssignmentsNotInOdooParams) error
 	CreateEmployee(ctx context.Context, arg CreateEmployeeParams) (Employee, error)
 	CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) (PasswordResetToken, error)
 	DeleteEmployee(ctx context.Context, id int64) (int64, error)

@@ -41,48 +41,6 @@ func (m *MockQuerier) EXPECT() *MockQuerierMockRecorder {
 	return m.recorder
 }
 
-// AssignEmployeesToStore mocks base method.
-func (m *MockQuerier) AssignEmployeesToStore(ctx context.Context, arg repo.AssignEmployeesToStoreParams) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "AssignEmployeesToStore", ctx, arg)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// AssignEmployeesToStore indicates an expected call of AssignEmployeesToStore.
-func (mr *MockQuerierMockRecorder) AssignEmployeesToStore(ctx, arg any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AssignEmployeesToStore", reflect.TypeOf((*MockQuerier)(nil).AssignEmployeesToStore), ctx, arg)
-}
-
-// ClearEmployeeAssignmentsForStores mocks base method.
-func (m *MockQuerier) ClearEmployeeAssignmentsForStores(ctx context.Context, storeIds []int64) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ClearEmployeeAssignmentsForStores", ctx, storeIds)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// ClearEmployeeAssignmentsForStores indicates an expected call of ClearEmployeeAssignmentsForStores.
-func (mr *MockQuerierMockRecorder) ClearEmployeeAssignmentsForStores(ctx, storeIds any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClearEmployeeAssignmentsForStores", reflect.TypeOf((*MockQuerier)(nil).ClearEmployeeAssignmentsForStores), ctx, storeIds)
-}
-
-// ClearStoreAssignmentsNotInOdoo mocks base method.
-func (m *MockQuerier) ClearStoreAssignmentsNotInOdoo(ctx context.Context, arg repo.ClearStoreAssignmentsNotInOdooParams) error {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ClearStoreAssignmentsNotInOdoo", ctx, arg)
-	ret0, _ := ret[0].(error)
-	return ret0
-}
-
-// ClearStoreAssignmentsNotInOdoo indicates an expected call of ClearStoreAssignmentsNotInOdoo.
-func (mr *MockQuerierMockRecorder) ClearStoreAssignmentsNotInOdoo(ctx, arg any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClearStoreAssignmentsNotInOdoo", reflect.TypeOf((*MockQuerier)(nil).ClearStoreAssignmentsNotInOdoo), ctx, arg)
-}
-
 // CreateEmployee mocks base method.
 func (m *MockQuerier) CreateEmployee(ctx context.Context, arg repo.CreateEmployeeParams) (repo.Employee, error) {
 	m.ctrl.T.Helper()

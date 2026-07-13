@@ -42,16 +42,16 @@ func (m *MockClient) EXPECT() *MockClientMockRecorder {
 }
 
 // FetchStores mocks base method.
-func (m *MockClient) FetchStores(ctx context.Context, limit, offset int) ([]odoo.Store, error) {
+func (m *MockClient) FetchStores(ctx context.Context) ([]odoo.Store, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FetchStores", ctx, limit, offset)
+	ret := m.ctrl.Call(m, "FetchStores", ctx)
 	ret0, _ := ret[0].([]odoo.Store)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // FetchStores indicates an expected call of FetchStores.
-func (mr *MockClientMockRecorder) FetchStores(ctx, limit, offset any) *gomock.Call {
+func (mr *MockClientMockRecorder) FetchStores(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FetchStores", reflect.TypeOf((*MockClient)(nil).FetchStores), ctx, limit, offset)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FetchStores", reflect.TypeOf((*MockClient)(nil).FetchStores), ctx)
 }

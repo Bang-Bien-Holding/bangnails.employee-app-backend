@@ -4,19 +4,15 @@ package odoo
 
 import "context"
 
-// Store is one store record as Odoo reports it. OdooUserIDs are the Odoo
-// user IDs currently assigned to work at this store — the store-sync flow
-// uses this to keep employees.store_id in sync with Odoo's assignments.
+// Store is one store record as Odoo reports it.
 type Store struct {
-	ID          int
-	Name        string
-	City        string
-	OdooUserIDs []int
+	ID   int
+	Name string
+	City string
 }
 
-// Client fetches store data from Odoo, one page at a time. FetchStores
-// returns an empty slice once offset has passed the last record — callers
-// paginate by incrementing offset by limit until they see that empty slice.
+// Client fetches store data from Odoo. The store count is small enough that
+// FetchStores returns the full list in one call — no pagination.
 type Client interface {
-	FetchStores(ctx context.Context, limit, offset int) ([]Store, error)
+	FetchStores(ctx context.Context) ([]Store, error)
 }

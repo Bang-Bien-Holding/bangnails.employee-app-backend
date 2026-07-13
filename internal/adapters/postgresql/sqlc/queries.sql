@@ -78,22 +78,6 @@ SET store_name = EXCLUDED.store_name,
     updated_at = now()
 RETURNING id, odoo_store_id, (xmax = 0) AS inserted;
 
--- name: ClearStoreAssignmentsNotInOdoo :exec
--- Unassigns any employee currently linked to store_id whose employee_id is
--- not in keep_employee_ids (Odoo's current odoo_user_ids for that store,
--- cast to text). An empty keep_employee_ids clears every employee
--- currently assigned to the store, which is correct: Odoo reports nobody
--- assigned there anymore.
-UPDATE employees
-SET store_id = NULL, updated_at = now()
-WHERE store_id = sqlc.arg(store_id)
-  AND employee_id != ALL(sqlc.arg(keep_employee_ids)::varchar[]);
-
--- name: AssignEmployeesToStore :exec
-UPDATE employees
-SET store_id = sqlc.arg(store_id), updated_at = now()
-WHERE employee_id = ANY(sqlc.arg(assign_employee_ids)::varchar[]);
-
 -- name: FindStoresNotInOdoo :many
 -- Locally-created stores that have never been linked to Odoo
 -- (odoo_store_id IS NULL) are deliberately excluded — only stores Odoo
@@ -102,11 +86,6 @@ SELECT id FROM store
 WHERE is_active = true
   AND odoo_store_id IS NOT NULL
   AND odoo_store_id != ALL(sqlc.arg(active_odoo_store_ids)::varchar[]);
-
--- name: ClearEmployeeAssignmentsForStores :exec
-UPDATE employees
-SET store_id = NULL, updated_at = now()
-WHERE store_id = ANY(sqlc.arg(store_ids)::bigint[]);
 
 -- name: SoftDeleteStores :execrows
 UPDATE store

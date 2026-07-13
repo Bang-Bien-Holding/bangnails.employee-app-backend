@@ -11,55 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const assignEmployeesToStore = `-- name: AssignEmployeesToStore :exec
-UPDATE employees
-SET store_id = $1, updated_at = now()
-WHERE employee_id = ANY($2::varchar[])
-`
-
-type AssignEmployeesToStoreParams struct {
-	StoreID           pgtype.Int8 `json:"store_id"`
-	AssignEmployeeIds []string    `json:"assign_employee_ids"`
-}
-
-func (q *Queries) AssignEmployeesToStore(ctx context.Context, arg AssignEmployeesToStoreParams) error {
-	_, err := q.db.Exec(ctx, assignEmployeesToStore, arg.StoreID, arg.AssignEmployeeIds)
-	return err
-}
-
-const clearEmployeeAssignmentsForStores = `-- name: ClearEmployeeAssignmentsForStores :exec
-UPDATE employees
-SET store_id = NULL, updated_at = now()
-WHERE store_id = ANY($1::bigint[])
-`
-
-func (q *Queries) ClearEmployeeAssignmentsForStores(ctx context.Context, storeIds []int64) error {
-	_, err := q.db.Exec(ctx, clearEmployeeAssignmentsForStores, storeIds)
-	return err
-}
-
-const clearStoreAssignmentsNotInOdoo = `-- name: ClearStoreAssignmentsNotInOdoo :exec
-UPDATE employees
-SET store_id = NULL, updated_at = now()
-WHERE store_id = $1
-  AND employee_id != ALL($2::varchar[])
-`
-
-type ClearStoreAssignmentsNotInOdooParams struct {
-	StoreID         pgtype.Int8 `json:"store_id"`
-	KeepEmployeeIds []string    `json:"keep_employee_ids"`
-}
-
-// Unassigns any employee currently linked to store_id whose employee_id is
-// not in keep_employee_ids (Odoo's current odoo_user_ids for that store,
-// cast to text). An empty keep_employee_ids clears every employee
-// currently assigned to the store, which is correct: Odoo reports nobody
-// assigned there anymore.
-func (q *Queries) ClearStoreAssignmentsNotInOdoo(ctx context.Context, arg ClearStoreAssignmentsNotInOdooParams) error {
-	_, err := q.db.Exec(ctx, clearStoreAssignmentsNotInOdoo, arg.StoreID, arg.KeepEmployeeIds)
-	return err
-}
-
 const createEmployee = `-- name: CreateEmployee :one
 INSERT INTO employees (employee_id, full_name, email, username, role)
 VALUES ($1, $2, $3, $4, $5)
