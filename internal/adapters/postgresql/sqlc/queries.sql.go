@@ -14,7 +14,7 @@ import (
 const createEmployee = `-- name: CreateEmployee :one
 INSERT INTO employees (employee_id, full_name, email, username, role)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at
+RETURNING id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id
 `
 
 type CreateEmployeeParams struct {
@@ -45,6 +45,7 @@ func (q *Queries) CreateEmployee(ctx context.Context, arg CreateEmployeeParams) 
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StoreID,
 	)
 	return i, err
 }
@@ -89,7 +90,7 @@ func (q *Queries) DeleteEmployee(ctx context.Context, id int64) (int64, error) {
 }
 
 const getEmployeeByEmail = `-- name: GetEmployeeByEmail :one
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at FROM employees
+SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
 WHERE email = $1
 `
 
@@ -107,12 +108,13 @@ func (q *Queries) GetEmployeeByEmail(ctx context.Context, email string) (Employe
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StoreID,
 	)
 	return i, err
 }
 
 const getEmployeeByID = `-- name: GetEmployeeByID :one
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at FROM employees
+SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
 WHERE id = $1
 `
 
@@ -130,12 +132,13 @@ func (q *Queries) GetEmployeeByID(ctx context.Context, id int64) (Employee, erro
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StoreID,
 	)
 	return i, err
 }
 
 const getEmployeeByUsername = `-- name: GetEmployeeByUsername :one
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at FROM employees
+SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
 WHERE username = $1
 `
 
@@ -153,12 +156,13 @@ func (q *Queries) GetEmployeeByUsername(ctx context.Context, username string) (E
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StoreID,
 	)
 	return i, err
 }
 
 const listEmployees = `-- name: ListEmployees :many
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at FROM employees
+SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
 ORDER BY id
 `
 
@@ -182,6 +186,7 @@ func (q *Queries) ListEmployees(ctx context.Context) ([]Employee, error) {
 			&i.IsActive,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StoreID,
 		); err != nil {
 			return nil, err
 		}
@@ -269,7 +274,7 @@ SET employee_id = $2,
     role = $6,
     updated_at = now()
 WHERE id = $1
-RETURNING id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at
+RETURNING id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id
 `
 
 type UpdateEmployeeParams struct {
@@ -302,6 +307,7 @@ func (q *Queries) UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) 
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StoreID,
 	)
 	return i, err
 }
