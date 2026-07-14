@@ -11,6 +11,8 @@ package mocks
 
 import (
 	context "context"
+	net "net"
+	netip "net/netip"
 	reflect "reflect"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
@@ -146,6 +148,21 @@ func (mr *MockQuerierMockRecorder) GetEmployeeByUsername(ctx, username any) *gom
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetEmployeeByUsername", reflect.TypeOf((*MockQuerier)(nil).GetEmployeeByUsername), ctx, username)
 }
 
+// GetStoreByID mocks base method.
+func (m *MockQuerier) GetStoreByID(ctx context.Context, id int64) (repo.Store, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetStoreByID", ctx, id)
+	ret0, _ := ret[0].(repo.Store)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetStoreByID indicates an expected call of GetStoreByID.
+func (mr *MockQuerierMockRecorder) GetStoreByID(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStoreByID", reflect.TypeOf((*MockQuerier)(nil).GetStoreByID), ctx, id)
+}
+
 // ListEmployeeIDsByIDs mocks base method.
 func (m *MockQuerier) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]string, error) {
 	m.ctrl.T.Helper()
@@ -174,6 +191,36 @@ func (m *MockQuerier) ListEmployees(ctx context.Context) ([]repo.Employee, error
 func (mr *MockQuerierMockRecorder) ListEmployees(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEmployees", reflect.TypeOf((*MockQuerier)(nil).ListEmployees), ctx)
+}
+
+// ListStoreWifiIPsByStoreID mocks base method.
+func (m *MockQuerier) ListStoreWifiIPsByStoreID(ctx context.Context, storeID int64) ([]netip.Addr, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListStoreWifiIPsByStoreID", ctx, storeID)
+	ret0, _ := ret[0].([]netip.Addr)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListStoreWifiIPsByStoreID indicates an expected call of ListStoreWifiIPsByStoreID.
+func (mr *MockQuerierMockRecorder) ListStoreWifiIPsByStoreID(ctx, storeID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStoreWifiIPsByStoreID", reflect.TypeOf((*MockQuerier)(nil).ListStoreWifiIPsByStoreID), ctx, storeID)
+}
+
+// ListStoreWifiMacsByStoreID mocks base method.
+func (m *MockQuerier) ListStoreWifiMacsByStoreID(ctx context.Context, storeID int64) ([]net.HardwareAddr, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListStoreWifiMacsByStoreID", ctx, storeID)
+	ret0, _ := ret[0].([]net.HardwareAddr)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListStoreWifiMacsByStoreID indicates an expected call of ListStoreWifiMacsByStoreID.
+func (mr *MockQuerierMockRecorder) ListStoreWifiMacsByStoreID(ctx, storeID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStoreWifiMacsByStoreID", reflect.TypeOf((*MockQuerier)(nil).ListStoreWifiMacsByStoreID), ctx, storeID)
 }
 
 // RedeemPasswordResetToken mocks base method.

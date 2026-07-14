@@ -2,15 +2,20 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type service struct {
+	// repo is a plain, non-transactional Querier for reads that don't need
+	// transaction scoping — GetStoreByID uses this rather than withTx.
+	repo repo.Querier
 	// withTx wraps fn in a transaction-scoped repo.Querier — a real
 	// pool-backed implementation is installed by NewService; tests replace
 	// it with a stub that calls fn against a mocked Querier directly, so
@@ -24,6 +29,7 @@ type service struct {
 
 func NewService(pool *pgxpool.Pool, odooClient odoo.Client) Service {
 	return &service{
+		repo: repo.New(pool),
 		withTx: func(ctx context.Context, fn func(repo.Querier) error) error {
 			tx, err := pool.Begin(ctx)
 			if err != nil {
@@ -38,6 +44,44 @@ func NewService(pool *pgxpool.Pool, odooClient odoo.Client) Service {
 		},
 		odoo: odooClient,
 	}
+}
+
+// GetStoreByID returns one store's details together with its current wifi
+// whitelist. IPAddresses/MACAddresses are always non-nil slices — a store
+// with no entries yet gets an empty slice, not nil, so callers (and the
+// eventual JSON response) never have to distinguish "no data" from "null".
+func (s *service) GetStoreByID(ctx context.Context, id int64) (StoreDetail, error) {
+	store, err := s.repo.GetStoreByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return StoreDetail{}, ErrStoreNotFound
+		}
+		return StoreDetail{}, err
+	}
+
+	ips, err := s.repo.ListStoreWifiIPsByStoreID(ctx, id)
+	if err != nil {
+		return StoreDetail{}, err
+	}
+	macs, err := s.repo.ListStoreWifiMacsByStoreID(ctx, id)
+	if err != nil {
+		return StoreDetail{}, err
+	}
+
+	ipAddresses := make([]string, len(ips))
+	for i, ip := range ips {
+		ipAddresses[i] = ip.String()
+	}
+	macAddresses := make([]string, len(macs))
+	for i, mac := range macs {
+		macAddresses[i] = mac.String()
+	}
+
+	return StoreDetail{
+		Store:        store,
+		IPAddresses:  ipAddresses,
+		MACAddresses: macAddresses,
+	}, nil
 }
 
 // SyncStores runs the store-sync workflow: fetch every store from Odoo in a

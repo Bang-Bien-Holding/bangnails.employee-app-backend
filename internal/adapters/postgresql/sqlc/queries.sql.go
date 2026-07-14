@@ -7,6 +7,8 @@ package repo
 
 import (
 	"context"
+	"net"
+	"net/netip"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -191,6 +193,31 @@ func (q *Queries) GetEmployeeByUsername(ctx context.Context, username string) (E
 	return i, err
 }
 
+const getStoreByID = `-- name: GetStoreByID :one
+SELECT id, odoo_store_id, store_name, city, latitude, longitude, radius_meters, is_active, created_at, updated_at FROM store
+WHERE id = $1 AND is_active = true
+`
+
+// is_active = true reuses the store-sync feature's soft-delete flag as the
+// not-found condition, rather than introducing a second deletion concept.
+func (q *Queries) GetStoreByID(ctx context.Context, id int64) (Store, error) {
+	row := q.db.QueryRow(ctx, getStoreByID, id)
+	var i Store
+	err := row.Scan(
+		&i.ID,
+		&i.OdooStoreID,
+		&i.StoreName,
+		&i.City,
+		&i.Latitude,
+		&i.Longitude,
+		&i.RadiusMeters,
+		&i.IsActive,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const listEmployeeIDsByIDs = `-- name: ListEmployeeIDsByIDs :many
 SELECT employee_id FROM employees
 WHERE id = ANY($1::bigint[])
@@ -249,6 +276,58 @@ func (q *Queries) ListEmployees(ctx context.Context) ([]Employee, error) {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStoreWifiIPsByStoreID = `-- name: ListStoreWifiIPsByStoreID :many
+SELECT ip_address FROM store_wifi_ip
+WHERE store_id = $1
+ORDER BY id
+`
+
+func (q *Queries) ListStoreWifiIPsByStoreID(ctx context.Context, storeID int64) ([]netip.Addr, error) {
+	rows, err := q.db.Query(ctx, listStoreWifiIPsByStoreID, storeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []netip.Addr
+	for rows.Next() {
+		var ip_address netip.Addr
+		if err := rows.Scan(&ip_address); err != nil {
+			return nil, err
+		}
+		items = append(items, ip_address)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStoreWifiMacsByStoreID = `-- name: ListStoreWifiMacsByStoreID :many
+SELECT mac_address FROM store_wifi_mac
+WHERE store_id = $1
+ORDER BY id
+`
+
+func (q *Queries) ListStoreWifiMacsByStoreID(ctx context.Context, storeID int64) ([]net.HardwareAddr, error) {
+	rows, err := q.db.Query(ctx, listStoreWifiMacsByStoreID, storeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []net.HardwareAddr
+	for rows.Next() {
+		var mac_address net.HardwareAddr
+		if err := rows.Scan(&mac_address); err != nil {
+			return nil, err
+		}
+		items = append(items, mac_address)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

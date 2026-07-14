@@ -114,3 +114,19 @@ WHERE is_active = true
 UPDATE store
 SET is_active = false, updated_at = now()
 WHERE id = ANY(sqlc.arg(store_ids)::bigint[]);
+
+-- name: GetStoreByID :one
+-- is_active = true reuses the store-sync feature's soft-delete flag as the
+-- not-found condition, rather than introducing a second deletion concept.
+SELECT * FROM store
+WHERE id = $1 AND is_active = true;
+
+-- name: ListStoreWifiIPsByStoreID :many
+SELECT ip_address FROM store_wifi_ip
+WHERE store_id = $1
+ORDER BY id;
+
+-- name: ListStoreWifiMacsByStoreID :many
+SELECT mac_address FROM store_wifi_mac
+WHERE store_id = $1
+ORDER BY id;

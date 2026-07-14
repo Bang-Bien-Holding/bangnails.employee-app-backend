@@ -3,12 +3,15 @@ package stores
 import (
 	"context"
 	"errors"
+	"net"
+	"net/netip"
 	"testing"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	sqlcmocks "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc/mocks"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
 	odoomocks "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo/mocks"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/mock/gomock"
 )
@@ -16,13 +19,110 @@ import (
 // newTestService builds a service whose withTx calls fn directly against q,
 // bypassing real transaction plumbing — SyncStores' orchestration is
 // exercised the same way regardless of what begins/commits the transaction.
+// GetStoreByID doesn't need a transaction, so it reads through repo instead —
+// set to the same mock so both styles of test can share one ctrl/mockRepo.
 func newTestService(q repo.Querier, o odoo.Client) *service {
 	return &service{
+		repo: q,
 		withTx: func(ctx context.Context, fn func(repo.Querier) error) error {
 			return fn(q)
 		},
 		odoo: o,
 	}
+}
+
+func TestStoreService_GetStoreByID(t *testing.T) {
+	t.Run("returns the store detail with its wifi whitelist", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		want := repo.Store{
+			ID:        12,
+			StoreName: "Montpellier 1",
+			IsActive:  true,
+		}
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(want, nil)
+		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return(
+			[]netip.Addr{netip.MustParseAddr("138.101.10.1"), netip.MustParseAddr("138.101.10.2")}, nil,
+		)
+		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return(
+			[]net.HardwareAddr{mustParseMAC(t, "aa:bb:cc:dd:ee:ff")}, nil,
+		)
+
+		svc := newTestService(mockRepo, nil)
+
+		detail, err := svc.GetStoreByID(t.Context(), 12)
+		if err != nil {
+			t.Fatalf("GetStoreByID() error = %v", err)
+		}
+		if detail.Store != want {
+			t.Errorf("GetStoreByID() store = %+v, want %+v", detail.Store, want)
+		}
+		wantIPs := []string{"138.101.10.1", "138.101.10.2"}
+		if !equalStrings(detail.IPAddresses, wantIPs) {
+			t.Errorf("GetStoreByID() ip_addresses = %v, want %v", detail.IPAddresses, wantIPs)
+		}
+		wantMACs := []string{"aa:bb:cc:dd:ee:ff"}
+		if !equalStrings(detail.MACAddresses, wantMACs) {
+			t.Errorf("GetStoreByID() mac_addresses = %v, want %v", detail.MACAddresses, wantMACs)
+		}
+	})
+
+	t.Run("a store with no wifi entries returns empty, not nil, address lists", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, IsActive: true}, nil)
+		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
+		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		detail, err := svc.GetStoreByID(t.Context(), 12)
+		if err != nil {
+			t.Fatalf("GetStoreByID() error = %v", err)
+		}
+		if detail.IPAddresses == nil || len(detail.IPAddresses) != 0 {
+			t.Errorf("GetStoreByID() ip_addresses = %#v, want non-nil empty slice", detail.IPAddresses)
+		}
+		if detail.MACAddresses == nil || len(detail.MACAddresses) != 0 {
+			t.Errorf("GetStoreByID() mac_addresses = %#v, want non-nil empty slice", detail.MACAddresses)
+		}
+	})
+
+	t.Run("an unknown or inactive store id returns ErrStoreNotFound", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(999)).Return(repo.Store{}, pgx.ErrNoRows)
+
+		svc := newTestService(mockRepo, nil)
+
+		if _, err := svc.GetStoreByID(t.Context(), 999); !errors.Is(err, ErrStoreNotFound) {
+			t.Errorf("GetStoreByID() error = %v, want ErrStoreNotFound", err)
+		}
+	})
+}
+
+func mustParseMAC(t *testing.T, s string) net.HardwareAddr {
+	t.Helper()
+	mac, err := net.ParseMAC(s)
+	if err != nil {
+		t.Fatalf("net.ParseMAC(%q) error = %v", s, err)
+	}
+	return mac
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestStoreService_SyncStores(t *testing.T) {

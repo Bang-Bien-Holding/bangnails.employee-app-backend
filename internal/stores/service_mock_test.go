@@ -40,6 +40,21 @@ func (m *MockService) EXPECT() *MockServiceMockRecorder {
 	return m.recorder
 }
 
+// GetStoreByID mocks base method.
+func (m *MockService) GetStoreByID(ctx context.Context, id int64) (StoreDetail, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetStoreByID", ctx, id)
+	ret0, _ := ret[0].(StoreDetail)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetStoreByID indicates an expected call of GetStoreByID.
+func (mr *MockServiceMockRecorder) GetStoreByID(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStoreByID", reflect.TypeOf((*MockService)(nil).GetStoreByID), ctx, id)
+}
+
 // SyncStores mocks base method.
 func (m *MockService) SyncStores(ctx context.Context) (SyncSummary, error) {
 	m.ctrl.T.Helper()

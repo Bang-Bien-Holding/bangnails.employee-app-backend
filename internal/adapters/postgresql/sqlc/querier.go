@@ -6,6 +6,8 @@ package repo
 
 import (
 	"context"
+	"net"
+	"net/netip"
 )
 
 type Querier interface {
@@ -19,11 +21,16 @@ type Querier interface {
 	GetEmployeeByEmail(ctx context.Context, email string) (Employee, error)
 	GetEmployeeByID(ctx context.Context, id int64) (Employee, error)
 	GetEmployeeByUsername(ctx context.Context, username string) (Employee, error)
+	// is_active = true reuses the store-sync feature's soft-delete flag as the
+	// not-found condition, rather than introducing a second deletion concept.
+	GetStoreByID(ctx context.Context, id int64) (Store, error)
 	// Translates the internal ids a SyncEmployees caller supplies into the
 	// Odoo-facing employee_id values runSync actually sends to Odoo. An id with
 	// no matching row is silently omitted from the result.
 	ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]string, error)
 	ListEmployees(ctx context.Context) ([]Employee, error)
+	ListStoreWifiIPsByStoreID(ctx context.Context, storeID int64) ([]netip.Addr, error)
+	ListStoreWifiMacsByStoreID(ctx context.Context, storeID int64) ([]net.HardwareAddr, error)
 	// Atomically claims a valid, unused token: the UPDATE's row lock ensures
 	// only one concurrent caller can match the WHERE clause and get a row back,
 	// so CompleteActivation can't be raced into redeeming the same token twice.
