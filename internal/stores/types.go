@@ -15,10 +15,10 @@ import (
 // call is still running — Phase 1's concurrency guard.
 var ErrSyncInProgress = errors.New("store sync already in progress")
 
-// ErrStoreNotFound is returned by GetStoreByID for an unknown id, or one
-// whose is_active is false — the store-sync feature's soft-delete flag
-// doubles as the not-found condition here rather than introducing a second
-// deletion concept for stores.
+// ErrStoreNotFound is returned by GetStoreByID/UpdateStore for an id with no
+// matching row. is_active plays no part in this — see ADR-0001, it's a
+// normal editable field, not a soft-delete tombstone, so an inactive store
+// is a normal 200/found, not a 404.
 var ErrStoreNotFound = errors.New("store not found")
 
 // ErrStoreConflict is returned by UpdateStore when the caller's UpdatedAt no
@@ -70,6 +70,12 @@ type StoreDetail struct {
 // UpdateStore). "unique" rejects a value repeated within the same array
 // rather than silently deduping it; "dive" then validates each element's
 // address format.
+//
+// IsActive is a pointer for the same omit-vs-explicit convention as the
+// geofence fields — nil leaves the store's active state untouched, a
+// present true/false is the list screen's Activate toggle (see ADR-0001:
+// this can reactivate a currently-inactive store, since is_active is a
+// normal editable field, not a soft-delete tombstone).
 type patchStoreParams struct {
 	UpdatedAt    time.Time `json:"updated_at" validate:"required"`
 	Latitude     *float64  `json:"latitude" validate:"required_with=Longitude RadiusMeters,omitempty,min=-90,max=90"`
@@ -77,6 +83,7 @@ type patchStoreParams struct {
 	RadiusMeters *int32    `json:"radius_meters" validate:"required_with=Latitude Longitude,omitempty,min=1,max=1000"`
 	IPAddresses  []string  `json:"ip_addresses" validate:"omitempty,unique,dive,ipv4"`
 	MACAddresses []string  `json:"mac_addresses" validate:"omitempty,unique,dive,mac"`
+	IsActive     *bool     `json:"is_active"`
 }
 
 type Service interface {

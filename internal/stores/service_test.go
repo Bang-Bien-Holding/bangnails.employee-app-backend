@@ -91,7 +91,7 @@ func TestStoreService_GetStoreByID(t *testing.T) {
 		}
 	})
 
-	t.Run("an unknown or inactive store id returns ErrStoreNotFound", func(t *testing.T) {
+	t.Run("an unknown store id returns ErrStoreNotFound", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
@@ -101,6 +101,25 @@ func TestStoreService_GetStoreByID(t *testing.T) {
 
 		if _, err := svc.GetStoreByID(t.Context(), 999); !errors.Is(err, ErrStoreNotFound) {
 			t.Errorf("GetStoreByID() error = %v, want ErrStoreNotFound", err)
+		}
+	})
+
+	t.Run("an inactive store is found, not ErrStoreNotFound", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, IsActive: false}, nil)
+		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
+		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		detail, err := svc.GetStoreByID(t.Context(), 12)
+		if err != nil {
+			t.Fatalf("GetStoreByID() error = %v, want nil for an inactive store", err)
+		}
+		if detail.Store.IsActive {
+			t.Errorf("GetStoreByID() store.IsActive = true, want false")
 		}
 	})
 }
@@ -268,7 +287,7 @@ func TestStoreService_UpdateStore(t *testing.T) {
 		}
 	})
 
-	t.Run("an unknown or inactive store id returns ErrStoreNotFound", func(t *testing.T) {
+	t.Run("an unknown store id returns ErrStoreNotFound", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
@@ -389,6 +408,86 @@ func TestStoreService_UpdateStore(t *testing.T) {
 		ips := []string{"138.101.10.1"}
 		if _, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now(), IPAddresses: ips}); !errors.Is(err, ErrStoreConflict) {
 			t.Errorf("UpdateStore() error = %v, want ErrStoreConflict", err)
+		}
+	})
+
+	t.Run("is_active: true reactivates a currently-inactive store", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, arg repo.UpdateStoreGeofenceParams) (repo.Store, error) {
+				if !arg.IsActive.Valid || !arg.IsActive.Bool {
+					t.Errorf("UpdateStoreGeofenceParams.IsActive = %+v, want valid true", arg.IsActive)
+				}
+				return repo.Store{ID: 12, IsActive: true}, nil
+			},
+		)
+		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
+		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		isActive := true
+		detail, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now(), IsActive: &isActive})
+		if err != nil {
+			t.Fatalf("UpdateStore() error = %v", err)
+		}
+		if !detail.Store.IsActive {
+			t.Errorf("UpdateStore() store.IsActive = false, want true")
+		}
+	})
+
+	t.Run("is_active: false deactivates a store without touching geofence or wifi lists", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, arg repo.UpdateStoreGeofenceParams) (repo.Store, error) {
+				if arg.Latitude.Valid || arg.Longitude.Valid || arg.RadiusMeters.Valid {
+					t.Errorf("UpdateStoreGeofenceParams = %+v, want geofence columns invalid/NULL", arg)
+				}
+				if !arg.IsActive.Valid || arg.IsActive.Bool {
+					t.Errorf("UpdateStoreGeofenceParams.IsActive = %+v, want valid false", arg.IsActive)
+				}
+				return repo.Store{ID: 12, IsActive: false}, nil
+			},
+		)
+		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
+		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
+		// No EXPECT for Delete/InsertStoreWifi{IPs,Macs} — both lists omitted.
+
+		svc := newTestService(mockRepo, nil)
+
+		isActive := false
+		detail, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now(), IsActive: &isActive})
+		if err != nil {
+			t.Fatalf("UpdateStore() error = %v", err)
+		}
+		if detail.Store.IsActive {
+			t.Errorf("UpdateStore() store.IsActive = true, want false")
+		}
+	})
+
+	t.Run("omitting is_active leaves the store's active state untouched", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, arg repo.UpdateStoreGeofenceParams) (repo.Store, error) {
+				if arg.IsActive.Valid {
+					t.Errorf("UpdateStoreGeofenceParams.IsActive = %+v, want invalid/NULL", arg.IsActive)
+				}
+				return repo.Store{ID: 12, IsActive: true}, nil
+			},
+		)
+		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
+		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		if _, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now()}); err != nil {
+			t.Fatalf("UpdateStore() error = %v", err)
 		}
 	})
 }

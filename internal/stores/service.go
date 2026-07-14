@@ -67,11 +67,13 @@ func (s *service) GetStoreByID(ctx context.Context, id int64) (StoreDetail, erro
 }
 
 // UpdateStore applies params' geofence group (if present — all three or
-// none, enforced by patchStoreParams' validation tags) and always bumps
-// store.updated_at, gated by params.UpdatedAt matching the store's current
-// updated_at (see ErrStoreConflict). Runs inside withTx even though today it
-// only issues one write — the same transaction ticket 03 extends to also
-// replace the wifi whitelist tables atomically alongside this update.
+// none, enforced by patchStoreParams' validation tags) and IsActive (if
+// present — the list screen's Activate toggle, able to reactivate a
+// currently-inactive store per ADR-0001), and always bumps store.updated_at,
+// gated by params.UpdatedAt matching the store's current updated_at (see
+// ErrStoreConflict). Runs inside withTx even though today it only issues one
+// write — the same transaction ticket 03 extends to also replace the wifi
+// whitelist tables atomically alongside this update.
 func (s *service) UpdateStore(ctx context.Context, id int64, params patchStoreParams) (StoreDetail, error) {
 	var detail StoreDetail
 	err := s.withTx(ctx, func(q repo.Querier) error {
@@ -89,15 +91,16 @@ func (s *service) UpdateStore(ctx context.Context, id int64, params patchStorePa
 			Latitude:          latitude,
 			Longitude:         longitude,
 			RadiusMeters:      int32PtrToInt4(params.RadiusMeters),
+			IsActive:          boolPtrToBool(params.IsActive),
 			ExpectedUpdatedAt: pgtype.Timestamptz{Time: params.UpdatedAt, Valid: true},
 		})
 		if err != nil {
 			if !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
-			// No row matched id + is_active + updated_at together — find out
-			// which of those failed: if the store doesn't exist/is inactive
-			// it's a 404, otherwise the row exists and updated_at was stale.
+			// No row matched id + updated_at together — find out which of
+			// those failed: if the store doesn't exist it's a 404, otherwise
+			// the row exists and updated_at was stale.
 			if _, existsErr := q.GetStoreByID(ctx, id); errors.Is(existsErr, pgx.ErrNoRows) {
 				return ErrStoreNotFound
 			}
@@ -226,6 +229,15 @@ func int32PtrToInt4(i *int32) pgtype.Int4 {
 		return pgtype.Int4{}
 	}
 	return pgtype.Int4{Int32: *i, Valid: true}
+}
+
+// boolPtrToBool converts an optional request field to the nullable
+// pgtype.Bool UpdateStoreGeofence expects — see float64PtrToNumeric.
+func boolPtrToBool(b *bool) pgtype.Bool {
+	if b == nil {
+		return pgtype.Bool{}
+	}
+	return pgtype.Bool{Bool: *b, Valid: true}
 }
 
 // parseAddresses converts patchStoreParams.IPAddresses/MACAddresses'

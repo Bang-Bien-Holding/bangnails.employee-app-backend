@@ -300,6 +300,50 @@ func TestStoreHandler_PatchStore(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:    "is_active: true reactivates a currently-inactive store, reflected in the response",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","is_active":true}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{
+					Store:        repo.Store{ID: 12, StoreName: "Montpellier 1", IsActive: true},
+					IPAddresses:  []string{},
+					MACAddresses: []string{},
+				}, nil)
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var got storeResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal response body: %v", err)
+				}
+				if !got.IsActive {
+					t.Errorf("is_active = false, want true")
+				}
+			},
+		},
+		{
+			name:    "is_active: false deactivates a store, reflected in the response",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","is_active":false}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{
+					Store:        repo.Store{ID: 12, StoreName: "Montpellier 1", IsActive: false},
+					IPAddresses:  []string{},
+					MACAddresses: []string{},
+				}, nil)
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var got storeResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal response body: %v", err)
+				}
+				if got.IsActive {
+					t.Errorf("is_active = true, want false")
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -468,6 +512,27 @@ func TestStoreHandler_GetStoreByID(t *testing.T) {
 				wantMACs := []string{"aa:bb:cc:dd:ee:ff"}
 				if !equalStrings(got.MACAddresses, wantMACs) {
 					t.Errorf("mac_addresses = %v, want %v", got.MACAddresses, wantMACs)
+				}
+			},
+		},
+		{
+			name:    "an inactive store returns 200 with is_active: false, not 404",
+			idParam: "14",
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().GetStoreByID(gomock.Any(), int64(14)).Return(StoreDetail{
+					Store:        repo.Store{ID: 14, StoreName: "Deactivated Store", IsActive: false},
+					IPAddresses:  []string{},
+					MACAddresses: []string{},
+				}, nil)
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var got storeResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal response body: %v", err)
+				}
+				if got.IsActive {
+					t.Errorf("is_active = true, want false")
 				}
 			},
 		},

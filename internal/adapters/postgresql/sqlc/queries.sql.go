@@ -233,11 +233,12 @@ func (q *Queries) GetEmployeeByUsername(ctx context.Context, username string) (E
 
 const getStoreByID = `-- name: GetStoreByID :one
 SELECT id, odoo_store_id, store_name, city, latitude, longitude, radius_meters, is_active, created_at, updated_at FROM store
-WHERE id = $1 AND is_active = true
+WHERE id = $1
 `
 
-// is_active = true reuses the store-sync feature's soft-delete flag as the
-// not-found condition, rather than introducing a second deletion concept.
+// No is_active filter — see ADR-0001, is_active is a normal editable field,
+// not a soft-delete tombstone, so an inactive store is still a normal fetch
+// here, not a 404.
 func (q *Queries) GetStoreByID(ctx context.Context, id int64) (Store, error) {
 	row := q.db.QueryRow(ctx, getStoreByID, id)
 	var i Store
@@ -605,10 +606,10 @@ UPDATE store
 SET latitude = COALESCE($1, latitude),
     longitude = COALESCE($2, longitude),
     radius_meters = COALESCE($3, radius_meters),
+    is_active = COALESCE($4, is_active),
     updated_at = now()
-WHERE id = $4
-  AND is_active = true
-  AND updated_at = $5
+WHERE id = $5
+  AND updated_at = $6
 RETURNING id, odoo_store_id, store_name, city, latitude, longitude, radius_meters, is_active, created_at, updated_at
 `
 
@@ -616,27 +617,32 @@ type UpdateStoreGeofenceParams struct {
 	Latitude          pgtype.Numeric     `json:"latitude"`
 	Longitude         pgtype.Numeric     `json:"longitude"`
 	RadiusMeters      pgtype.Int4        `json:"radius_meters"`
+	IsActive          pgtype.Bool        `json:"is_active"`
 	ID                int64              `json:"id"`
 	ExpectedUpdatedAt pgtype.Timestamptz `json:"expected_updated_at"`
 }
 
-// Updates a store's geofence and unconditionally bumps updated_at whenever
-// expected_updated_at still matches the current row — the optimistic-
-// concurrency check for the whole PATCH /v1/stores/{id} aggregate (store
-// row + wifi whitelist tables), not just the geofence. A caller that only
-// touches the wifi lists (ticket 03) still runs this with all three
-// narg columns NULL, still bumping updated_at. latitude/longitude/
-// radius_meters are nullable args: NULL means "leave this column
-// unchanged" (COALESCE keeps the existing value) rather than "clear it" —
-// the all-or-nothing geofence group is enforced by the caller, not here.
-// No returned row (pgx.ErrNoRows) means either the store doesn't exist/is
-// inactive, or expected_updated_at is stale; the caller disambiguates with
-// a follow-up GetStoreByID.
+// Updates a store's geofence and is_active, and unconditionally bumps
+// updated_at whenever expected_updated_at still matches the current row —
+// the optimistic-concurrency check for the whole PATCH /v1/stores/{id}
+// aggregate (store row + wifi whitelist tables), not just the geofence. A
+// caller that only touches the wifi lists (ticket 03) or nothing but
+// is_active (ticket 05) still runs this with the other narg columns NULL,
+// still bumping updated_at. latitude/longitude/radius_meters/is_active are
+// nullable args: NULL means "leave this column unchanged" (COALESCE keeps
+// the existing value) rather than "clear it" — the all-or-nothing geofence
+// group is enforced by the caller, not here. No is_active filter here — see
+// ADR-0001: is_active is a normal editable field, not a soft-delete
+// tombstone, so this query can also be the one that reactivates a currently
+// inactive store. No returned row (pgx.ErrNoRows) means either the store
+// doesn't exist, or expected_updated_at is stale; the caller disambiguates
+// with a follow-up GetStoreByID.
 func (q *Queries) UpdateStoreGeofence(ctx context.Context, arg UpdateStoreGeofenceParams) (Store, error) {
 	row := q.db.QueryRow(ctx, updateStoreGeofence,
 		arg.Latitude,
 		arg.Longitude,
 		arg.RadiusMeters,
+		arg.IsActive,
 		arg.ID,
 		arg.ExpectedUpdatedAt,
 	)
