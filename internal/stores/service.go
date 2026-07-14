@@ -3,6 +3,8 @@ package stores
 import (
 	"context"
 	"errors"
+	"net"
+	"net/netip"
 	"strconv"
 	"sync"
 
@@ -101,6 +103,40 @@ func (s *service) UpdateStore(ctx context.Context, id int64, params patchStorePa
 			return ErrStoreConflict
 		}
 
+		if params.IPAddresses != nil {
+			ips, err := parseAddresses(params.IPAddresses, netip.ParseAddr)
+			if err != nil {
+				return err
+			}
+			if err := q.DeleteStoreWifiIPsNotIn(ctx, repo.DeleteStoreWifiIPsNotInParams{
+				StoreID: id, IpAddresses: ips,
+			}); err != nil {
+				return err
+			}
+			if err := q.InsertStoreWifiIPs(ctx, repo.InsertStoreWifiIPsParams{
+				StoreID: id, IpAddresses: ips,
+			}); err != nil {
+				return err
+			}
+		}
+
+		if params.MACAddresses != nil {
+			macs, err := parseAddresses(params.MACAddresses, net.ParseMAC)
+			if err != nil {
+				return err
+			}
+			if err := q.DeleteStoreWifiMacsNotIn(ctx, repo.DeleteStoreWifiMacsNotInParams{
+				StoreID: id, MacAddresses: macs,
+			}); err != nil {
+				return err
+			}
+			if err := q.InsertStoreWifiMacs(ctx, repo.InsertStoreWifiMacsParams{
+				StoreID: id, MacAddresses: macs,
+			}); err != nil {
+				return err
+			}
+		}
+
 		detail, err = buildStoreDetail(ctx, q, store)
 		return err
 	})
@@ -163,6 +199,21 @@ func int32PtrToInt4(i *int32) pgtype.Int4 {
 		return pgtype.Int4{}
 	}
 	return pgtype.Int4{Int32: *i, Valid: true}
+}
+
+// parseAddresses converts patchStoreParams.IPAddresses/MACAddresses'
+// already-validated (validate:"dive,ipv4|mac") strings to the typed values
+// the replace queries expect, via netip.ParseAddr or net.ParseMAC.
+func parseAddresses[T any](values []string, parse func(string) (T, error)) ([]T, error) {
+	parsed := make([]T, len(values))
+	for i, v := range values {
+		p, err := parse(v)
+		if err != nil {
+			return nil, err
+		}
+		parsed[i] = p
+	}
+	return parsed, nil
 }
 
 // SyncStores runs the store-sync workflow: fetch every store from Odoo in a

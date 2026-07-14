@@ -58,11 +58,25 @@ type StoreDetail struct {
 // all-or-nothing group via required_with: each names the other two, so
 // submitting exactly one or two of them fails validation, while submitting
 // all three or none of them passes.
+//
+// IPAddresses/MACAddresses need no pointer for the same "omitted vs.
+// explicit-empty" distinction: encoding/json already leaves a plain slice
+// nil when the field is absent from the body and non-nil (even if empty)
+// when it's present, including as "[]" — unlike a scalar, a slice's zero
+// value (nil) is never itself a value the caller could have meant, so nil
+// unambiguously means "field omitted, leave this whitelist untouched",
+// while any non-nil slice (including an empty one) replaces the store's
+// entire whitelist for that list to match exactly what's submitted (see
+// UpdateStore). "unique" rejects a value repeated within the same array
+// rather than silently deduping it; "dive" then validates each element's
+// address format.
 type patchStoreParams struct {
 	UpdatedAt    time.Time `json:"updated_at" validate:"required"`
 	Latitude     *float64  `json:"latitude" validate:"required_with=Longitude RadiusMeters,omitempty,min=-90,max=90"`
 	Longitude    *float64  `json:"longitude" validate:"required_with=Latitude RadiusMeters,omitempty,min=-180,max=180"`
 	RadiusMeters *int32    `json:"radius_meters" validate:"required_with=Latitude Longitude,omitempty,min=1,max=1000"`
+	IPAddresses  []string  `json:"ip_addresses" validate:"omitempty,unique,dive,ipv4"`
+	MACAddresses []string  `json:"mac_addresses" validate:"omitempty,unique,dive,mac"`
 }
 
 type Service interface {

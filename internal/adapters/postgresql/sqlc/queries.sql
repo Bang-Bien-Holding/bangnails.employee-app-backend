@@ -153,3 +153,33 @@ WHERE id = sqlc.arg(id)
   AND is_active = true
   AND updated_at = sqlc.arg(expected_updated_at)
 RETURNING *;
+
+-- name: DeleteStoreWifiIPsNotIn :exec
+-- Half of the "replace this store's IP whitelist to match ip_addresses
+-- exactly" diff (paired with InsertStoreWifiIPs) — deletes whatever's
+-- currently there but no longer submitted. "!= ALL(...)" over an empty
+-- ip_addresses array is vacuously true for every row, so submitting []
+-- correctly clears the whole whitelist rather than being a no-op.
+DELETE FROM store_wifi_ip
+WHERE store_id = sqlc.arg(store_id)
+  AND ip_address != ALL(sqlc.arg(ip_addresses)::inet[]);
+
+-- name: InsertStoreWifiIPs :exec
+-- Other half of the replace diff: inserts whatever's newly submitted.
+-- ON CONFLICT DO NOTHING is what makes values already present in both the
+-- old and new set stay untouched rather than being deleted and reinserted.
+INSERT INTO store_wifi_ip (store_id, ip_address)
+SELECT sqlc.arg(store_id), unnest(sqlc.arg(ip_addresses)::inet[])
+ON CONFLICT (store_id, ip_address) DO NOTHING;
+
+-- name: DeleteStoreWifiMacsNotIn :exec
+-- MAC-address counterpart of DeleteStoreWifiIPsNotIn.
+DELETE FROM store_wifi_mac
+WHERE store_id = sqlc.arg(store_id)
+  AND mac_address != ALL(sqlc.arg(mac_addresses)::macaddr[]);
+
+-- name: InsertStoreWifiMacs :exec
+-- MAC-address counterpart of InsertStoreWifiIPs.
+INSERT INTO store_wifi_mac (store_id, mac_address)
+SELECT sqlc.arg(store_id), unnest(sqlc.arg(mac_addresses)::macaddr[])
+ON CONFLICT (store_id, mac_address) DO NOTHING;

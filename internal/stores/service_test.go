@@ -206,6 +206,116 @@ func TestStoreService_UpdateStore(t *testing.T) {
 			t.Errorf("UpdateStore() error = %v, want ErrStoreNotFound", err)
 		}
 	})
+
+	t.Run("omitting ip_addresses and mac_addresses leaves both whitelists untouched", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{ID: 12, IsActive: true}, nil)
+		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
+		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
+		// No EXPECT for Delete/InsertStoreWifi{IPs,Macs} — gomock fails the
+		// test if UpdateStore calls any of them when both lists are nil.
+
+		svc := newTestService(mockRepo, nil)
+
+		if _, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now()}); err != nil {
+			t.Fatalf("UpdateStore() error = %v", err)
+		}
+	})
+
+	t.Run("submitting ip_addresses replaces the IP whitelist, independent of mac_addresses", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		wantIPs := []netip.Addr{netip.MustParseAddr("138.101.10.1"), netip.MustParseAddr("138.101.10.2")}
+
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{ID: 12, IsActive: true}, nil)
+		mockRepo.EXPECT().DeleteStoreWifiIPsNotIn(gomock.Any(), repo.DeleteStoreWifiIPsNotInParams{
+			StoreID: 12, IpAddresses: wantIPs,
+		}).Return(nil)
+		mockRepo.EXPECT().InsertStoreWifiIPs(gomock.Any(), repo.InsertStoreWifiIPsParams{
+			StoreID: 12, IpAddresses: wantIPs,
+		}).Return(nil)
+		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return(wantIPs, nil)
+		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
+		// No EXPECT for Delete/InsertStoreWifiMacs — mac_addresses is nil.
+
+		svc := newTestService(mockRepo, nil)
+
+		ips := []string{"138.101.10.1", "138.101.10.2"}
+		detail, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now(), IPAddresses: ips})
+		if err != nil {
+			t.Fatalf("UpdateStore() error = %v", err)
+		}
+		wantStrs := []string{"138.101.10.1", "138.101.10.2"}
+		if !equalStrings(detail.IPAddresses, wantStrs) {
+			t.Errorf("UpdateStore() ip_addresses = %v, want %v", detail.IPAddresses, wantStrs)
+		}
+	})
+
+	t.Run("submitting an empty ip_addresses array clears the whitelist", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{ID: 12, IsActive: true}, nil)
+		mockRepo.EXPECT().DeleteStoreWifiIPsNotIn(gomock.Any(), repo.DeleteStoreWifiIPsNotInParams{
+			StoreID: 12, IpAddresses: []netip.Addr{},
+		}).Return(nil)
+		mockRepo.EXPECT().InsertStoreWifiIPs(gomock.Any(), repo.InsertStoreWifiIPsParams{
+			StoreID: 12, IpAddresses: []netip.Addr{},
+		}).Return(nil)
+		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
+		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		empty := []string{}
+		if _, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now(), IPAddresses: empty}); err != nil {
+			t.Fatalf("UpdateStore() error = %v", err)
+		}
+	})
+
+	t.Run("submitting mac_addresses replaces the MAC whitelist, independent of ip_addresses", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		wantMACs := []net.HardwareAddr{mustParseMAC(t, "aa:bb:cc:dd:ee:ff")}
+
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{ID: 12, IsActive: true}, nil)
+		mockRepo.EXPECT().DeleteStoreWifiMacsNotIn(gomock.Any(), repo.DeleteStoreWifiMacsNotInParams{
+			StoreID: 12, MacAddresses: wantMACs,
+		}).Return(nil)
+		mockRepo.EXPECT().InsertStoreWifiMacs(gomock.Any(), repo.InsertStoreWifiMacsParams{
+			StoreID: 12, MacAddresses: wantMACs,
+		}).Return(nil)
+		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
+		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return(wantMACs, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		macs := []string{"aa:bb:cc:dd:ee:ff"}
+		if _, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now(), MACAddresses: macs}); err != nil {
+			t.Fatalf("UpdateStore() error = %v", err)
+		}
+	})
+
+	t.Run("a wifi-only PATCH still enforces the updated_at conflict check before touching any wifi table", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{}, pgx.ErrNoRows)
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, IsActive: true}, nil)
+		// No EXPECT for Delete/InsertStoreWifiIPs — the conflict must be
+		// caught before the wifi whitelist is ever touched.
+
+		svc := newTestService(mockRepo, nil)
+
+		ips := []string{"138.101.10.1"}
+		if _, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now(), IPAddresses: ips}); !errors.Is(err, ErrStoreConflict) {
+			t.Errorf("UpdateStore() error = %v, want ErrStoreConflict", err)
+		}
+	})
 }
 
 func mustParseMAC(t *testing.T, s string) net.HardwareAddr {

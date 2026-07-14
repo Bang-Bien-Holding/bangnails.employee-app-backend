@@ -228,6 +228,78 @@ func TestStoreHandler_PatchStore(t *testing.T) {
 			},
 			expectedCode: http.StatusInternalServerError,
 		},
+		{
+			name:    "a malformed ip_addresses entry returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":["not-an-ip"]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "a malformed mac_addresses entry returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","mac_addresses":["not-a-mac"]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "a duplicate value within ip_addresses returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":["138.101.10.1","138.101.10.1"]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "a duplicate value within mac_addresses returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","mac_addresses":["aa:bb:cc:dd:ee:ff","aa:bb:cc:dd:ee:ff"]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "an empty ip_addresses array is valid and returns 200",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":[]}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{
+					Store:        repo.Store{ID: 12, IsActive: true},
+					IPAddresses:  []string{},
+					MACAddresses: []string{},
+				}, nil)
+			},
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:    "submitting both ip_addresses and mac_addresses together returns 200 with both lists",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":["138.101.10.1","138.101.10.2"],"mac_addresses":["aa:bb:cc:dd:ee:ff"]}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{
+					Store:        repo.Store{ID: 12, StoreName: "Montpellier 1", IsActive: true},
+					IPAddresses:  []string{"138.101.10.1", "138.101.10.2"},
+					MACAddresses: []string{"aa:bb:cc:dd:ee:ff"},
+				}, nil)
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var got storeResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal response body: %v", err)
+				}
+				wantIPs := []string{"138.101.10.1", "138.101.10.2"}
+				if !equalStrings(got.IPAddresses, wantIPs) {
+					t.Errorf("ip_addresses = %v, want %v", got.IPAddresses, wantIPs)
+				}
+				wantMACs := []string{"aa:bb:cc:dd:ee:ff"}
+				if !equalStrings(got.MACAddresses, wantMACs) {
+					t.Errorf("mac_addresses = %v, want %v", got.MACAddresses, wantMACs)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

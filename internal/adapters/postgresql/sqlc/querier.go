@@ -14,6 +14,14 @@ type Querier interface {
 	CreateEmployee(ctx context.Context, arg CreateEmployeeParams) (Employee, error)
 	CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) (PasswordResetToken, error)
 	DeleteEmployee(ctx context.Context, id int64) (int64, error)
+	// Half of the "replace this store's IP whitelist to match ip_addresses
+	// exactly" diff (paired with InsertStoreWifiIPs) — deletes whatever's
+	// currently there but no longer submitted. "!= ALL(...)" over an empty
+	// ip_addresses array is vacuously true for every row, so submitting []
+	// correctly clears the whole whitelist rather than being a no-op.
+	DeleteStoreWifiIPsNotIn(ctx context.Context, arg DeleteStoreWifiIPsNotInParams) error
+	// MAC-address counterpart of DeleteStoreWifiIPsNotIn.
+	DeleteStoreWifiMacsNotIn(ctx context.Context, arg DeleteStoreWifiMacsNotInParams) error
 	// Locally-created stores that have never been linked to Odoo
 	// (odoo_store_id IS NULL) are deliberately excluded — only stores Odoo
 	// once reported and has since stopped reporting count as deleted.
@@ -24,6 +32,12 @@ type Querier interface {
 	// is_active = true reuses the store-sync feature's soft-delete flag as the
 	// not-found condition, rather than introducing a second deletion concept.
 	GetStoreByID(ctx context.Context, id int64) (Store, error)
+	// Other half of the replace diff: inserts whatever's newly submitted.
+	// ON CONFLICT DO NOTHING is what makes values already present in both the
+	// old and new set stay untouched rather than being deleted and reinserted.
+	InsertStoreWifiIPs(ctx context.Context, arg InsertStoreWifiIPsParams) error
+	// MAC-address counterpart of InsertStoreWifiIPs.
+	InsertStoreWifiMacs(ctx context.Context, arg InsertStoreWifiMacsParams) error
 	// Translates the internal ids a SyncEmployees caller supplies into the
 	// Odoo-facing employee_id values runSync actually sends to Odoo. An id with
 	// no matching row is silently omitted from the result.

@@ -91,6 +91,44 @@ func (q *Queries) DeleteEmployee(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const deleteStoreWifiIPsNotIn = `-- name: DeleteStoreWifiIPsNotIn :exec
+DELETE FROM store_wifi_ip
+WHERE store_id = $1
+  AND ip_address != ALL($2::inet[])
+`
+
+type DeleteStoreWifiIPsNotInParams struct {
+	StoreID     int64        `json:"store_id"`
+	IpAddresses []netip.Addr `json:"ip_addresses"`
+}
+
+// Half of the "replace this store's IP whitelist to match ip_addresses
+// exactly" diff (paired with InsertStoreWifiIPs) — deletes whatever's
+// currently there but no longer submitted. "!= ALL(...)" over an empty
+// ip_addresses array is vacuously true for every row, so submitting []
+// correctly clears the whole whitelist rather than being a no-op.
+func (q *Queries) DeleteStoreWifiIPsNotIn(ctx context.Context, arg DeleteStoreWifiIPsNotInParams) error {
+	_, err := q.db.Exec(ctx, deleteStoreWifiIPsNotIn, arg.StoreID, arg.IpAddresses)
+	return err
+}
+
+const deleteStoreWifiMacsNotIn = `-- name: DeleteStoreWifiMacsNotIn :exec
+DELETE FROM store_wifi_mac
+WHERE store_id = $1
+  AND mac_address != ALL($2::macaddr[])
+`
+
+type DeleteStoreWifiMacsNotInParams struct {
+	StoreID      int64              `json:"store_id"`
+	MacAddresses []net.HardwareAddr `json:"mac_addresses"`
+}
+
+// MAC-address counterpart of DeleteStoreWifiIPsNotIn.
+func (q *Queries) DeleteStoreWifiMacsNotIn(ctx context.Context, arg DeleteStoreWifiMacsNotInParams) error {
+	_, err := q.db.Exec(ctx, deleteStoreWifiMacsNotIn, arg.StoreID, arg.MacAddresses)
+	return err
+}
+
 const findStoresNotInOdoo = `-- name: FindStoresNotInOdoo :many
 SELECT id FROM store
 WHERE is_active = true
@@ -216,6 +254,42 @@ func (q *Queries) GetStoreByID(ctx context.Context, id int64) (Store, error) {
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const insertStoreWifiIPs = `-- name: InsertStoreWifiIPs :exec
+INSERT INTO store_wifi_ip (store_id, ip_address)
+SELECT $1, unnest($2::inet[])
+ON CONFLICT (store_id, ip_address) DO NOTHING
+`
+
+type InsertStoreWifiIPsParams struct {
+	StoreID     int64        `json:"store_id"`
+	IpAddresses []netip.Addr `json:"ip_addresses"`
+}
+
+// Other half of the replace diff: inserts whatever's newly submitted.
+// ON CONFLICT DO NOTHING is what makes values already present in both the
+// old and new set stay untouched rather than being deleted and reinserted.
+func (q *Queries) InsertStoreWifiIPs(ctx context.Context, arg InsertStoreWifiIPsParams) error {
+	_, err := q.db.Exec(ctx, insertStoreWifiIPs, arg.StoreID, arg.IpAddresses)
+	return err
+}
+
+const insertStoreWifiMacs = `-- name: InsertStoreWifiMacs :exec
+INSERT INTO store_wifi_mac (store_id, mac_address)
+SELECT $1, unnest($2::macaddr[])
+ON CONFLICT (store_id, mac_address) DO NOTHING
+`
+
+type InsertStoreWifiMacsParams struct {
+	StoreID      int64              `json:"store_id"`
+	MacAddresses []net.HardwareAddr `json:"mac_addresses"`
+}
+
+// MAC-address counterpart of InsertStoreWifiIPs.
+func (q *Queries) InsertStoreWifiMacs(ctx context.Context, arg InsertStoreWifiMacsParams) error {
+	_, err := q.db.Exec(ctx, insertStoreWifiMacs, arg.StoreID, arg.MacAddresses)
+	return err
 }
 
 const listEmployeeIDsByIDs = `-- name: ListEmployeeIDsByIDs :many

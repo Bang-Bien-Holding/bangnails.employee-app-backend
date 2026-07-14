@@ -88,6 +88,34 @@ func (mr *MockQuerierMockRecorder) DeleteEmployee(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteEmployee", reflect.TypeOf((*MockQuerier)(nil).DeleteEmployee), ctx, id)
 }
 
+// DeleteStoreWifiIPsNotIn mocks base method.
+func (m *MockQuerier) DeleteStoreWifiIPsNotIn(ctx context.Context, arg repo.DeleteStoreWifiIPsNotInParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteStoreWifiIPsNotIn", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteStoreWifiIPsNotIn indicates an expected call of DeleteStoreWifiIPsNotIn.
+func (mr *MockQuerierMockRecorder) DeleteStoreWifiIPsNotIn(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteStoreWifiIPsNotIn", reflect.TypeOf((*MockQuerier)(nil).DeleteStoreWifiIPsNotIn), ctx, arg)
+}
+
+// DeleteStoreWifiMacsNotIn mocks base method.
+func (m *MockQuerier) DeleteStoreWifiMacsNotIn(ctx context.Context, arg repo.DeleteStoreWifiMacsNotInParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteStoreWifiMacsNotIn", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// DeleteStoreWifiMacsNotIn indicates an expected call of DeleteStoreWifiMacsNotIn.
+func (mr *MockQuerierMockRecorder) DeleteStoreWifiMacsNotIn(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteStoreWifiMacsNotIn", reflect.TypeOf((*MockQuerier)(nil).DeleteStoreWifiMacsNotIn), ctx, arg)
+}
+
 // FindStoresNotInOdoo mocks base method.
 func (m *MockQuerier) FindStoresNotInOdoo(ctx context.Context, activeOdooStoreIds []string) ([]int64, error) {
 	m.ctrl.T.Helper()
@@ -161,6 +189,34 @@ func (m *MockQuerier) GetStoreByID(ctx context.Context, id int64) (repo.Store, e
 func (mr *MockQuerierMockRecorder) GetStoreByID(ctx, id any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStoreByID", reflect.TypeOf((*MockQuerier)(nil).GetStoreByID), ctx, id)
+}
+
+// InsertStoreWifiIPs mocks base method.
+func (m *MockQuerier) InsertStoreWifiIPs(ctx context.Context, arg repo.InsertStoreWifiIPsParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InsertStoreWifiIPs", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InsertStoreWifiIPs indicates an expected call of InsertStoreWifiIPs.
+func (mr *MockQuerierMockRecorder) InsertStoreWifiIPs(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertStoreWifiIPs", reflect.TypeOf((*MockQuerier)(nil).InsertStoreWifiIPs), ctx, arg)
+}
+
+// InsertStoreWifiMacs mocks base method.
+func (m *MockQuerier) InsertStoreWifiMacs(ctx context.Context, arg repo.InsertStoreWifiMacsParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InsertStoreWifiMacs", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InsertStoreWifiMacs indicates an expected call of InsertStoreWifiMacs.
+func (mr *MockQuerierMockRecorder) InsertStoreWifiMacs(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertStoreWifiMacs", reflect.TypeOf((*MockQuerier)(nil).InsertStoreWifiMacs), ctx, arg)
 }
 
 // ListEmployeeIDsByIDs mocks base method.
