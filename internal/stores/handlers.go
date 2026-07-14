@@ -107,3 +107,41 @@ func (h *Handler) PatchStore(w http.ResponseWriter, r *http.Request) {
 
 	json.Write(w, http.StatusOK, newStoreResponse(detail))
 }
+
+func (h *Handler) DeleteWifiWhitelistEntries(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid store id", http.StatusBadRequest)
+		return
+	}
+
+	var params deleteWifiWhitelistParams
+	if err := json.Read(w, r, &params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := validate.Struct(params); err != nil {
+		http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if params.isEmpty() {
+		http.Error(w, "at least one of ip_addresses or mac_addresses is required", http.StatusBadRequest)
+		return
+	}
+
+	results, err := h.service.DeleteWifiWhitelistEntries(r.Context(), id, params)
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, ErrStoreNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, ErrStoreConflict):
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+
+	json.Write(w, http.StatusOK, results)
+}

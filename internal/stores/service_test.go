@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"reflect"
 	"testing"
 	"time"
 
@@ -488,6 +489,114 @@ func TestStoreService_UpdateStore(t *testing.T) {
 
 		if _, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now()}); err != nil {
 			t.Fatalf("UpdateStore() error = %v", err)
+		}
+	})
+}
+
+func TestStoreService_DeleteWifiWhitelistEntries(t *testing.T) {
+	t.Run("a mix of present and absent IP and MAC values is reported per entry and bumps updated_at", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		updatedAt := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+		storeUpdatedAt := pgtype.Timestamptz{Time: updatedAt, Valid: true}
+
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, UpdatedAt: storeUpdatedAt}, nil)
+		mockRepo.EXPECT().DeleteStoreWifiIPsByValue(gomock.Any(), repo.DeleteStoreWifiIPsByValueParams{
+			StoreID:     12,
+			IpAddresses: []netip.Addr{netip.MustParseAddr("138.101.10.1"), netip.MustParseAddr("138.101.10.2")},
+		}).Return([]netip.Addr{netip.MustParseAddr("138.101.10.1")}, nil)
+		mockRepo.EXPECT().DeleteStoreWifiMacsByValue(gomock.Any(), repo.DeleteStoreWifiMacsByValueParams{
+			StoreID:      12,
+			MacAddresses: []net.HardwareAddr{mustParseMAC(t, "aa:bb:cc:dd:ee:ff")},
+		}).Return([]net.HardwareAddr{}, nil)
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), repo.UpdateStoreGeofenceParams{
+			ID: 12, ExpectedUpdatedAt: storeUpdatedAt,
+		}).Return(repo.Store{ID: 12}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		results, err := svc.DeleteWifiWhitelistEntries(t.Context(), 12, deleteWifiWhitelistParams{
+			UpdatedAt:    updatedAt,
+			IPAddresses:  []string{"138.101.10.1", "138.101.10.2"},
+			MACAddresses: []string{"aa:bb:cc:dd:ee:ff"},
+		})
+		if err != nil {
+			t.Fatalf("DeleteWifiWhitelistEntries() error = %v", err)
+		}
+		want := []WifiWhitelistDeleteResult{
+			{Value: "138.101.10.1", Type: "ip", Success: true},
+			{Value: "138.101.10.2", Type: "ip", Success: false, Error: "not found in whitelist"},
+			{Value: "aa:bb:cc:dd:ee:ff", Type: "mac", Success: false, Error: "not found in whitelist"},
+		}
+		if !reflect.DeepEqual(results, want) {
+			t.Errorf("DeleteWifiWhitelistEntries() results = %+v, want %+v", results, want)
+		}
+	})
+
+	t.Run("a stale updated_at is rejected with ErrStoreConflict and nothing is deleted", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		storeUpdatedAt := pgtype.Timestamptz{Time: time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC), Valid: true}
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, UpdatedAt: storeUpdatedAt}, nil)
+		// No EXPECT for DeleteStoreWifiIPsByValue/DeleteStoreWifiMacsByValue —
+		// gomock fails the test if the mismatch doesn't stop the request
+		// before anything is deleted.
+
+		svc := newTestService(mockRepo, nil)
+
+		staleUpdatedAt := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+		_, err := svc.DeleteWifiWhitelistEntries(t.Context(), 12, deleteWifiWhitelistParams{
+			UpdatedAt:   staleUpdatedAt,
+			IPAddresses: []string{"138.101.10.1"},
+		})
+		if !errors.Is(err, ErrStoreConflict) {
+			t.Errorf("DeleteWifiWhitelistEntries() error = %v, want ErrStoreConflict", err)
+		}
+	})
+
+	t.Run("updated_at is left untouched when every entry fails", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		storeUpdatedAt := pgtype.Timestamptz{Time: time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC), Valid: true}
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, UpdatedAt: storeUpdatedAt}, nil)
+		mockRepo.EXPECT().DeleteStoreWifiIPsByValue(gomock.Any(), gomock.Any()).Return([]netip.Addr{}, nil)
+		// No EXPECT for UpdateStoreGeofence — nothing was deleted, so
+		// updated_at must not be bumped.
+
+		svc := newTestService(mockRepo, nil)
+
+		results, err := svc.DeleteWifiWhitelistEntries(t.Context(), 12, deleteWifiWhitelistParams{
+			UpdatedAt:   storeUpdatedAt.Time,
+			IPAddresses: []string{"138.101.10.1"},
+		})
+		if err != nil {
+			t.Fatalf("DeleteWifiWhitelistEntries() error = %v", err)
+		}
+		want := []WifiWhitelistDeleteResult{
+			{Value: "138.101.10.1", Type: "ip", Success: false, Error: "not found in whitelist"},
+		}
+		if !reflect.DeepEqual(results, want) {
+			t.Errorf("DeleteWifiWhitelistEntries() results = %+v, want %+v", results, want)
+		}
+	})
+
+	t.Run("an unknown store id returns ErrStoreNotFound", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(999)).Return(repo.Store{}, pgx.ErrNoRows)
+
+		svc := newTestService(mockRepo, nil)
+
+		_, err := svc.DeleteWifiWhitelistEntries(t.Context(), 999, deleteWifiWhitelistParams{
+			UpdatedAt:   time.Now(),
+			IPAddresses: []string{"138.101.10.1"},
+		})
+		if !errors.Is(err, ErrStoreNotFound) {
+			t.Errorf("DeleteWifiWhitelistEntries() error = %v, want ErrStoreNotFound", err)
 		}
 	})
 }

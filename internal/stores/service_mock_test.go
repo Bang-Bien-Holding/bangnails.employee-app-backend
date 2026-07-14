@@ -40,6 +40,21 @@ func (m *MockService) EXPECT() *MockServiceMockRecorder {
 	return m.recorder
 }
 
+// DeleteWifiWhitelistEntries mocks base method.
+func (m *MockService) DeleteWifiWhitelistEntries(ctx context.Context, id int64, params deleteWifiWhitelistParams) ([]WifiWhitelistDeleteResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteWifiWhitelistEntries", ctx, id, params)
+	ret0, _ := ret[0].([]WifiWhitelistDeleteResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteWifiWhitelistEntries indicates an expected call of DeleteWifiWhitelistEntries.
+func (mr *MockServiceMockRecorder) DeleteWifiWhitelistEntries(ctx, id, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteWifiWhitelistEntries", reflect.TypeOf((*MockService)(nil).DeleteWifiWhitelistEntries), ctx, id, params)
+}
+
 // GetStoreByID mocks base method.
 func (m *MockService) GetStoreByID(ctx context.Context, id int64) (StoreDetail, error) {
 	m.ctrl.T.Helper()

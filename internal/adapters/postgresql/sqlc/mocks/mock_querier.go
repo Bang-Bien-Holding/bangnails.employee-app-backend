@@ -88,6 +88,21 @@ func (mr *MockQuerierMockRecorder) DeleteEmployee(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteEmployee", reflect.TypeOf((*MockQuerier)(nil).DeleteEmployee), ctx, id)
 }
 
+// DeleteStoreWifiIPsByValue mocks base method.
+func (m *MockQuerier) DeleteStoreWifiIPsByValue(ctx context.Context, arg repo.DeleteStoreWifiIPsByValueParams) ([]netip.Addr, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteStoreWifiIPsByValue", ctx, arg)
+	ret0, _ := ret[0].([]netip.Addr)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteStoreWifiIPsByValue indicates an expected call of DeleteStoreWifiIPsByValue.
+func (mr *MockQuerierMockRecorder) DeleteStoreWifiIPsByValue(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteStoreWifiIPsByValue", reflect.TypeOf((*MockQuerier)(nil).DeleteStoreWifiIPsByValue), ctx, arg)
+}
+
 // DeleteStoreWifiIPsNotIn mocks base method.
 func (m *MockQuerier) DeleteStoreWifiIPsNotIn(ctx context.Context, arg repo.DeleteStoreWifiIPsNotInParams) error {
 	m.ctrl.T.Helper()
@@ -100,6 +115,21 @@ func (m *MockQuerier) DeleteStoreWifiIPsNotIn(ctx context.Context, arg repo.Dele
 func (mr *MockQuerierMockRecorder) DeleteStoreWifiIPsNotIn(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteStoreWifiIPsNotIn", reflect.TypeOf((*MockQuerier)(nil).DeleteStoreWifiIPsNotIn), ctx, arg)
+}
+
+// DeleteStoreWifiMacsByValue mocks base method.
+func (m *MockQuerier) DeleteStoreWifiMacsByValue(ctx context.Context, arg repo.DeleteStoreWifiMacsByValueParams) ([]net.HardwareAddr, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteStoreWifiMacsByValue", ctx, arg)
+	ret0, _ := ret[0].([]net.HardwareAddr)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteStoreWifiMacsByValue indicates an expected call of DeleteStoreWifiMacsByValue.
+func (mr *MockQuerierMockRecorder) DeleteStoreWifiMacsByValue(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteStoreWifiMacsByValue", reflect.TypeOf((*MockQuerier)(nil).DeleteStoreWifiMacsByValue), ctx, arg)
 }
 
 // DeleteStoreWifiMacsNotIn mocks base method.

@@ -91,6 +91,47 @@ func (q *Queries) DeleteEmployee(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const deleteStoreWifiIPsByValue = `-- name: DeleteStoreWifiIPsByValue :many
+DELETE FROM store_wifi_ip
+WHERE store_id = $1
+  AND ip_address = ANY($2::inet[])
+RETURNING ip_address
+`
+
+type DeleteStoreWifiIPsByValueParams struct {
+	StoreID     int64        `json:"store_id"`
+	IpAddresses []netip.Addr `json:"ip_addresses"`
+}
+
+// Deletes specific store_wifi_ip rows by value, not the table's internal id
+// (see ADR-0003 — a value unambiguously identifies the row within a store
+// thanks to the UNIQUE (store_id, ip_address) constraint) — the surgical
+// per-entry removal path for DELETE /v1/stores/{id}/wifi-whitelist, as
+// opposed to DeleteStoreWifiIPsNotIn's whole-list replace. RETURNING the
+// deleted values (rather than a row count) lets the caller report each
+// submitted value's success/failure independently and best-effort: a
+// submitted value not present in the whitelist simply doesn't come back in
+// this set, without erroring or blocking the rest of the batch.
+func (q *Queries) DeleteStoreWifiIPsByValue(ctx context.Context, arg DeleteStoreWifiIPsByValueParams) ([]netip.Addr, error) {
+	rows, err := q.db.Query(ctx, deleteStoreWifiIPsByValue, arg.StoreID, arg.IpAddresses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []netip.Addr
+	for rows.Next() {
+		var ip_address netip.Addr
+		if err := rows.Scan(&ip_address); err != nil {
+			return nil, err
+		}
+		items = append(items, ip_address)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteStoreWifiIPsNotIn = `-- name: DeleteStoreWifiIPsNotIn :exec
 DELETE FROM store_wifi_ip
 WHERE store_id = $1
@@ -110,6 +151,39 @@ type DeleteStoreWifiIPsNotInParams struct {
 func (q *Queries) DeleteStoreWifiIPsNotIn(ctx context.Context, arg DeleteStoreWifiIPsNotInParams) error {
 	_, err := q.db.Exec(ctx, deleteStoreWifiIPsNotIn, arg.StoreID, arg.IpAddresses)
 	return err
+}
+
+const deleteStoreWifiMacsByValue = `-- name: DeleteStoreWifiMacsByValue :many
+DELETE FROM store_wifi_mac
+WHERE store_id = $1
+  AND mac_address = ANY($2::macaddr[])
+RETURNING mac_address
+`
+
+type DeleteStoreWifiMacsByValueParams struct {
+	StoreID      int64              `json:"store_id"`
+	MacAddresses []net.HardwareAddr `json:"mac_addresses"`
+}
+
+// MAC-address counterpart of DeleteStoreWifiIPsByValue.
+func (q *Queries) DeleteStoreWifiMacsByValue(ctx context.Context, arg DeleteStoreWifiMacsByValueParams) ([]net.HardwareAddr, error) {
+	rows, err := q.db.Query(ctx, deleteStoreWifiMacsByValue, arg.StoreID, arg.MacAddresses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []net.HardwareAddr
+	for rows.Next() {
+		var mac_address net.HardwareAddr
+		if err := rows.Scan(&mac_address); err != nil {
+			return nil, err
+		}
+		items = append(items, mac_address)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const deleteStoreWifiMacsNotIn = `-- name: DeleteStoreWifiMacsNotIn :exec

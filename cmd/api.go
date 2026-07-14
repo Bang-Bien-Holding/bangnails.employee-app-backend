@@ -86,6 +86,7 @@ func (app *application) mount() http.Handler {
 		r.Get("/stores", storesHandler.ListStores)
 		r.Get("/stores/{id}", storesHandler.GetStoreByID)
 		r.Patch("/stores/{id}", storesHandler.PatchStore)
+		r.Delete("/stores/{id}/wifi-whitelist", storesHandler.DeleteWifiWhitelistEntries)
 	})
 
 	return r

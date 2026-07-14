@@ -86,11 +86,49 @@ type patchStoreParams struct {
 	IsActive     *bool     `json:"is_active"`
 }
 
+// deleteWifiWhitelistParams is the body for DELETE
+// /v1/stores/{id}/wifi-whitelist. UpdatedAt is required, same
+// optimistic-lock convention as patchStoreParams.UpdatedAt. Unlike PATCH,
+// where IPAddresses/MACAddresses may each be freely omitted, at least one of
+// the two must carry a value here — checked by hand in the handler
+// (isEmpty) rather than via a required_without_all tag, since that tag's
+// zero-value check treats an explicit "[]" as present, which would let
+// {"ip_addresses":[],"mac_addresses":[]} slip through as valid when it
+// should 400 the same as omitting both fields entirely.
+type deleteWifiWhitelistParams struct {
+	UpdatedAt    time.Time `json:"updated_at" validate:"required"`
+	IPAddresses  []string  `json:"ip_addresses" validate:"omitempty,unique,dive,ipv4"`
+	MACAddresses []string  `json:"mac_addresses" validate:"omitempty,unique,dive,mac"`
+}
+
+// isEmpty reports whether neither ip_addresses nor mac_addresses carries a
+// value — true whether each was omitted (nil) or submitted as an explicit
+// empty array, both of which mean "nothing to delete" (see
+// deleteWifiWhitelistParams).
+func (p deleteWifiWhitelistParams) isEmpty() bool {
+	return len(p.IPAddresses) == 0 && len(p.MACAddresses) == 0
+}
+
+// WifiWhitelistDeleteResult is one element of the response array for DELETE
+// /v1/stores/{id}/wifi-whitelist — Value/Type together identify the entry
+// (no internal id is ever exposed, see ADR-0003), mirroring employees'
+// BulkActionResult but keyed by value+type instead of an integer id, since
+// no single id names "an IP or a MAC". A value not currently in the store's
+// whitelist is Success: false rather than blocking or rolling back the rest
+// of the batch.
+type WifiWhitelistDeleteResult struct {
+	Value   string `json:"value"`
+	Type    string `json:"type"`
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
 type Service interface {
 	SyncStores(ctx context.Context) (SyncSummary, error)
 	GetStoreByID(ctx context.Context, id int64) (StoreDetail, error)
 	UpdateStore(ctx context.Context, id int64, params patchStoreParams) (StoreDetail, error)
 	ListStores(ctx context.Context) ([]StoreDetail, error)
+	DeleteWifiWhitelistEntries(ctx context.Context, id int64, params deleteWifiWhitelistParams) ([]WifiWhitelistDeleteResult, error)
 }
 
 // storeResponse is the JSON shape returned by GetStoreByID (and, later,

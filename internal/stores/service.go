@@ -194,6 +194,111 @@ func (s *service) ListStores(ctx context.Context) ([]StoreDetail, error) {
 	return details, nil
 }
 
+// DeleteWifiWhitelistEntries removes specific IP and/or MAC values from one
+// store's whitelist, by value rather than internal id (see ADR-0003),
+// best-effort per entry: a submitted value not currently in the whitelist is
+// reported as a failed result rather than blocking or rolling back the rest
+// of the batch. store.updated_at only bumps when at least one entry was
+// actually deleted, so — unlike UpdateStore's single CAS UPDATE — the
+// updated_at match can't be checked and applied in the same statement: it's
+// verified up front against the already-fetched store row, then, only if a
+// delete actually happened, re-applied atomically via UpdateStoreGeofence
+// (its geofence/is_active args left invalid so only updated_at changes) to
+// close the race window between the initial check and here.
+func (s *service) DeleteWifiWhitelistEntries(ctx context.Context, id int64, params deleteWifiWhitelistParams) ([]WifiWhitelistDeleteResult, error) {
+	var results []WifiWhitelistDeleteResult
+	err := s.withTx(ctx, func(q repo.Querier) error {
+		store, err := q.GetStoreByID(ctx, id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrStoreNotFound
+			}
+			return err
+		}
+		if !store.UpdatedAt.Time.Equal(params.UpdatedAt) {
+			return ErrStoreConflict
+		}
+
+		results = make([]WifiWhitelistDeleteResult, 0, len(params.IPAddresses)+len(params.MACAddresses))
+		deletedAny := false
+
+		if len(params.IPAddresses) > 0 {
+			ips, err := parseAddresses(params.IPAddresses, netip.ParseAddr)
+			if err != nil {
+				return err
+			}
+			deleted, err := q.DeleteStoreWifiIPsByValue(ctx, repo.DeleteStoreWifiIPsByValueParams{
+				StoreID: id, IpAddresses: ips,
+			})
+			if err != nil {
+				return err
+			}
+			found := make(map[netip.Addr]bool, len(deleted))
+			for _, d := range deleted {
+				found[d] = true
+			}
+			for i, raw := range params.IPAddresses {
+				ok := found[ips[i]]
+				deletedAny = deletedAny || ok
+				results = append(results, newWifiWhitelistDeleteResult(raw, "ip", ok))
+			}
+		}
+
+		if len(params.MACAddresses) > 0 {
+			macs, err := parseAddresses(params.MACAddresses, net.ParseMAC)
+			if err != nil {
+				return err
+			}
+			deleted, err := q.DeleteStoreWifiMacsByValue(ctx, repo.DeleteStoreWifiMacsByValueParams{
+				StoreID: id, MacAddresses: macs,
+			})
+			if err != nil {
+				return err
+			}
+			found := make(map[string]bool, len(deleted))
+			for _, d := range deleted {
+				found[d.String()] = true
+			}
+			for i, raw := range params.MACAddresses {
+				ok := found[macs[i].String()]
+				deletedAny = deletedAny || ok
+				results = append(results, newWifiWhitelistDeleteResult(raw, "mac", ok))
+			}
+		}
+
+		if !deletedAny {
+			return nil
+		}
+
+		if _, err := q.UpdateStoreGeofence(ctx, repo.UpdateStoreGeofenceParams{
+			ID:                id,
+			ExpectedUpdatedAt: store.UpdatedAt,
+		}); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrStoreConflict
+			}
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// newWifiWhitelistDeleteResult builds one DeleteWifiWhitelistEntries result
+// entry, echoing back the value exactly as submitted (not re-formatted)
+// alongside the fixed "not found in whitelist" error a best-effort miss
+// reports.
+func newWifiWhitelistDeleteResult(value, addrType string, success bool) WifiWhitelistDeleteResult {
+	result := WifiWhitelistDeleteResult{Value: value, Type: addrType, Success: success}
+	if !success {
+		result.Error = "not found in whitelist"
+	}
+	return result
+}
+
 // stringifyAddresses formats a list of typed addresses (netip.Addr or
 // net.HardwareAddr) as strings, always returning a non-nil slice — a store
 // with no entries gets [], not nil, so StoreDetail's caller (and the

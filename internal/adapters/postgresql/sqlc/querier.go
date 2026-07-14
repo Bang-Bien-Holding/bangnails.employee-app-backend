@@ -14,12 +14,24 @@ type Querier interface {
 	CreateEmployee(ctx context.Context, arg CreateEmployeeParams) (Employee, error)
 	CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) (PasswordResetToken, error)
 	DeleteEmployee(ctx context.Context, id int64) (int64, error)
+	// Deletes specific store_wifi_ip rows by value, not the table's internal id
+	// (see ADR-0003 — a value unambiguously identifies the row within a store
+	// thanks to the UNIQUE (store_id, ip_address) constraint) — the surgical
+	// per-entry removal path for DELETE /v1/stores/{id}/wifi-whitelist, as
+	// opposed to DeleteStoreWifiIPsNotIn's whole-list replace. RETURNING the
+	// deleted values (rather than a row count) lets the caller report each
+	// submitted value's success/failure independently and best-effort: a
+	// submitted value not present in the whitelist simply doesn't come back in
+	// this set, without erroring or blocking the rest of the batch.
+	DeleteStoreWifiIPsByValue(ctx context.Context, arg DeleteStoreWifiIPsByValueParams) ([]netip.Addr, error)
 	// Half of the "replace this store's IP whitelist to match ip_addresses
 	// exactly" diff (paired with InsertStoreWifiIPs) — deletes whatever's
 	// currently there but no longer submitted. "!= ALL(...)" over an empty
 	// ip_addresses array is vacuously true for every row, so submitting []
 	// correctly clears the whole whitelist rather than being a no-op.
 	DeleteStoreWifiIPsNotIn(ctx context.Context, arg DeleteStoreWifiIPsNotInParams) error
+	// MAC-address counterpart of DeleteStoreWifiIPsByValue.
+	DeleteStoreWifiMacsByValue(ctx context.Context, arg DeleteStoreWifiMacsByValueParams) ([]net.HardwareAddr, error)
 	// MAC-address counterpart of DeleteStoreWifiIPsNotIn.
 	DeleteStoreWifiMacsNotIn(ctx context.Context, arg DeleteStoreWifiMacsNotInParams) error
 	// Locally-created stores that have never been linked to Odoo

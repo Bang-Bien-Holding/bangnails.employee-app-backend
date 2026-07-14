@@ -370,6 +370,157 @@ func TestStoreHandler_PatchStore(t *testing.T) {
 	}
 }
 
+func TestStoreHandler_DeleteWifiWhitelistEntries(t *testing.T) {
+	tests := []struct {
+		name          string
+		idParam       string
+		body          string
+		setupMock     func(mockSvc *MockService)
+		expectedCode  int
+		checkResponse func(t *testing.T, rec *httptest.ResponseRecorder)
+	}{
+		{
+			name:    "a mix of successes and failures returns 200 with the per-entry result array",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":["138.101.10.1"],"mac_addresses":["AA:BB:CC:DD:EE:FF"]}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().DeleteWifiWhitelistEntries(gomock.Any(), int64(12), gomock.Any()).Return([]WifiWhitelistDeleteResult{
+					{Value: "138.101.10.1", Type: "ip", Success: true},
+					{Value: "AA:BB:CC:DD:EE:FF", Type: "mac", Success: false, Error: "not found in whitelist"},
+				}, nil)
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var got []WifiWhitelistDeleteResult
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal response body: %v", err)
+				}
+				want := []WifiWhitelistDeleteResult{
+					{Value: "138.101.10.1", Type: "ip", Success: true},
+					{Value: "AA:BB:CC:DD:EE:FF", Type: "mac", Success: false, Error: "not found in whitelist"},
+				}
+				if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+					t.Errorf("response = %+v, want %+v", got, want)
+				}
+			},
+		},
+		{
+			name:    "an empty request (no ip_addresses or mac_addresses) returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z"}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "empty arrays for both ip_addresses and mac_addresses return 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":[],"mac_addresses":[]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "missing updated_at returns 400, service not called",
+			idParam: "12",
+			body:    `{"ip_addresses":["138.101.10.1"]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "a malformed ip_addresses entry returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":["not-an-ip"]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "a malformed mac_addresses entry returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","mac_addresses":["not-a-mac"]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "a duplicate value within ip_addresses returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":["138.101.10.1","138.101.10.1"]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "a duplicate value within mac_addresses returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","mac_addresses":["aa:bb:cc:dd:ee:ff","aa:bb:cc:dd:ee:ff"]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "non-numeric id path param returns 400, service not called",
+			idParam: "not-a-number",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":["138.101.10.1"]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "unknown store id maps ErrStoreNotFound to 404",
+			idParam: "999",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":["138.101.10.1"]}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().DeleteWifiWhitelistEntries(gomock.Any(), int64(999), gomock.Any()).Return(nil, ErrStoreNotFound)
+			},
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name:    "a stale updated_at maps ErrStoreConflict to 409",
+			idParam: "12",
+			body:    `{"updated_at":"2020-01-01T00:00:00Z","ip_addresses":["138.101.10.1"]}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().DeleteWifiWhitelistEntries(gomock.Any(), int64(12), gomock.Any()).Return(nil, ErrStoreConflict)
+			},
+			expectedCode: http.StatusConflict,
+		},
+		{
+			name:    "an unexpected service error maps to 500",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":["138.101.10.1"]}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().DeleteWifiWhitelistEntries(gomock.Any(), int64(12), gomock.Any()).Return(nil, errors.New("db exploded"))
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockService(ctrl)
+			tt.setupMock(mockSvc)
+
+			h := NewHandler(mockSvc)
+
+			req := httptest.NewRequest(http.MethodDelete, "/v1/stores/"+tt.idParam+"/wifi-whitelist", strings.NewReader(tt.body))
+			req = withURLParam(req, "id", tt.idParam)
+			rec := httptest.NewRecorder()
+
+			h.DeleteWifiWhitelistEntries(rec, req)
+
+			if rec.Code != tt.expectedCode {
+				t.Errorf("status code = %d, want %d, body = %s", rec.Code, tt.expectedCode, rec.Body.String())
+			}
+			if tt.checkResponse != nil {
+				tt.checkResponse(t, rec)
+			}
+		})
+	}
+}
+
 func TestStoreHandler_ListStores(t *testing.T) {
 	tests := []struct {
 		name          string

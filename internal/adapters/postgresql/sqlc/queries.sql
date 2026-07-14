@@ -210,3 +210,25 @@ WHERE store_id = sqlc.arg(store_id)
 INSERT INTO store_wifi_mac (store_id, mac_address)
 SELECT sqlc.arg(store_id), unnest(sqlc.arg(mac_addresses)::macaddr[])
 ON CONFLICT (store_id, mac_address) DO NOTHING;
+
+-- name: DeleteStoreWifiIPsByValue :many
+-- Deletes specific store_wifi_ip rows by value, not the table's internal id
+-- (see ADR-0003 — a value unambiguously identifies the row within a store
+-- thanks to the UNIQUE (store_id, ip_address) constraint) — the surgical
+-- per-entry removal path for DELETE /v1/stores/{id}/wifi-whitelist, as
+-- opposed to DeleteStoreWifiIPsNotIn's whole-list replace. RETURNING the
+-- deleted values (rather than a row count) lets the caller report each
+-- submitted value's success/failure independently and best-effort: a
+-- submitted value not present in the whitelist simply doesn't come back in
+-- this set, without erroring or blocking the rest of the batch.
+DELETE FROM store_wifi_ip
+WHERE store_id = sqlc.arg(store_id)
+  AND ip_address = ANY(sqlc.arg(ip_addresses)::inet[])
+RETURNING ip_address;
+
+-- name: DeleteStoreWifiMacsByValue :many
+-- MAC-address counterpart of DeleteStoreWifiIPsByValue.
+DELETE FROM store_wifi_mac
+WHERE store_id = sqlc.arg(store_id)
+  AND mac_address = ANY(sqlc.arg(mac_addresses)::macaddr[])
+RETURNING mac_address;
