@@ -3,6 +3,7 @@ package stores
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"strconv"
@@ -160,20 +161,46 @@ func buildStoreDetail(ctx context.Context, q repo.Querier, store repo.Store) (St
 		return StoreDetail{}, err
 	}
 
-	ipAddresses := make([]string, len(ips))
-	for i, ip := range ips {
-		ipAddresses[i] = ip.String()
-	}
-	macAddresses := make([]string, len(macs))
-	for i, mac := range macs {
-		macAddresses[i] = mac.String()
-	}
-
 	return StoreDetail{
 		Store:        store,
-		IPAddresses:  ipAddresses,
-		MACAddresses: macAddresses,
+		IPAddresses:  stringifyAddresses(ips),
+		MACAddresses: stringifyAddresses(macs),
 	}, nil
+}
+
+// ListStores returns every store — active and inactive, since the list
+// screen's Activate toggle needs to see and re-enable a deactivated one —
+// together with its current wifi whitelist. See the ListStores query in
+// queries.sql for how ordering and whitelist aggregation are done in one
+// round trip, unlike GetStoreByID/buildStoreDetail's per-store follow-up
+// queries.
+func (s *service) ListStores(ctx context.Context) ([]StoreDetail, error) {
+	rows, err := s.repo.ListStores(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	details := make([]StoreDetail, len(rows))
+	for i, row := range rows {
+		details[i] = StoreDetail{
+			Store:        row.Store,
+			IPAddresses:  stringifyAddresses(row.IpAddresses),
+			MACAddresses: stringifyAddresses(row.MacAddresses),
+		}
+	}
+	return details, nil
+}
+
+// stringifyAddresses formats a list of typed addresses (netip.Addr or
+// net.HardwareAddr) as strings, always returning a non-nil slice — a store
+// with no entries gets [], not nil, so StoreDetail's caller (and the
+// eventual JSON response) never has to distinguish "no data" from "null".
+func stringifyAddresses[T fmt.Stringer](addrs []T) []string {
+	out := make([]string, len(addrs))
+	for i, a := range addrs {
+		out[i] = a.String()
+	}
+	return out
 }
 
 // float64PtrToNumeric converts an optional request field to the nullable

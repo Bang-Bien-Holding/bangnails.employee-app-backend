@@ -45,6 +45,12 @@ type Querier interface {
 	ListEmployees(ctx context.Context) ([]Employee, error)
 	ListStoreWifiIPsByStoreID(ctx context.Context, storeID int64) ([]netip.Addr, error)
 	ListStoreWifiMacsByStoreID(ctx context.Context, storeID int64) ([]net.HardwareAddr, error)
+	// Every store (active and inactive — the list screen's Activate toggle
+	// needs to see and re-enable inactive stores), each with its current IP/MAC
+	// whitelist aggregated in the same round trip rather than one query per
+	// store. LATERAL subqueries (rather than a single LEFT JOIN + array_agg)
+	// keep the two independent whitelists from cross-joining each other.
+	ListStores(ctx context.Context) ([]ListStoresRow, error)
 	// Atomically claims a valid, unused token: the UPDATE's row lock ensures
 	// only one concurrent caller can match the WHERE clause and get a row back,
 	// so CompleteActivation can't be raced into redeeming the same token twice.

@@ -279,6 +279,21 @@ func (mr *MockQuerierMockRecorder) ListStoreWifiMacsByStoreID(ctx, storeID any) 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStoreWifiMacsByStoreID", reflect.TypeOf((*MockQuerier)(nil).ListStoreWifiMacsByStoreID), ctx, storeID)
 }
 
+// ListStores mocks base method.
+func (m *MockQuerier) ListStores(ctx context.Context) ([]repo.ListStoresRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListStores", ctx)
+	ret0, _ := ret[0].([]repo.ListStoresRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListStores indicates an expected call of ListStores.
+func (mr *MockQuerierMockRecorder) ListStores(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStores", reflect.TypeOf((*MockQuerier)(nil).ListStores), ctx)
+}
+
 // RedeemPasswordResetToken mocks base method.
 func (m *MockQuerier) RedeemPasswordResetToken(ctx context.Context, tokenHash string) (repo.PasswordResetToken, error) {
 	m.ctrl.T.Helper()

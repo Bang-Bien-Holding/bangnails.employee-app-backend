@@ -64,6 +64,16 @@ func (h *Handler) GetStoreByID(w http.ResponseWriter, r *http.Request) {
 	json.Write(w, http.StatusOK, newStoreResponse(detail))
 }
 
+func (h *Handler) ListStores(w http.ResponseWriter, r *http.Request) {
+	details, err := h.service.ListStores(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	json.Write(w, http.StatusOK, newStoreResponses(details))
+}
+
 func (h *Handler) PatchStore(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {

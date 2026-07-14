@@ -83,6 +83,7 @@ type Service interface {
 	SyncStores(ctx context.Context) (SyncSummary, error)
 	GetStoreByID(ctx context.Context, id int64) (StoreDetail, error)
 	UpdateStore(ctx context.Context, id int64, params patchStoreParams) (StoreDetail, error)
+	ListStores(ctx context.Context) ([]StoreDetail, error)
 }
 
 // storeResponse is the JSON shape returned by GetStoreByID (and, later,
@@ -119,6 +120,17 @@ func newStoreResponse(detail StoreDetail) storeResponse {
 		CreatedAt:    detail.Store.CreatedAt,
 		UpdatedAt:    detail.Store.UpdatedAt,
 	}
+}
+
+// newStoreResponses maps ListStores' result to the JSON array GET /v1/stores
+// returns, one element per store in the same shape newStoreResponse builds
+// for a single store.
+func newStoreResponses(details []StoreDetail) []storeResponse {
+	responses := make([]storeResponse, len(details))
+	for i, detail := range details {
+		responses[i] = newStoreResponse(detail)
+	}
+	return responses
 }
 
 func pgTextPtr(t pgtype.Text) *string {

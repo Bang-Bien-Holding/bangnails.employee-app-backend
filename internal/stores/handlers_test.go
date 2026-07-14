@@ -326,6 +326,93 @@ func TestStoreHandler_PatchStore(t *testing.T) {
 	}
 }
 
+func TestStoreHandler_ListStores(t *testing.T) {
+	tests := []struct {
+		name          string
+		setupMock     func(mockSvc *MockService)
+		expectedCode  int
+		checkResponse func(t *testing.T, rec *httptest.ResponseRecorder)
+	}{
+		{
+			name: "returns 200 with an array covering active and inactive stores, and stores with empty wifi lists",
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().ListStores(gomock.Any()).Return([]StoreDetail{
+					{
+						Store:        repo.Store{ID: 10, StoreName: "Hanoi 1", City: pgtype.Text{String: "Hanoi", Valid: true}, IsActive: true},
+						IPAddresses:  []string{"138.101.10.1"},
+						MACAddresses: []string{},
+					},
+					{
+						Store:        repo.Store{ID: 20, StoreName: "Montpellier 1", City: pgtype.Text{String: "Montpellier", Valid: true}, IsActive: false},
+						IPAddresses:  []string{},
+						MACAddresses: []string{"aa:bb:cc:dd:ee:ff"},
+					},
+				}, nil)
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var got []storeResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal response body: %v", err)
+				}
+				if len(got) != 2 {
+					t.Fatalf("len(response) = %d, want 2", len(got))
+				}
+				if got[0].ID != 10 || got[0].IsActive != true {
+					t.Errorf("got[0] = %+v, want active store id 10", got[0])
+				}
+				if got[1].ID != 20 || got[1].IsActive != false {
+					t.Errorf("got[1] = %+v, want inactive store id 20", got[1])
+				}
+				if got[1].IPAddresses == nil || len(got[1].IPAddresses) != 0 {
+					t.Errorf("got[1].IPAddresses = %#v, want non-nil empty slice", got[1].IPAddresses)
+				}
+			},
+		},
+		{
+			name: "an empty store list returns 200 with an empty array, not null",
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().ListStores(gomock.Any()).Return([]StoreDetail{}, nil)
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				if strings.TrimSpace(rec.Body.String()) != "[]" {
+					t.Errorf("body = %q, want %q", rec.Body.String(), "[]")
+				}
+			},
+		},
+		{
+			name: "an unexpected service error maps to 500",
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().ListStores(gomock.Any()).Return(nil, errors.New("db exploded"))
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockService(ctrl)
+			tt.setupMock(mockSvc)
+
+			h := NewHandler(mockSvc)
+
+			req := httptest.NewRequest(http.MethodGet, "/v1/stores", nil)
+			rec := httptest.NewRecorder()
+
+			h.ListStores(rec, req)
+
+			if rec.Code != tt.expectedCode {
+				t.Errorf("status code = %d, want %d, body = %s", rec.Code, tt.expectedCode, rec.Body.String())
+			}
+			if tt.checkResponse != nil {
+				tt.checkResponse(t, rec)
+			}
+		})
+	}
+}
+
 func TestStoreHandler_GetStoreByID(t *testing.T) {
 	tests := []struct {
 		name          string

@@ -83,6 +83,7 @@ func (app *application) mount() http.Handler {
 		storesService := stores.NewService(app.db, odooClient)
 		storesHandler := stores.NewHandler(storesService)
 		r.Post("/stores/syncs", storesHandler.SyncStores)
+		r.Get("/stores", storesHandler.ListStores)
 		r.Get("/stores/{id}", storesHandler.GetStoreByID)
 		r.Patch("/stores/{id}", storesHandler.PatchStore)
 	})

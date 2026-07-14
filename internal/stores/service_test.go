@@ -105,6 +105,81 @@ func TestStoreService_GetStoreByID(t *testing.T) {
 	})
 }
 
+func TestStoreService_ListStores(t *testing.T) {
+	t.Run("returns every store, including inactive ones, in the query's order", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().ListStores(gomock.Any()).Return([]repo.ListStoresRow{
+			{
+				Store:        repo.Store{ID: 10, StoreName: "Hanoi 1", City: pgtype.Text{String: "Hanoi", Valid: true}, IsActive: true},
+				IpAddresses:  []netip.Addr{netip.MustParseAddr("138.101.10.1")},
+				MacAddresses: []net.HardwareAddr{},
+			},
+			{
+				Store:        repo.Store{ID: 20, StoreName: "Montpellier 1", City: pgtype.Text{String: "Montpellier", Valid: true}, IsActive: false},
+				IpAddresses:  []netip.Addr{},
+				MacAddresses: []net.HardwareAddr{mustParseMAC(t, "aa:bb:cc:dd:ee:ff")},
+			},
+		}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		details, err := svc.ListStores(t.Context())
+		if err != nil {
+			t.Fatalf("ListStores() error = %v", err)
+		}
+		if len(details) != 2 {
+			t.Fatalf("ListStores() returned %d stores, want 2", len(details))
+		}
+		if details[0].Store.ID != 10 || details[0].Store.IsActive != true {
+			t.Errorf("details[0] = %+v, want active store id 10", details[0].Store)
+		}
+		wantIPs := []string{"138.101.10.1"}
+		if !equalStrings(details[0].IPAddresses, wantIPs) {
+			t.Errorf("details[0].IPAddresses = %v, want %v", details[0].IPAddresses, wantIPs)
+		}
+		if details[1].Store.ID != 20 || details[1].Store.IsActive != false {
+			t.Errorf("details[1] = %+v, want inactive store id 20", details[1].Store)
+		}
+		wantMACs := []string{"aa:bb:cc:dd:ee:ff"}
+		if !equalStrings(details[1].MACAddresses, wantMACs) {
+			t.Errorf("details[1].MACAddresses = %v, want %v", details[1].MACAddresses, wantMACs)
+		}
+	})
+
+	t.Run("an empty store table returns a non-nil empty slice", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().ListStores(gomock.Any()).Return([]repo.ListStoresRow{}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		details, err := svc.ListStores(t.Context())
+		if err != nil {
+			t.Fatalf("ListStores() error = %v", err)
+		}
+		if details == nil || len(details) != 0 {
+			t.Errorf("ListStores() = %#v, want non-nil empty slice", details)
+		}
+	})
+
+	t.Run("a repo error is propagated", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		boom := errors.New("boom")
+		mockRepo.EXPECT().ListStores(gomock.Any()).Return(nil, boom)
+
+		svc := newTestService(mockRepo, nil)
+
+		if _, err := svc.ListStores(t.Context()); !errors.Is(err, boom) {
+			t.Errorf("ListStores() error = %v, want %v", err, boom)
+		}
+	})
+}
+
 func TestStoreService_UpdateStore(t *testing.T) {
 	t.Run("successfully updates the geofence and returns the updated detail", func(t *testing.T) {
 		ctrl := gomock.NewController(t)

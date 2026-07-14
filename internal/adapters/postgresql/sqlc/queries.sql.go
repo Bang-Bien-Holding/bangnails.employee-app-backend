@@ -409,6 +409,69 @@ func (q *Queries) ListStoreWifiMacsByStoreID(ctx context.Context, storeID int64)
 	return items, nil
 }
 
+const listStores = `-- name: ListStores :many
+SELECT
+    s.id, s.odoo_store_id, s.store_name, s.city, s.latitude, s.longitude, s.radius_meters, s.is_active, s.created_at, s.updated_at,
+    COALESCE(ip.ip_addresses, '{}')::inet[] AS ip_addresses,
+    COALESCE(mac.mac_addresses, '{}')::macaddr[] AS mac_addresses
+FROM store s
+LEFT JOIN LATERAL (
+    SELECT array_agg(ip_address ORDER BY id) AS ip_addresses
+    FROM store_wifi_ip
+    WHERE store_id = s.id
+) ip ON true
+LEFT JOIN LATERAL (
+    SELECT array_agg(mac_address ORDER BY id) AS mac_addresses
+    FROM store_wifi_mac
+    WHERE store_id = s.id
+) mac ON true
+ORDER BY s.city, s.store_name
+`
+
+type ListStoresRow struct {
+	Store        Store              `json:"store"`
+	IpAddresses  []netip.Addr       `json:"ip_addresses"`
+	MacAddresses []net.HardwareAddr `json:"mac_addresses"`
+}
+
+// Every store (active and inactive — the list screen's Activate toggle
+// needs to see and re-enable inactive stores), each with its current IP/MAC
+// whitelist aggregated in the same round trip rather than one query per
+// store. LATERAL subqueries (rather than a single LEFT JOIN + array_agg)
+// keep the two independent whitelists from cross-joining each other.
+func (q *Queries) ListStores(ctx context.Context) ([]ListStoresRow, error) {
+	rows, err := q.db.Query(ctx, listStores)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStoresRow
+	for rows.Next() {
+		var i ListStoresRow
+		if err := rows.Scan(
+			&i.Store.ID,
+			&i.Store.OdooStoreID,
+			&i.Store.StoreName,
+			&i.Store.City,
+			&i.Store.Latitude,
+			&i.Store.Longitude,
+			&i.Store.RadiusMeters,
+			&i.Store.IsActive,
+			&i.Store.CreatedAt,
+			&i.Store.UpdatedAt,
+			&i.IpAddresses,
+			&i.MacAddresses,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const redeemPasswordResetToken = `-- name: RedeemPasswordResetToken :one
 UPDATE password_reset_tokens
 SET used_at = now()

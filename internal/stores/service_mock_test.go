@@ -55,6 +55,21 @@ func (mr *MockServiceMockRecorder) GetStoreByID(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStoreByID", reflect.TypeOf((*MockService)(nil).GetStoreByID), ctx, id)
 }
 
+// ListStores mocks base method.
+func (m *MockService) ListStores(ctx context.Context) ([]StoreDetail, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListStores", ctx)
+	ret0, _ := ret[0].([]StoreDetail)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListStores indicates an expected call of ListStores.
+func (mr *MockServiceMockRecorder) ListStores(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStores", reflect.TypeOf((*MockService)(nil).ListStores), ctx)
+}
+
 // SyncStores mocks base method.
 func (m *MockService) SyncStores(ctx context.Context) (SyncSummary, error) {
 	m.ctrl.T.Helper()

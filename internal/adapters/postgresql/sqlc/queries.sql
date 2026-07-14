@@ -131,6 +131,29 @@ SELECT mac_address FROM store_wifi_mac
 WHERE store_id = $1
 ORDER BY id;
 
+-- name: ListStores :many
+-- Every store (active and inactive — the list screen's Activate toggle
+-- needs to see and re-enable inactive stores), each with its current IP/MAC
+-- whitelist aggregated in the same round trip rather than one query per
+-- store. LATERAL subqueries (rather than a single LEFT JOIN + array_agg)
+-- keep the two independent whitelists from cross-joining each other.
+SELECT
+    sqlc.embed(s),
+    COALESCE(ip.ip_addresses, '{}')::inet[] AS ip_addresses,
+    COALESCE(mac.mac_addresses, '{}')::macaddr[] AS mac_addresses
+FROM store s
+LEFT JOIN LATERAL (
+    SELECT array_agg(ip_address ORDER BY id) AS ip_addresses
+    FROM store_wifi_ip
+    WHERE store_id = s.id
+) ip ON true
+LEFT JOIN LATERAL (
+    SELECT array_agg(mac_address ORDER BY id) AS mac_addresses
+    FROM store_wifi_mac
+    WHERE store_id = s.id
+) mac ON true
+ORDER BY s.city, s.store_name;
+
 -- name: UpdateStoreGeofence :one
 -- Updates a store's geofence and unconditionally bumps updated_at whenever
 -- expected_updated_at still matches the current row — the optimistic-
