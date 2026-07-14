@@ -4,7 +4,7 @@
 
 **Blocked by:** None — can start immediately
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] `GET /v1/stores/{id}` is registered in the router alongside the existing `/stores/syncs` route.
 - [ ] A new sqlc query (or small set of queries) fetches one store row together with its current `store_wifi_ip` and `store_wifi_mac` entries, following the existing `unnest`-based bulk query style already used by `UpsertStores`.
