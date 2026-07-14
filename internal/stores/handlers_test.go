@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
@@ -92,6 +93,159 @@ func TestStoreHandler_SyncStores(t *testing.T) {
 
 			if rec.Code != tt.expectedCode {
 				t.Errorf("status code = %d, want %d", rec.Code, tt.expectedCode)
+			}
+			if tt.checkResponse != nil {
+				tt.checkResponse(t, rec)
+			}
+		})
+	}
+}
+
+func TestStoreHandler_PatchStore(t *testing.T) {
+	tests := []struct {
+		name          string
+		idParam       string
+		body          string
+		setupMock     func(mockSvc *MockService)
+		expectedCode  int
+		checkResponse func(t *testing.T, rec *httptest.ResponseRecorder)
+	}{
+		{
+			name:    "a full geofence update returns 200 with the updated detail",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","latitude":1.1,"longitude":100.2,"radius_meters":50}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{
+					Store:        repo.Store{ID: 12, StoreName: "Montpellier 1", IsActive: true},
+					IPAddresses:  []string{},
+					MACAddresses: []string{},
+				}, nil)
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var got storeResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal response body: %v", err)
+				}
+				if got.ID != 12 {
+					t.Errorf("id = %d, want 12", got.ID)
+				}
+			},
+		},
+		{
+			name:    "a body with no geofence fields is valid and returns 200",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z"}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{
+					Store:        repo.Store{ID: 12, IsActive: true},
+					IPAddresses:  []string{},
+					MACAddresses: []string{},
+				}, nil)
+			},
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:    "exactly one of three geofence fields returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","latitude":1.1}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "two of three geofence fields returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","latitude":1.1,"longitude":100.2}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "radius_meters out of range returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","latitude":1.1,"longitude":100.2,"radius_meters":5000}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "radius_meters of 0 returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","latitude":1.1,"longitude":100.2,"radius_meters":0}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "latitude out of range returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","latitude":91,"longitude":100.2,"radius_meters":50}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "missing updated_at returns 400, service not called",
+			idParam: "12",
+			body:    `{"latitude":1.1,"longitude":100.2,"radius_meters":50}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "non-numeric id path param returns 400, service not called",
+			idParam: "not-a-number",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z"}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "unknown store id maps ErrStoreNotFound to 404",
+			idParam: "999",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z"}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(999), gomock.Any()).Return(StoreDetail{}, ErrStoreNotFound)
+			},
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name:    "a stale updated_at maps ErrStoreConflict to 409",
+			idParam: "12",
+			body:    `{"updated_at":"2020-01-01T00:00:00Z"}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{}, ErrStoreConflict)
+			},
+			expectedCode: http.StatusConflict,
+		},
+		{
+			name:    "an unexpected service error maps to 500",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z"}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{}, errors.New("db exploded"))
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockService(ctrl)
+			tt.setupMock(mockSvc)
+
+			h := NewHandler(mockSvc)
+
+			req := httptest.NewRequest(http.MethodPatch, "/v1/stores/"+tt.idParam, strings.NewReader(tt.body))
+			req = withURLParam(req, "id", tt.idParam)
+			rec := httptest.NewRecorder()
+
+			h.PatchStore(rec, req)
+
+			if rec.Code != tt.expectedCode {
+				t.Errorf("status code = %d, want %d, body = %s", rec.Code, tt.expectedCode, rec.Body.String())
 			}
 			if tt.checkResponse != nil {
 				tt.checkResponse(t, rec)

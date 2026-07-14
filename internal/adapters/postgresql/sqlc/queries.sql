@@ -130,3 +130,26 @@ ORDER BY id;
 SELECT mac_address FROM store_wifi_mac
 WHERE store_id = $1
 ORDER BY id;
+
+-- name: UpdateStoreGeofence :one
+-- Updates a store's geofence and unconditionally bumps updated_at whenever
+-- expected_updated_at still matches the current row — the optimistic-
+-- concurrency check for the whole PATCH /v1/stores/{id} aggregate (store
+-- row + wifi whitelist tables), not just the geofence. A caller that only
+-- touches the wifi lists (ticket 03) still runs this with all three
+-- narg columns NULL, still bumping updated_at. latitude/longitude/
+-- radius_meters are nullable args: NULL means "leave this column
+-- unchanged" (COALESCE keeps the existing value) rather than "clear it" —
+-- the all-or-nothing geofence group is enforced by the caller, not here.
+-- No returned row (pgx.ErrNoRows) means either the store doesn't exist/is
+-- inactive, or expected_updated_at is stale; the caller disambiguates with
+-- a follow-up GetStoreByID.
+UPDATE store
+SET latitude = COALESCE(sqlc.narg(latitude), latitude),
+    longitude = COALESCE(sqlc.narg(longitude), longitude),
+    radius_meters = COALESCE(sqlc.narg(radius_meters), radius_meters),
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+  AND is_active = true
+  AND updated_at = sqlc.arg(expected_updated_at)
+RETURNING *;

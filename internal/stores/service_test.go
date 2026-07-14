@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"testing"
+	"time"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	sqlcmocks "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc/mocks"
@@ -100,6 +101,109 @@ func TestStoreService_GetStoreByID(t *testing.T) {
 
 		if _, err := svc.GetStoreByID(t.Context(), 999); !errors.Is(err, ErrStoreNotFound) {
 			t.Errorf("GetStoreByID() error = %v, want ErrStoreNotFound", err)
+		}
+	})
+}
+
+func TestStoreService_UpdateStore(t *testing.T) {
+	t.Run("successfully updates the geofence and returns the updated detail", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		updatedAt := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+		lat, lon := 1.1, 100.2
+		radius := int32(50)
+
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, arg repo.UpdateStoreGeofenceParams) (repo.Store, error) {
+				if arg.ID != 12 {
+					t.Errorf("UpdateStoreGeofenceParams.ID = %d, want 12", arg.ID)
+				}
+				gotLat, _ := arg.Latitude.Float64Value()
+				if !arg.Latitude.Valid || gotLat.Float64 != lat {
+					t.Errorf("UpdateStoreGeofenceParams.Latitude = %+v, want valid %v", arg.Latitude, lat)
+				}
+				gotLon, _ := arg.Longitude.Float64Value()
+				if !arg.Longitude.Valid || gotLon.Float64 != lon {
+					t.Errorf("UpdateStoreGeofenceParams.Longitude = %+v, want valid %v", arg.Longitude, lon)
+				}
+				if !arg.RadiusMeters.Valid || arg.RadiusMeters.Int32 != radius {
+					t.Errorf("UpdateStoreGeofenceParams.RadiusMeters = %+v, want valid %d", arg.RadiusMeters, radius)
+				}
+				if !arg.ExpectedUpdatedAt.Valid || !arg.ExpectedUpdatedAt.Time.Equal(updatedAt) {
+					t.Errorf("UpdateStoreGeofenceParams.ExpectedUpdatedAt = %+v, want %v", arg.ExpectedUpdatedAt, updatedAt)
+				}
+				return repo.Store{ID: 12, StoreName: "Montpellier 1", IsActive: true}, nil
+			},
+		)
+		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
+		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		detail, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{
+			UpdatedAt:    updatedAt,
+			Latitude:     &lat,
+			Longitude:    &lon,
+			RadiusMeters: &radius,
+		})
+		if err != nil {
+			t.Fatalf("UpdateStore() error = %v", err)
+		}
+		if detail.Store.ID != 12 {
+			t.Errorf("UpdateStore() store.ID = %d, want 12", detail.Store.ID)
+		}
+	})
+
+	t.Run("a request with no geofence fields still bumps updated_at and leaves the geofence untouched", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		updatedAt := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, arg repo.UpdateStoreGeofenceParams) (repo.Store, error) {
+				if arg.Latitude.Valid || arg.Longitude.Valid || arg.RadiusMeters.Valid {
+					t.Errorf("UpdateStoreGeofenceParams = %+v, want all geofence columns invalid/NULL", arg)
+				}
+				return repo.Store{ID: 12, IsActive: true}, nil
+			},
+		)
+		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
+		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		if _, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: updatedAt}); err != nil {
+			t.Fatalf("UpdateStore() error = %v", err)
+		}
+	})
+
+	t.Run("a stale updated_at is rejected with ErrStoreConflict", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{}, pgx.ErrNoRows)
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, IsActive: true}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		if _, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now()}); !errors.Is(err, ErrStoreConflict) {
+			t.Errorf("UpdateStore() error = %v, want ErrStoreConflict", err)
+		}
+	})
+
+	t.Run("an unknown or inactive store id returns ErrStoreNotFound", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{}, pgx.ErrNoRows)
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(999)).Return(repo.Store{}, pgx.ErrNoRows)
+
+		svc := newTestService(mockRepo, nil)
+
+		if _, err := svc.UpdateStore(t.Context(), 999, patchStoreParams{UpdatedAt: time.Now()}); !errors.Is(err, ErrStoreNotFound) {
+			t.Errorf("UpdateStore() error = %v, want ErrStoreNotFound", err)
 		}
 	})
 }

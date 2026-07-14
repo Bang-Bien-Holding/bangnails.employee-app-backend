@@ -84,6 +84,7 @@ func (app *application) mount() http.Handler {
 		storesHandler := stores.NewHandler(storesService)
 		r.Post("/stores/syncs", storesHandler.SyncStores)
 		r.Get("/stores/{id}", storesHandler.GetStoreByID)
+		r.Patch("/stores/{id}", storesHandler.PatchStore)
 	})
 
 	return r

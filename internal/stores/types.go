@@ -5,6 +5,7 @@ package stores
 import (
 	"context"
 	"errors"
+	"time"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -19,6 +20,12 @@ var ErrSyncInProgress = errors.New("store sync already in progress")
 // doubles as the not-found condition here rather than introducing a second
 // deletion concept for stores.
 var ErrStoreNotFound = errors.New("store not found")
+
+// ErrStoreConflict is returned by UpdateStore when the caller's UpdatedAt no
+// longer matches the store's current updated_at — another admin edited this
+// store (wifi whitelist or geofence) since the caller last fetched it. The
+// caller must re-fetch and redo its edit against the latest state.
+var ErrStoreConflict = errors.New("store was modified since it was last fetched")
 
 // SyncSummary reports the outcome of one SyncStores run.
 type SyncSummary struct {
@@ -40,9 +47,28 @@ type StoreDetail struct {
 	MACAddresses []string
 }
 
+// patchStoreParams is the body for PATCH /v1/stores/{id}. UpdatedAt is
+// required on every request — it's the optimistic-concurrency token the
+// caller last saw from GetStoreByID, checked against the store's current
+// updated_at before anything is changed (see ErrStoreConflict).
+//
+// Latitude/Longitude/RadiusMeters are pointers so "not sent" (nil, leave the
+// geofence untouched) is distinguishable from an explicit zero value (e.g.
+// latitude 0 is a real point on the equator). The three are validated as an
+// all-or-nothing group via required_with: each names the other two, so
+// submitting exactly one or two of them fails validation, while submitting
+// all three or none of them passes.
+type patchStoreParams struct {
+	UpdatedAt    time.Time `json:"updated_at" validate:"required"`
+	Latitude     *float64  `json:"latitude" validate:"required_with=Longitude RadiusMeters,omitempty,min=-90,max=90"`
+	Longitude    *float64  `json:"longitude" validate:"required_with=Latitude RadiusMeters,omitempty,min=-180,max=180"`
+	RadiusMeters *int32    `json:"radius_meters" validate:"required_with=Latitude Longitude,omitempty,min=1,max=1000"`
+}
+
 type Service interface {
 	SyncStores(ctx context.Context) (SyncSummary, error)
 	GetStoreByID(ctx context.Context, id int64) (StoreDetail, error)
+	UpdateStore(ctx context.Context, id int64, params patchStoreParams) (StoreDetail, error)
 }
 
 // storeResponse is the JSON shape returned by GetStoreByID (and, later,

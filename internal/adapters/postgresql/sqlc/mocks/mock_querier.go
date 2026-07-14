@@ -298,6 +298,21 @@ func (mr *MockQuerierMockRecorder) UpdateEmployee(ctx, arg any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateEmployee", reflect.TypeOf((*MockQuerier)(nil).UpdateEmployee), ctx, arg)
 }
 
+// UpdateStoreGeofence mocks base method.
+func (m *MockQuerier) UpdateStoreGeofence(ctx context.Context, arg repo.UpdateStoreGeofenceParams) (repo.Store, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateStoreGeofence", ctx, arg)
+	ret0, _ := ret[0].(repo.Store)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateStoreGeofence indicates an expected call of UpdateStoreGeofence.
+func (mr *MockQuerierMockRecorder) UpdateStoreGeofence(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateStoreGeofence", reflect.TypeOf((*MockQuerier)(nil).UpdateStoreGeofence), ctx, arg)
+}
+
 // UpsertEmployees mocks base method.
 func (m *MockQuerier) UpsertEmployees(ctx context.Context, arg repo.UpsertEmployeesParams) ([]repo.UpsertEmployeesRow, error) {
 	m.ctrl.T.Helper()

@@ -69,3 +69,18 @@ func (mr *MockServiceMockRecorder) SyncStores(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncStores", reflect.TypeOf((*MockService)(nil).SyncStores), ctx)
 }
+
+// UpdateStore mocks base method.
+func (m *MockService) UpdateStore(ctx context.Context, id int64, params patchStoreParams) (StoreDetail, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpdateStore", ctx, id, params)
+	ret0, _ := ret[0].(StoreDetail)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpdateStore indicates an expected call of UpdateStore.
+func (mr *MockServiceMockRecorder) UpdateStore(ctx, id, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateStore", reflect.TypeOf((*MockService)(nil).UpdateStore), ctx, id, params)
+}

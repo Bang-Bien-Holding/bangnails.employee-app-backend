@@ -463,6 +463,62 @@ func (q *Queries) UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) 
 	return i, err
 }
 
+const updateStoreGeofence = `-- name: UpdateStoreGeofence :one
+UPDATE store
+SET latitude = COALESCE($1, latitude),
+    longitude = COALESCE($2, longitude),
+    radius_meters = COALESCE($3, radius_meters),
+    updated_at = now()
+WHERE id = $4
+  AND is_active = true
+  AND updated_at = $5
+RETURNING id, odoo_store_id, store_name, city, latitude, longitude, radius_meters, is_active, created_at, updated_at
+`
+
+type UpdateStoreGeofenceParams struct {
+	Latitude          pgtype.Numeric     `json:"latitude"`
+	Longitude         pgtype.Numeric     `json:"longitude"`
+	RadiusMeters      pgtype.Int4        `json:"radius_meters"`
+	ID                int64              `json:"id"`
+	ExpectedUpdatedAt pgtype.Timestamptz `json:"expected_updated_at"`
+}
+
+// Updates a store's geofence and unconditionally bumps updated_at whenever
+// expected_updated_at still matches the current row — the optimistic-
+// concurrency check for the whole PATCH /v1/stores/{id} aggregate (store
+// row + wifi whitelist tables), not just the geofence. A caller that only
+// touches the wifi lists (ticket 03) still runs this with all three
+// narg columns NULL, still bumping updated_at. latitude/longitude/
+// radius_meters are nullable args: NULL means "leave this column
+// unchanged" (COALESCE keeps the existing value) rather than "clear it" —
+// the all-or-nothing geofence group is enforced by the caller, not here.
+// No returned row (pgx.ErrNoRows) means either the store doesn't exist/is
+// inactive, or expected_updated_at is stale; the caller disambiguates with
+// a follow-up GetStoreByID.
+func (q *Queries) UpdateStoreGeofence(ctx context.Context, arg UpdateStoreGeofenceParams) (Store, error) {
+	row := q.db.QueryRow(ctx, updateStoreGeofence,
+		arg.Latitude,
+		arg.Longitude,
+		arg.RadiusMeters,
+		arg.ID,
+		arg.ExpectedUpdatedAt,
+	)
+	var i Store
+	err := row.Scan(
+		&i.ID,
+		&i.OdooStoreID,
+		&i.StoreName,
+		&i.City,
+		&i.Latitude,
+		&i.Longitude,
+		&i.RadiusMeters,
+		&i.IsActive,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const upsertEmployees = `-- name: UpsertEmployees :many
 INSERT INTO employees (employee_id, full_name, email, username, role)
 SELECT unnest($1::varchar[]), unnest($2::varchar[]), unnest($3::citext[]), unnest($4::varchar[]), unnest($5::varchar[])

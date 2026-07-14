@@ -9,6 +9,7 @@ import (
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -59,11 +60,66 @@ func (s *service) GetStoreByID(ctx context.Context, id int64) (StoreDetail, erro
 		return StoreDetail{}, err
 	}
 
-	ips, err := s.repo.ListStoreWifiIPsByStoreID(ctx, id)
+	return buildStoreDetail(ctx, s.repo, store)
+}
+
+// UpdateStore applies params' geofence group (if present — all three or
+// none, enforced by patchStoreParams' validation tags) and always bumps
+// store.updated_at, gated by params.UpdatedAt matching the store's current
+// updated_at (see ErrStoreConflict). Runs inside withTx even though today it
+// only issues one write — the same transaction ticket 03 extends to also
+// replace the wifi whitelist tables atomically alongside this update.
+func (s *service) UpdateStore(ctx context.Context, id int64, params patchStoreParams) (StoreDetail, error) {
+	var detail StoreDetail
+	err := s.withTx(ctx, func(q repo.Querier) error {
+		latitude, err := float64PtrToNumeric(params.Latitude)
+		if err != nil {
+			return err
+		}
+		longitude, err := float64PtrToNumeric(params.Longitude)
+		if err != nil {
+			return err
+		}
+
+		store, err := q.UpdateStoreGeofence(ctx, repo.UpdateStoreGeofenceParams{
+			ID:                id,
+			Latitude:          latitude,
+			Longitude:         longitude,
+			RadiusMeters:      int32PtrToInt4(params.RadiusMeters),
+			ExpectedUpdatedAt: pgtype.Timestamptz{Time: params.UpdatedAt, Valid: true},
+		})
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			// No row matched id + is_active + updated_at together — find out
+			// which of those failed: if the store doesn't exist/is inactive
+			// it's a 404, otherwise the row exists and updated_at was stale.
+			if _, existsErr := q.GetStoreByID(ctx, id); errors.Is(existsErr, pgx.ErrNoRows) {
+				return ErrStoreNotFound
+			}
+			return ErrStoreConflict
+		}
+
+		detail, err = buildStoreDetail(ctx, q, store)
+		return err
+	})
 	if err != nil {
 		return StoreDetail{}, err
 	}
-	macs, err := s.repo.ListStoreWifiMacsByStoreID(ctx, id)
+	return detail, nil
+}
+
+// buildStoreDetail fills in a StoreDetail's wifi whitelist for an
+// already-fetched store row — shared by GetStoreByID (via s.repo) and
+// UpdateStore (via the transaction-scoped q) so both read the whitelist the
+// same way.
+func buildStoreDetail(ctx context.Context, q repo.Querier, store repo.Store) (StoreDetail, error) {
+	ips, err := q.ListStoreWifiIPsByStoreID(ctx, store.ID)
+	if err != nil {
+		return StoreDetail{}, err
+	}
+	macs, err := q.ListStoreWifiMacsByStoreID(ctx, store.ID)
 	if err != nil {
 		return StoreDetail{}, err
 	}
@@ -82,6 +138,31 @@ func (s *service) GetStoreByID(ctx context.Context, id int64) (StoreDetail, erro
 		IPAddresses:  ipAddresses,
 		MACAddresses: macAddresses,
 	}, nil
+}
+
+// float64PtrToNumeric converts an optional request field to the nullable
+// pgtype.Numeric UpdateStoreGeofence expects: nil means "leave the column
+// unchanged" (its SQL COALESCEs over a NULL/invalid arg), not "clear it".
+func float64PtrToNumeric(f *float64) (pgtype.Numeric, error) {
+	if f == nil {
+		return pgtype.Numeric{}, nil
+	}
+	var n pgtype.Numeric
+	// Numeric.Scan only accepts a string or nil — 'f' formatting avoids
+	// scientific notation, which ScanScientific/Scan can't parse back.
+	if err := n.Scan(strconv.FormatFloat(*f, 'f', -1, 64)); err != nil {
+		return pgtype.Numeric{}, err
+	}
+	return n, nil
+}
+
+// int32PtrToInt4 converts an optional request field to the nullable
+// pgtype.Int4 UpdateStoreGeofence expects — see float64PtrToNumeric.
+func int32PtrToInt4(i *int32) pgtype.Int4 {
+	if i == nil {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: *i, Valid: true}
 }
 
 // SyncStores runs the store-sync workflow: fetch every store from Odoo in a
