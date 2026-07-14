@@ -4,7 +4,7 @@
 
 **Blocked by:** 02 (extends the same PATCH handler, service method, and transaction scaffold built there)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] Request body gains `ip_addresses` (array of strings) and `mac_addresses` (array of strings), each optional and independent of the other and of the geofence group.
 - [ ] Omitting `ip_addresses` (or `mac_addresses`) entirely leaves that whitelist untouched. Submitting it — including as `[]` — replaces the store's entire whitelist for that list: values not in the submitted set are deleted, values in the submitted set that don't already exist are inserted, unchanged values are left alone (no unnecessary delete+reinsert).
