@@ -4,7 +4,7 @@
 
 **Blocked by:** 01 (reuses the response shape and not-found handling from the GET ticket)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [ ] `PATCH /v1/stores/{id}` is registered in the router.
 - [ ] Request body accepts `updated_at` (required on every request) plus `latitude`/`longitude`/`radius_meters` as an all-or-nothing group: if any one of the three is present, all three must be present; if none are present, the geofence is left untouched.
