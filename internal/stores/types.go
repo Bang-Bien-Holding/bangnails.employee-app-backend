@@ -16,9 +16,9 @@ import (
 var ErrSyncInProgress = errors.New("store sync already in progress")
 
 // ErrStoreNotFound is returned by GetStoreByID/UpdateStore for an id with no
-// matching row. is_active plays no part in this — see ADR-0001, it's a
-// normal editable field, not a soft-delete tombstone, so an inactive store
-// is a normal 200/found, not a 404.
+// matching row. wifi_whitelist_enabled plays no part in this — see ADR-0001,
+// ADR-0004, it's a normal editable field, not a soft-delete tombstone, so a
+// wifi-disabled store is a normal 200/found, not a 404.
 var ErrStoreNotFound = errors.New("store not found")
 
 // ErrStoreConflict is returned by UpdateStore when the caller's UpdatedAt no
@@ -71,11 +71,11 @@ type StoreDetail struct {
 // rather than silently deduping it; "dive" then validates each element's
 // address format.
 //
-// IsActive is a pointer for the same omit-vs-explicit convention as the
-// geofence fields — nil leaves the store's active state untouched, a
-// present true/false is the list screen's Activate toggle (see ADR-0001:
-// this can reactivate a currently-inactive store, since is_active is a
-// normal editable field, not a soft-delete tombstone).
+// wifi_whitelist_enabled is deliberately not a field here — see ADR-0006, it
+// moved to its own dedicated endpoints (PATCH .../wifi-whitelist-enabled,
+// single-store; PATCH /v1/stores, bulk) rather than being carried forward
+// under its new name on this PATCH. The response body still reports its
+// current value (see storeResponse) — it's just no longer settable here.
 type patchStoreParams struct {
 	UpdatedAt    time.Time `json:"updated_at" validate:"required"`
 	Latitude     *float64  `json:"latitude" validate:"required_with=Longitude RadiusMeters,omitempty,min=-90,max=90"`
@@ -83,7 +83,6 @@ type patchStoreParams struct {
 	RadiusMeters *int32    `json:"radius_meters" validate:"required_with=Latitude Longitude,omitempty,min=1,max=1000"`
 	IPAddresses  []string  `json:"ip_addresses" validate:"omitempty,unique,dive,ipv4"`
 	MACAddresses []string  `json:"mac_addresses" validate:"omitempty,unique,dive,mac"`
-	IsActive     *bool     `json:"is_active"`
 }
 
 // deleteWifiWhitelistParams is the body for DELETE
@@ -136,34 +135,34 @@ type Service interface {
 // zero value) so a store with no geofence set yet renders as
 // null/null/null instead of the misleading 0/0/0.
 type storeResponse struct {
-	ID           int64              `json:"id"`
-	StoreName    string             `json:"store_name"`
-	OdooStoreID  *string            `json:"odoo_store_id"`
-	City         *string            `json:"city"`
-	Latitude     *float64           `json:"latitude"`
-	Longitude    *float64           `json:"longitude"`
-	RadiusMeters *int32             `json:"radius_meters"`
-	IPAddresses  []string           `json:"ip_addresses"`
-	MACAddresses []string           `json:"mac_addresses"`
-	IsActive     bool               `json:"is_active"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID                   int64              `json:"id"`
+	StoreName            string             `json:"store_name"`
+	OdooStoreID          *string            `json:"odoo_store_id"`
+	City                 *string            `json:"city"`
+	Latitude             *float64           `json:"latitude"`
+	Longitude            *float64           `json:"longitude"`
+	RadiusMeters         *int32             `json:"radius_meters"`
+	IPAddresses          []string           `json:"ip_addresses"`
+	MACAddresses         []string           `json:"mac_addresses"`
+	WifiWhitelistEnabled bool               `json:"wifi_whitelist_enabled"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 }
 
 func newStoreResponse(detail StoreDetail) storeResponse {
 	return storeResponse{
-		ID:           detail.Store.ID,
-		StoreName:    detail.Store.StoreName,
-		OdooStoreID:  pgTextPtr(detail.Store.OdooStoreID),
-		City:         pgTextPtr(detail.Store.City),
-		Latitude:     pgNumericPtr(detail.Store.Latitude),
-		Longitude:    pgNumericPtr(detail.Store.Longitude),
-		RadiusMeters: pgInt4Ptr(detail.Store.RadiusMeters),
-		IPAddresses:  detail.IPAddresses,
-		MACAddresses: detail.MACAddresses,
-		IsActive:     detail.Store.IsActive,
-		CreatedAt:    detail.Store.CreatedAt,
-		UpdatedAt:    detail.Store.UpdatedAt,
+		ID:                   detail.Store.ID,
+		StoreName:            detail.Store.StoreName,
+		OdooStoreID:          pgTextPtr(detail.Store.OdooStoreID),
+		City:                 pgTextPtr(detail.Store.City),
+		Latitude:             pgNumericPtr(detail.Store.Latitude),
+		Longitude:            pgNumericPtr(detail.Store.Longitude),
+		RadiusMeters:         pgInt4Ptr(detail.Store.RadiusMeters),
+		IPAddresses:          detail.IPAddresses,
+		MACAddresses:         detail.MACAddresses,
+		WifiWhitelistEnabled: detail.Store.WifiWhitelistEnabled,
+		CreatedAt:            detail.Store.CreatedAt,
+		UpdatedAt:            detail.Store.UpdatedAt,
 	}
 }
 

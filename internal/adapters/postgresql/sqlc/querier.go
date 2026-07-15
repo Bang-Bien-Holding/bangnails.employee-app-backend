@@ -41,9 +41,9 @@ type Querier interface {
 	GetEmployeeByEmail(ctx context.Context, email string) (Employee, error)
 	GetEmployeeByID(ctx context.Context, id int64) (Employee, error)
 	GetEmployeeByUsername(ctx context.Context, username string) (Employee, error)
-	// No is_active filter — see ADR-0001, is_active is a normal editable field,
-	// not a soft-delete tombstone, so an inactive store is still a normal fetch
-	// here, not a 404.
+	// No wifi_whitelist_enabled filter — see ADR-0001/ADR-0004, it's a normal
+	// editable field, not a soft-delete tombstone, so a wifi-disabled store is
+	// still a normal fetch here, not a 404.
 	GetStoreByID(ctx context.Context, id int64) (Store, error)
 	// Other half of the replace diff: inserts whatever's newly submitted.
 	// ON CONFLICT DO NOTHING is what makes values already present in both the
@@ -58,11 +58,12 @@ type Querier interface {
 	ListEmployees(ctx context.Context) ([]Employee, error)
 	ListStoreWifiIPsByStoreID(ctx context.Context, storeID int64) ([]netip.Addr, error)
 	ListStoreWifiMacsByStoreID(ctx context.Context, storeID int64) ([]net.HardwareAddr, error)
-	// Every store (active and inactive — the list screen's Activate toggle
-	// needs to see and re-enable inactive stores), each with its current IP/MAC
-	// whitelist aggregated in the same round trip rather than one query per
-	// store. LATERAL subqueries (rather than a single LEFT JOIN + array_agg)
-	// keep the two independent whitelists from cross-joining each other.
+	// Every store (wifi-enabled and wifi-disabled — the list screen's Activate
+	// toggle needs to see and re-enable wifi-disabled stores), each with its
+	// current IP/MAC whitelist aggregated in the same round trip rather than one
+	// query per store. LATERAL subqueries (rather than a single LEFT JOIN +
+	// array_agg) keep the two independent whitelists from cross-joining each
+	// other.
 	ListStores(ctx context.Context) ([]ListStoresRow, error)
 	// Atomically claims a valid, unused token: the UPDATE's row lock ensures
 	// only one concurrent caller can match the WHERE clause and get a row back,
@@ -73,21 +74,21 @@ type Querier interface {
 	SetEmployeePassword(ctx context.Context, arg SetEmployeePasswordParams) (int64, error)
 	SoftDeleteStores(ctx context.Context, storeIds []int64) (int64, error)
 	UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) (Employee, error)
-	// Updates a store's geofence and is_active, and unconditionally bumps
-	// updated_at whenever expected_updated_at still matches the current row —
-	// the optimistic-concurrency check for the whole PATCH /v1/stores/{id}
-	// aggregate (store row + wifi whitelist tables), not just the geofence. A
-	// caller that only touches the wifi lists (ticket 03) or nothing but
-	// is_active (ticket 05) still runs this with the other narg columns NULL,
-	// still bumping updated_at. latitude/longitude/radius_meters/is_active are
-	// nullable args: NULL means "leave this column unchanged" (COALESCE keeps
-	// the existing value) rather than "clear it" — the all-or-nothing geofence
-	// group is enforced by the caller, not here. No is_active filter here — see
-	// ADR-0001: is_active is a normal editable field, not a soft-delete
-	// tombstone, so this query can also be the one that reactivates a currently
-	// inactive store. No returned row (pgx.ErrNoRows) means either the store
-	// doesn't exist, or expected_updated_at is stale; the caller disambiguates
-	// with a follow-up GetStoreByID.
+	// Updates a store's geofence, and unconditionally bumps updated_at whenever
+	// expected_updated_at still matches the current row — the
+	// optimistic-concurrency check for the whole PATCH /v1/stores/{id} aggregate
+	// (store row + wifi whitelist tables), not just the geofence. A caller that
+	// only touches the wifi lists (ticket 03) or touches neither (ticket 06's
+	// delete endpoint, to bump updated_at alone) still runs this with the
+	// geofence narg columns NULL, still bumping updated_at.
+	// latitude/longitude/radius_meters are nullable args: NULL means "leave this
+	// column unchanged" (COALESCE keeps the existing value) rather than "clear
+	// it" — the all-or-nothing geofence group is enforced by the caller, not
+	// here. wifi_whitelist_enabled is not part of this query at all — see
+	// ADR-0006, it's set exclusively via its own dedicated endpoints. No
+	// returned row (pgx.ErrNoRows) means either the store doesn't exist, or
+	// expected_updated_at is stale; the caller disambiguates with a follow-up
+	// GetStoreByID.
 	UpdateStoreGeofence(ctx context.Context, arg UpdateStoreGeofenceParams) (Store, error)
 	// Bulk-upserts one batch of Odoo employees (at most 50, see
 	// employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"

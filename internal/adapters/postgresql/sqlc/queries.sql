@@ -97,7 +97,6 @@ SELECT unnest(@odoo_store_ids::varchar[]), unnest(@store_names::varchar[]), unne
 ON CONFLICT (odoo_store_id) DO UPDATE
 SET store_name = EXCLUDED.store_name,
     city = EXCLUDED.city,
-    is_active = true,
     updated_at = now()
 RETURNING id, odoo_store_id, (xmax = 0) AS inserted;
 
@@ -106,19 +105,19 @@ RETURNING id, odoo_store_id, (xmax = 0) AS inserted;
 -- (odoo_store_id IS NULL) are deliberately excluded — only stores Odoo
 -- once reported and has since stopped reporting count as deleted.
 SELECT id FROM store
-WHERE is_active = true
+WHERE wifi_whitelist_enabled = true
   AND odoo_store_id IS NOT NULL
   AND odoo_store_id != ALL(sqlc.arg(active_odoo_store_ids)::varchar[]);
 
 -- name: SoftDeleteStores :execrows
 UPDATE store
-SET is_active = false, updated_at = now()
+SET wifi_whitelist_enabled = false, updated_at = now()
 WHERE id = ANY(sqlc.arg(store_ids)::bigint[]);
 
 -- name: GetStoreByID :one
--- No is_active filter — see ADR-0001, is_active is a normal editable field,
--- not a soft-delete tombstone, so an inactive store is still a normal fetch
--- here, not a 404.
+-- No wifi_whitelist_enabled filter — see ADR-0001/ADR-0004, it's a normal
+-- editable field, not a soft-delete tombstone, so a wifi-disabled store is
+-- still a normal fetch here, not a 404.
 SELECT * FROM store
 WHERE id = $1;
 
@@ -133,11 +132,12 @@ WHERE store_id = $1
 ORDER BY id;
 
 -- name: ListStores :many
--- Every store (active and inactive — the list screen's Activate toggle
--- needs to see and re-enable inactive stores), each with its current IP/MAC
--- whitelist aggregated in the same round trip rather than one query per
--- store. LATERAL subqueries (rather than a single LEFT JOIN + array_agg)
--- keep the two independent whitelists from cross-joining each other.
+-- Every store (wifi-enabled and wifi-disabled — the list screen's Activate
+-- toggle needs to see and re-enable wifi-disabled stores), each with its
+-- current IP/MAC whitelist aggregated in the same round trip rather than one
+-- query per store. LATERAL subqueries (rather than a single LEFT JOIN +
+-- array_agg) keep the two independent whitelists from cross-joining each
+-- other.
 SELECT
     sqlc.embed(s),
     COALESCE(ip.ip_addresses, '{}')::inet[] AS ip_addresses,
@@ -156,26 +156,25 @@ LEFT JOIN LATERAL (
 ORDER BY s.city, s.store_name;
 
 -- name: UpdateStoreGeofence :one
--- Updates a store's geofence and is_active, and unconditionally bumps
--- updated_at whenever expected_updated_at still matches the current row —
--- the optimistic-concurrency check for the whole PATCH /v1/stores/{id}
--- aggregate (store row + wifi whitelist tables), not just the geofence. A
--- caller that only touches the wifi lists (ticket 03) or nothing but
--- is_active (ticket 05) still runs this with the other narg columns NULL,
--- still bumping updated_at. latitude/longitude/radius_meters/is_active are
--- nullable args: NULL means "leave this column unchanged" (COALESCE keeps
--- the existing value) rather than "clear it" — the all-or-nothing geofence
--- group is enforced by the caller, not here. No is_active filter here — see
--- ADR-0001: is_active is a normal editable field, not a soft-delete
--- tombstone, so this query can also be the one that reactivates a currently
--- inactive store. No returned row (pgx.ErrNoRows) means either the store
--- doesn't exist, or expected_updated_at is stale; the caller disambiguates
--- with a follow-up GetStoreByID.
+-- Updates a store's geofence, and unconditionally bumps updated_at whenever
+-- expected_updated_at still matches the current row — the
+-- optimistic-concurrency check for the whole PATCH /v1/stores/{id} aggregate
+-- (store row + wifi whitelist tables), not just the geofence. A caller that
+-- only touches the wifi lists (ticket 03) or touches neither (ticket 06's
+-- delete endpoint, to bump updated_at alone) still runs this with the
+-- geofence narg columns NULL, still bumping updated_at.
+-- latitude/longitude/radius_meters are nullable args: NULL means "leave this
+-- column unchanged" (COALESCE keeps the existing value) rather than "clear
+-- it" — the all-or-nothing geofence group is enforced by the caller, not
+-- here. wifi_whitelist_enabled is not part of this query at all — see
+-- ADR-0006, it's set exclusively via its own dedicated endpoints. No
+-- returned row (pgx.ErrNoRows) means either the store doesn't exist, or
+-- expected_updated_at is stale; the caller disambiguates with a follow-up
+-- GetStoreByID.
 UPDATE store
 SET latitude = COALESCE(sqlc.narg(latitude), latitude),
     longitude = COALESCE(sqlc.narg(longitude), longitude),
     radius_meters = COALESCE(sqlc.narg(radius_meters), radius_meters),
-    is_active = COALESCE(sqlc.narg(is_active), is_active),
     updated_at = now()
 WHERE id = sqlc.arg(id)
   AND updated_at = sqlc.arg(expected_updated_at)

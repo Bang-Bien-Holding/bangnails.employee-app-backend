@@ -67,13 +67,13 @@ func (s *service) GetStoreByID(ctx context.Context, id int64) (StoreDetail, erro
 }
 
 // UpdateStore applies params' geofence group (if present — all three or
-// none, enforced by patchStoreParams' validation tags) and IsActive (if
-// present — the list screen's Activate toggle, able to reactivate a
-// currently-inactive store per ADR-0001), and always bumps store.updated_at,
-// gated by params.UpdatedAt matching the store's current updated_at (see
-// ErrStoreConflict). Runs inside withTx even though today it only issues one
-// write — the same transaction ticket 03 extends to also replace the wifi
-// whitelist tables atomically alongside this update.
+// none, enforced by patchStoreParams' validation tags), and always bumps
+// store.updated_at, gated by params.UpdatedAt matching the store's current
+// updated_at (see ErrStoreConflict). wifi_whitelist_enabled is not settable
+// here — see ADR-0006, it moved to its own dedicated endpoints. Runs inside
+// withTx even though today it only issues one write — the same transaction
+// ticket 03 extends to also replace the wifi whitelist tables atomically
+// alongside this update.
 func (s *service) UpdateStore(ctx context.Context, id int64, params patchStoreParams) (StoreDetail, error) {
 	var detail StoreDetail
 	err := s.withTx(ctx, func(q repo.Querier) error {
@@ -91,7 +91,6 @@ func (s *service) UpdateStore(ctx context.Context, id int64, params patchStorePa
 			Latitude:          latitude,
 			Longitude:         longitude,
 			RadiusMeters:      int32PtrToInt4(params.RadiusMeters),
-			IsActive:          boolPtrToBool(params.IsActive),
 			ExpectedUpdatedAt: pgtype.Timestamptz{Time: params.UpdatedAt, Valid: true},
 		})
 		if err != nil {
@@ -171,7 +170,7 @@ func buildStoreDetail(ctx context.Context, q repo.Querier, store repo.Store) (St
 	}, nil
 }
 
-// ListStores returns every store — active and inactive, since the list
+// ListStores returns every store — wifi-enabled and wifi-disabled, since the list
 // screen's Activate toggle needs to see and re-enable a deactivated one —
 // together with its current wifi whitelist. See the ListStores query in
 // queries.sql for how ordering and whitelist aggregation are done in one
@@ -203,7 +202,7 @@ func (s *service) ListStores(ctx context.Context) ([]StoreDetail, error) {
 // updated_at match can't be checked and applied in the same statement: it's
 // verified up front against the already-fetched store row, then, only if a
 // delete actually happened, re-applied atomically via UpdateStoreGeofence
-// (its geofence/is_active args left invalid so only updated_at changes) to
+// (its geofence args left invalid so only updated_at changes) to
 // close the race window between the initial check and here.
 func (s *service) DeleteWifiWhitelistEntries(ctx context.Context, id int64, params deleteWifiWhitelistParams) ([]WifiWhitelistDeleteResult, error) {
 	var results []WifiWhitelistDeleteResult
@@ -334,15 +333,6 @@ func int32PtrToInt4(i *int32) pgtype.Int4 {
 		return pgtype.Int4{}
 	}
 	return pgtype.Int4{Int32: *i, Valid: true}
-}
-
-// boolPtrToBool converts an optional request field to the nullable
-// pgtype.Bool UpdateStoreGeofence expects — see float64PtrToNumeric.
-func boolPtrToBool(b *bool) pgtype.Bool {
-	if b == nil {
-		return pgtype.Bool{}
-	}
-	return pgtype.Bool{Bool: *b, Valid: true}
 }
 
 // parseAddresses converts patchStoreParams.IPAddresses/MACAddresses'

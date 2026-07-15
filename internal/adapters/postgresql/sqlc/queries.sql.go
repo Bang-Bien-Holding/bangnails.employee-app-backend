@@ -205,7 +205,7 @@ func (q *Queries) DeleteStoreWifiMacsNotIn(ctx context.Context, arg DeleteStoreW
 
 const findStoresNotInOdoo = `-- name: FindStoresNotInOdoo :many
 SELECT id FROM store
-WHERE is_active = true
+WHERE wifi_whitelist_enabled = true
   AND odoo_store_id IS NOT NULL
   AND odoo_store_id != ALL($1::varchar[])
 `
@@ -306,13 +306,13 @@ func (q *Queries) GetEmployeeByUsername(ctx context.Context, username string) (E
 }
 
 const getStoreByID = `-- name: GetStoreByID :one
-SELECT id, odoo_store_id, store_name, city, latitude, longitude, radius_meters, is_active, created_at, updated_at FROM store
+SELECT id, odoo_store_id, store_name, city, latitude, longitude, radius_meters, wifi_whitelist_enabled, created_at, updated_at FROM store
 WHERE id = $1
 `
 
-// No is_active filter — see ADR-0001, is_active is a normal editable field,
-// not a soft-delete tombstone, so an inactive store is still a normal fetch
-// here, not a 404.
+// No wifi_whitelist_enabled filter — see ADR-0001/ADR-0004, it's a normal
+// editable field, not a soft-delete tombstone, so a wifi-disabled store is
+// still a normal fetch here, not a 404.
 func (q *Queries) GetStoreByID(ctx context.Context, id int64) (Store, error) {
 	row := q.db.QueryRow(ctx, getStoreByID, id)
 	var i Store
@@ -324,7 +324,7 @@ func (q *Queries) GetStoreByID(ctx context.Context, id int64) (Store, error) {
 		&i.Latitude,
 		&i.Longitude,
 		&i.RadiusMeters,
-		&i.IsActive,
+		&i.WifiWhitelistEnabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -486,7 +486,7 @@ func (q *Queries) ListStoreWifiMacsByStoreID(ctx context.Context, storeID int64)
 
 const listStores = `-- name: ListStores :many
 SELECT
-    s.id, s.odoo_store_id, s.store_name, s.city, s.latitude, s.longitude, s.radius_meters, s.is_active, s.created_at, s.updated_at,
+    s.id, s.odoo_store_id, s.store_name, s.city, s.latitude, s.longitude, s.radius_meters, s.wifi_whitelist_enabled, s.created_at, s.updated_at,
     COALESCE(ip.ip_addresses, '{}')::inet[] AS ip_addresses,
     COALESCE(mac.mac_addresses, '{}')::macaddr[] AS mac_addresses
 FROM store s
@@ -509,11 +509,12 @@ type ListStoresRow struct {
 	MacAddresses []net.HardwareAddr `json:"mac_addresses"`
 }
 
-// Every store (active and inactive — the list screen's Activate toggle
-// needs to see and re-enable inactive stores), each with its current IP/MAC
-// whitelist aggregated in the same round trip rather than one query per
-// store. LATERAL subqueries (rather than a single LEFT JOIN + array_agg)
-// keep the two independent whitelists from cross-joining each other.
+// Every store (wifi-enabled and wifi-disabled — the list screen's Activate
+// toggle needs to see and re-enable wifi-disabled stores), each with its
+// current IP/MAC whitelist aggregated in the same round trip rather than one
+// query per store. LATERAL subqueries (rather than a single LEFT JOIN +
+// array_agg) keep the two independent whitelists from cross-joining each
+// other.
 func (q *Queries) ListStores(ctx context.Context) ([]ListStoresRow, error) {
 	rows, err := q.db.Query(ctx, listStores)
 	if err != nil {
@@ -531,7 +532,7 @@ func (q *Queries) ListStores(ctx context.Context) ([]ListStoresRow, error) {
 			&i.Store.Latitude,
 			&i.Store.Longitude,
 			&i.Store.RadiusMeters,
-			&i.Store.IsActive,
+			&i.Store.WifiWhitelistEnabled,
 			&i.Store.CreatedAt,
 			&i.Store.UpdatedAt,
 			&i.IpAddresses,
@@ -616,7 +617,7 @@ func (q *Queries) SetEmployeePassword(ctx context.Context, arg SetEmployeePasswo
 
 const softDeleteStores = `-- name: SoftDeleteStores :execrows
 UPDATE store
-SET is_active = false, updated_at = now()
+SET wifi_whitelist_enabled = false, updated_at = now()
 WHERE id = ANY($1::bigint[])
 `
 
@@ -680,43 +681,40 @@ UPDATE store
 SET latitude = COALESCE($1, latitude),
     longitude = COALESCE($2, longitude),
     radius_meters = COALESCE($3, radius_meters),
-    is_active = COALESCE($4, is_active),
     updated_at = now()
-WHERE id = $5
-  AND updated_at = $6
-RETURNING id, odoo_store_id, store_name, city, latitude, longitude, radius_meters, is_active, created_at, updated_at
+WHERE id = $4
+  AND updated_at = $5
+RETURNING id, odoo_store_id, store_name, city, latitude, longitude, radius_meters, wifi_whitelist_enabled, created_at, updated_at
 `
 
 type UpdateStoreGeofenceParams struct {
 	Latitude          pgtype.Numeric     `json:"latitude"`
 	Longitude         pgtype.Numeric     `json:"longitude"`
 	RadiusMeters      pgtype.Int4        `json:"radius_meters"`
-	IsActive          pgtype.Bool        `json:"is_active"`
 	ID                int64              `json:"id"`
 	ExpectedUpdatedAt pgtype.Timestamptz `json:"expected_updated_at"`
 }
 
-// Updates a store's geofence and is_active, and unconditionally bumps
-// updated_at whenever expected_updated_at still matches the current row —
-// the optimistic-concurrency check for the whole PATCH /v1/stores/{id}
-// aggregate (store row + wifi whitelist tables), not just the geofence. A
-// caller that only touches the wifi lists (ticket 03) or nothing but
-// is_active (ticket 05) still runs this with the other narg columns NULL,
-// still bumping updated_at. latitude/longitude/radius_meters/is_active are
-// nullable args: NULL means "leave this column unchanged" (COALESCE keeps
-// the existing value) rather than "clear it" — the all-or-nothing geofence
-// group is enforced by the caller, not here. No is_active filter here — see
-// ADR-0001: is_active is a normal editable field, not a soft-delete
-// tombstone, so this query can also be the one that reactivates a currently
-// inactive store. No returned row (pgx.ErrNoRows) means either the store
-// doesn't exist, or expected_updated_at is stale; the caller disambiguates
-// with a follow-up GetStoreByID.
+// Updates a store's geofence, and unconditionally bumps updated_at whenever
+// expected_updated_at still matches the current row — the
+// optimistic-concurrency check for the whole PATCH /v1/stores/{id} aggregate
+// (store row + wifi whitelist tables), not just the geofence. A caller that
+// only touches the wifi lists (ticket 03) or touches neither (ticket 06's
+// delete endpoint, to bump updated_at alone) still runs this with the
+// geofence narg columns NULL, still bumping updated_at.
+// latitude/longitude/radius_meters are nullable args: NULL means "leave this
+// column unchanged" (COALESCE keeps the existing value) rather than "clear
+// it" — the all-or-nothing geofence group is enforced by the caller, not
+// here. wifi_whitelist_enabled is not part of this query at all — see
+// ADR-0006, it's set exclusively via its own dedicated endpoints. No
+// returned row (pgx.ErrNoRows) means either the store doesn't exist, or
+// expected_updated_at is stale; the caller disambiguates with a follow-up
+// GetStoreByID.
 func (q *Queries) UpdateStoreGeofence(ctx context.Context, arg UpdateStoreGeofenceParams) (Store, error) {
 	row := q.db.QueryRow(ctx, updateStoreGeofence,
 		arg.Latitude,
 		arg.Longitude,
 		arg.RadiusMeters,
-		arg.IsActive,
 		arg.ID,
 		arg.ExpectedUpdatedAt,
 	)
@@ -729,7 +727,7 @@ func (q *Queries) UpdateStoreGeofence(ctx context.Context, arg UpdateStoreGeofen
 		&i.Latitude,
 		&i.Longitude,
 		&i.RadiusMeters,
-		&i.IsActive,
+		&i.WifiWhitelistEnabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -799,7 +797,6 @@ SELECT unnest($1::varchar[]), unnest($2::varchar[]), unnest($3::varchar[])
 ON CONFLICT (odoo_store_id) DO UPDATE
 SET store_name = EXCLUDED.store_name,
     city = EXCLUDED.city,
-    is_active = true,
     updated_at = now()
 RETURNING id, odoo_store_id, (xmax = 0) AS inserted
 `

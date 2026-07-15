@@ -39,9 +39,9 @@ func TestStoreService_GetStoreByID(t *testing.T) {
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
 		want := repo.Store{
-			ID:        12,
-			StoreName: "Montpellier 1",
-			IsActive:  true,
+			ID:                   12,
+			StoreName:            "Montpellier 1",
+			WifiWhitelistEnabled: true,
 		}
 		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(want, nil)
 		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return(
@@ -74,7 +74,7 @@ func TestStoreService_GetStoreByID(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
-		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, IsActive: true}, nil)
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, WifiWhitelistEnabled: true}, nil)
 		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
 		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
 
@@ -109,7 +109,7 @@ func TestStoreService_GetStoreByID(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
-		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, IsActive: false}, nil)
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, WifiWhitelistEnabled: false}, nil)
 		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
 		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
 
@@ -119,8 +119,8 @@ func TestStoreService_GetStoreByID(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GetStoreByID() error = %v, want nil for an inactive store", err)
 		}
-		if detail.Store.IsActive {
-			t.Errorf("GetStoreByID() store.IsActive = true, want false")
+		if detail.Store.WifiWhitelistEnabled {
+			t.Errorf("GetStoreByID() store.WifiWhitelistEnabled = true, want false")
 		}
 	})
 }
@@ -132,12 +132,12 @@ func TestStoreService_ListStores(t *testing.T) {
 
 		mockRepo.EXPECT().ListStores(gomock.Any()).Return([]repo.ListStoresRow{
 			{
-				Store:        repo.Store{ID: 10, StoreName: "Hanoi 1", City: pgtype.Text{String: "Hanoi", Valid: true}, IsActive: true},
+				Store:        repo.Store{ID: 10, StoreName: "Hanoi 1", City: pgtype.Text{String: "Hanoi", Valid: true}, WifiWhitelistEnabled: true},
 				IpAddresses:  []netip.Addr{netip.MustParseAddr("138.101.10.1")},
 				MacAddresses: []net.HardwareAddr{},
 			},
 			{
-				Store:        repo.Store{ID: 20, StoreName: "Montpellier 1", City: pgtype.Text{String: "Montpellier", Valid: true}, IsActive: false},
+				Store:        repo.Store{ID: 20, StoreName: "Montpellier 1", City: pgtype.Text{String: "Montpellier", Valid: true}, WifiWhitelistEnabled: false},
 				IpAddresses:  []netip.Addr{},
 				MacAddresses: []net.HardwareAddr{mustParseMAC(t, "aa:bb:cc:dd:ee:ff")},
 			},
@@ -152,14 +152,14 @@ func TestStoreService_ListStores(t *testing.T) {
 		if len(details) != 2 {
 			t.Fatalf("ListStores() returned %d stores, want 2", len(details))
 		}
-		if details[0].Store.ID != 10 || details[0].Store.IsActive != true {
+		if details[0].Store.ID != 10 || details[0].Store.WifiWhitelistEnabled != true {
 			t.Errorf("details[0] = %+v, want active store id 10", details[0].Store)
 		}
 		wantIPs := []string{"138.101.10.1"}
 		if !equalStrings(details[0].IPAddresses, wantIPs) {
 			t.Errorf("details[0].IPAddresses = %v, want %v", details[0].IPAddresses, wantIPs)
 		}
-		if details[1].Store.ID != 20 || details[1].Store.IsActive != false {
+		if details[1].Store.ID != 20 || details[1].Store.WifiWhitelistEnabled != false {
 			t.Errorf("details[1] = %+v, want inactive store id 20", details[1].Store)
 		}
 		wantMACs := []string{"aa:bb:cc:dd:ee:ff"}
@@ -228,7 +228,7 @@ func TestStoreService_UpdateStore(t *testing.T) {
 				if !arg.ExpectedUpdatedAt.Valid || !arg.ExpectedUpdatedAt.Time.Equal(updatedAt) {
 					t.Errorf("UpdateStoreGeofenceParams.ExpectedUpdatedAt = %+v, want %v", arg.ExpectedUpdatedAt, updatedAt)
 				}
-				return repo.Store{ID: 12, StoreName: "Montpellier 1", IsActive: true}, nil
+				return repo.Store{ID: 12, StoreName: "Montpellier 1", WifiWhitelistEnabled: true}, nil
 			},
 		)
 		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
@@ -261,7 +261,7 @@ func TestStoreService_UpdateStore(t *testing.T) {
 				if arg.Latitude.Valid || arg.Longitude.Valid || arg.RadiusMeters.Valid {
 					t.Errorf("UpdateStoreGeofenceParams = %+v, want all geofence columns invalid/NULL", arg)
 				}
-				return repo.Store{ID: 12, IsActive: true}, nil
+				return repo.Store{ID: 12, WifiWhitelistEnabled: true}, nil
 			},
 		)
 		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
@@ -279,7 +279,7 @@ func TestStoreService_UpdateStore(t *testing.T) {
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
 		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{}, pgx.ErrNoRows)
-		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, IsActive: true}, nil)
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, WifiWhitelistEnabled: true}, nil)
 
 		svc := newTestService(mockRepo, nil)
 
@@ -306,7 +306,7 @@ func TestStoreService_UpdateStore(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
-		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{ID: 12, IsActive: true}, nil)
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{ID: 12, WifiWhitelistEnabled: true}, nil)
 		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
 		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
 		// No EXPECT for Delete/InsertStoreWifi{IPs,Macs} — gomock fails the
@@ -325,7 +325,7 @@ func TestStoreService_UpdateStore(t *testing.T) {
 
 		wantIPs := []netip.Addr{netip.MustParseAddr("138.101.10.1"), netip.MustParseAddr("138.101.10.2")}
 
-		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{ID: 12, IsActive: true}, nil)
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{ID: 12, WifiWhitelistEnabled: true}, nil)
 		mockRepo.EXPECT().DeleteStoreWifiIPsNotIn(gomock.Any(), repo.DeleteStoreWifiIPsNotInParams{
 			StoreID: 12, IpAddresses: wantIPs,
 		}).Return(nil)
@@ -353,7 +353,7 @@ func TestStoreService_UpdateStore(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
-		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{ID: 12, IsActive: true}, nil)
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{ID: 12, WifiWhitelistEnabled: true}, nil)
 		mockRepo.EXPECT().DeleteStoreWifiIPsNotIn(gomock.Any(), repo.DeleteStoreWifiIPsNotInParams{
 			StoreID: 12, IpAddresses: []netip.Addr{},
 		}).Return(nil)
@@ -377,7 +377,7 @@ func TestStoreService_UpdateStore(t *testing.T) {
 
 		wantMACs := []net.HardwareAddr{mustParseMAC(t, "aa:bb:cc:dd:ee:ff")}
 
-		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{ID: 12, IsActive: true}, nil)
+		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{ID: 12, WifiWhitelistEnabled: true}, nil)
 		mockRepo.EXPECT().DeleteStoreWifiMacsNotIn(gomock.Any(), repo.DeleteStoreWifiMacsNotInParams{
 			StoreID: 12, MacAddresses: wantMACs,
 		}).Return(nil)
@@ -400,7 +400,7 @@ func TestStoreService_UpdateStore(t *testing.T) {
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
 		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).Return(repo.Store{}, pgx.ErrNoRows)
-		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, IsActive: true}, nil)
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12, WifiWhitelistEnabled: true}, nil)
 		// No EXPECT for Delete/InsertStoreWifiIPs — the conflict must be
 		// caught before the wifi whitelist is ever touched.
 
@@ -409,86 +409,6 @@ func TestStoreService_UpdateStore(t *testing.T) {
 		ips := []string{"138.101.10.1"}
 		if _, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now(), IPAddresses: ips}); !errors.Is(err, ErrStoreConflict) {
 			t.Errorf("UpdateStore() error = %v, want ErrStoreConflict", err)
-		}
-	})
-
-	t.Run("is_active: true reactivates a currently-inactive store", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
-
-		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, arg repo.UpdateStoreGeofenceParams) (repo.Store, error) {
-				if !arg.IsActive.Valid || !arg.IsActive.Bool {
-					t.Errorf("UpdateStoreGeofenceParams.IsActive = %+v, want valid true", arg.IsActive)
-				}
-				return repo.Store{ID: 12, IsActive: true}, nil
-			},
-		)
-		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
-		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
-
-		svc := newTestService(mockRepo, nil)
-
-		isActive := true
-		detail, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now(), IsActive: &isActive})
-		if err != nil {
-			t.Fatalf("UpdateStore() error = %v", err)
-		}
-		if !detail.Store.IsActive {
-			t.Errorf("UpdateStore() store.IsActive = false, want true")
-		}
-	})
-
-	t.Run("is_active: false deactivates a store without touching geofence or wifi lists", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
-
-		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, arg repo.UpdateStoreGeofenceParams) (repo.Store, error) {
-				if arg.Latitude.Valid || arg.Longitude.Valid || arg.RadiusMeters.Valid {
-					t.Errorf("UpdateStoreGeofenceParams = %+v, want geofence columns invalid/NULL", arg)
-				}
-				if !arg.IsActive.Valid || arg.IsActive.Bool {
-					t.Errorf("UpdateStoreGeofenceParams.IsActive = %+v, want valid false", arg.IsActive)
-				}
-				return repo.Store{ID: 12, IsActive: false}, nil
-			},
-		)
-		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
-		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
-		// No EXPECT for Delete/InsertStoreWifi{IPs,Macs} — both lists omitted.
-
-		svc := newTestService(mockRepo, nil)
-
-		isActive := false
-		detail, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now(), IsActive: &isActive})
-		if err != nil {
-			t.Fatalf("UpdateStore() error = %v", err)
-		}
-		if detail.Store.IsActive {
-			t.Errorf("UpdateStore() store.IsActive = true, want false")
-		}
-	})
-
-	t.Run("omitting is_active leaves the store's active state untouched", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
-
-		mockRepo.EXPECT().UpdateStoreGeofence(gomock.Any(), gomock.Any()).DoAndReturn(
-			func(_ context.Context, arg repo.UpdateStoreGeofenceParams) (repo.Store, error) {
-				if arg.IsActive.Valid {
-					t.Errorf("UpdateStoreGeofenceParams.IsActive = %+v, want invalid/NULL", arg.IsActive)
-				}
-				return repo.Store{ID: 12, IsActive: true}, nil
-			},
-		)
-		mockRepo.EXPECT().ListStoreWifiIPsByStoreID(gomock.Any(), int64(12)).Return([]netip.Addr{}, nil)
-		mockRepo.EXPECT().ListStoreWifiMacsByStoreID(gomock.Any(), int64(12)).Return([]net.HardwareAddr{}, nil)
-
-		svc := newTestService(mockRepo, nil)
-
-		if _, err := svc.UpdateStore(t.Context(), 12, patchStoreParams{UpdatedAt: time.Now()}); err != nil {
-			t.Fatalf("UpdateStore() error = %v", err)
 		}
 	})
 }

@@ -116,7 +116,7 @@ func TestStoreHandler_PatchStore(t *testing.T) {
 			body:    `{"updated_at":"2026-07-14T10:00:00Z","latitude":1.1,"longitude":100.2,"radius_meters":50}`,
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{
-					Store:        repo.Store{ID: 12, StoreName: "Montpellier 1", IsActive: true},
+					Store:        repo.Store{ID: 12, StoreName: "Montpellier 1", WifiWhitelistEnabled: true},
 					IPAddresses:  []string{},
 					MACAddresses: []string{},
 				}, nil)
@@ -138,7 +138,7 @@ func TestStoreHandler_PatchStore(t *testing.T) {
 			body:    `{"updated_at":"2026-07-14T10:00:00Z"}`,
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{
-					Store:        repo.Store{ID: 12, IsActive: true},
+					Store:        repo.Store{ID: 12, WifiWhitelistEnabled: true},
 					IPAddresses:  []string{},
 					MACAddresses: []string{},
 				}, nil)
@@ -266,7 +266,7 @@ func TestStoreHandler_PatchStore(t *testing.T) {
 			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":[]}`,
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{
-					Store:        repo.Store{ID: 12, IsActive: true},
+					Store:        repo.Store{ID: 12, WifiWhitelistEnabled: true},
 					IPAddresses:  []string{},
 					MACAddresses: []string{},
 				}, nil)
@@ -279,7 +279,7 @@ func TestStoreHandler_PatchStore(t *testing.T) {
 			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":["138.101.10.1","138.101.10.2"],"mac_addresses":["aa:bb:cc:dd:ee:ff"]}`,
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{
-					Store:        repo.Store{ID: 12, StoreName: "Montpellier 1", IsActive: true},
+					Store:        repo.Store{ID: 12, StoreName: "Montpellier 1", WifiWhitelistEnabled: true},
 					IPAddresses:  []string{"138.101.10.1", "138.101.10.2"},
 					MACAddresses: []string{"aa:bb:cc:dd:ee:ff"},
 				}, nil)
@@ -301,34 +301,24 @@ func TestStoreHandler_PatchStore(t *testing.T) {
 			},
 		},
 		{
-			name:    "is_active: true reactivates a currently-inactive store, reflected in the response",
+			// wifi_whitelist_enabled is not a writable field on this endpoint
+			// (see ADR-0006) — patchStoreParams has no such field, and
+			// json.Read's DisallowUnknownFields rejects it outright rather
+			// than silently ignoring it.
+			name:    "wifi_whitelist_enabled in the request body returns 400, service not called",
 			idParam: "12",
-			body:    `{"updated_at":"2026-07-14T10:00:00Z","is_active":true}`,
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","wifi_whitelist_enabled":false}`,
 			setupMock: func(mockSvc *MockService) {
-				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{
-					Store:        repo.Store{ID: 12, StoreName: "Montpellier 1", IsActive: true},
-					IPAddresses:  []string{},
-					MACAddresses: []string{},
-				}, nil)
 			},
-			expectedCode: http.StatusOK,
-			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
-				var got storeResponse
-				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-					t.Fatalf("failed to unmarshal response body: %v", err)
-				}
-				if !got.IsActive {
-					t.Errorf("is_active = false, want true")
-				}
-			},
+			expectedCode: http.StatusBadRequest,
 		},
 		{
-			name:    "is_active: false deactivates a store, reflected in the response",
+			name:    "the response reports wifi_whitelist_enabled read-only from the service's returned state",
 			idParam: "12",
-			body:    `{"updated_at":"2026-07-14T10:00:00Z","is_active":false}`,
+			body:    `{"updated_at":"2026-07-14T10:00:00Z"}`,
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().UpdateStore(gomock.Any(), int64(12), gomock.Any()).Return(StoreDetail{
-					Store:        repo.Store{ID: 12, StoreName: "Montpellier 1", IsActive: false},
+					Store:        repo.Store{ID: 12, StoreName: "Montpellier 1", WifiWhitelistEnabled: true},
 					IPAddresses:  []string{},
 					MACAddresses: []string{},
 				}, nil)
@@ -339,8 +329,8 @@ func TestStoreHandler_PatchStore(t *testing.T) {
 				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 					t.Fatalf("failed to unmarshal response body: %v", err)
 				}
-				if got.IsActive {
-					t.Errorf("is_active = true, want false")
+				if !got.WifiWhitelistEnabled {
+					t.Errorf("wifi_whitelist_enabled = false, want true")
 				}
 			},
 		},
@@ -533,12 +523,12 @@ func TestStoreHandler_ListStores(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().ListStores(gomock.Any()).Return([]StoreDetail{
 					{
-						Store:        repo.Store{ID: 10, StoreName: "Hanoi 1", City: pgtype.Text{String: "Hanoi", Valid: true}, IsActive: true},
+						Store:        repo.Store{ID: 10, StoreName: "Hanoi 1", City: pgtype.Text{String: "Hanoi", Valid: true}, WifiWhitelistEnabled: true},
 						IPAddresses:  []string{"138.101.10.1"},
 						MACAddresses: []string{},
 					},
 					{
-						Store:        repo.Store{ID: 20, StoreName: "Montpellier 1", City: pgtype.Text{String: "Montpellier", Valid: true}, IsActive: false},
+						Store:        repo.Store{ID: 20, StoreName: "Montpellier 1", City: pgtype.Text{String: "Montpellier", Valid: true}, WifiWhitelistEnabled: false},
 						IPAddresses:  []string{},
 						MACAddresses: []string{"aa:bb:cc:dd:ee:ff"},
 					},
@@ -553,10 +543,10 @@ func TestStoreHandler_ListStores(t *testing.T) {
 				if len(got) != 2 {
 					t.Fatalf("len(response) = %d, want 2", len(got))
 				}
-				if got[0].ID != 10 || got[0].IsActive != true {
+				if got[0].ID != 10 || got[0].WifiWhitelistEnabled != true {
 					t.Errorf("got[0] = %+v, want active store id 10", got[0])
 				}
-				if got[1].ID != 20 || got[1].IsActive != false {
+				if got[1].ID != 20 || got[1].WifiWhitelistEnabled != false {
 					t.Errorf("got[1] = %+v, want inactive store id 20", got[1])
 				}
 				if got[1].IPAddresses == nil || len(got[1].IPAddresses) != 0 {
@@ -622,14 +612,14 @@ func TestStoreHandler_GetStoreByID(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(StoreDetail{
 					Store: repo.Store{
-						ID:           12,
-						StoreName:    "Montpellier 1",
-						OdooStoreID:  pgtype.Text{String: "M30", Valid: true},
-						City:         pgtype.Text{String: "Montpellier", Valid: true},
-						Latitude:     pgtype.Numeric{Int: big.NewInt(11), Exp: -1, Valid: true},
-						Longitude:    pgtype.Numeric{Int: big.NewInt(1002), Exp: -1, Valid: true},
-						RadiusMeters: pgtype.Int4{Int32: 50, Valid: true},
-						IsActive:     true,
+						ID:                   12,
+						StoreName:            "Montpellier 1",
+						OdooStoreID:          pgtype.Text{String: "M30", Valid: true},
+						City:                 pgtype.Text{String: "Montpellier", Valid: true},
+						Latitude:             pgtype.Numeric{Int: big.NewInt(11), Exp: -1, Valid: true},
+						Longitude:            pgtype.Numeric{Int: big.NewInt(1002), Exp: -1, Valid: true},
+						RadiusMeters:         pgtype.Int4{Int32: 50, Valid: true},
+						WifiWhitelistEnabled: true,
 					},
 					IPAddresses:  []string{"138.101.10.1", "138.101.10.2"},
 					MACAddresses: []string{"aa:bb:cc:dd:ee:ff"},
@@ -667,11 +657,11 @@ func TestStoreHandler_GetStoreByID(t *testing.T) {
 			},
 		},
 		{
-			name:    "an inactive store returns 200 with is_active: false, not 404",
+			name:    "a wifi-disabled store returns 200 with wifi_whitelist_enabled: false, not 404",
 			idParam: "14",
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().GetStoreByID(gomock.Any(), int64(14)).Return(StoreDetail{
-					Store:        repo.Store{ID: 14, StoreName: "Deactivated Store", IsActive: false},
+					Store:        repo.Store{ID: 14, StoreName: "Deactivated Store", WifiWhitelistEnabled: false},
 					IPAddresses:  []string{},
 					MACAddresses: []string{},
 				}, nil)
@@ -682,7 +672,7 @@ func TestStoreHandler_GetStoreByID(t *testing.T) {
 				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 					t.Fatalf("failed to unmarshal response body: %v", err)
 				}
-				if got.IsActive {
+				if got.WifiWhitelistEnabled {
 					t.Errorf("is_active = true, want false")
 				}
 			},
@@ -692,7 +682,7 @@ func TestStoreHandler_GetStoreByID(t *testing.T) {
 			idParam: "13",
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().GetStoreByID(gomock.Any(), int64(13)).Return(StoreDetail{
-					Store:        repo.Store{ID: 13, StoreName: "No Geofence Yet", IsActive: true},
+					Store:        repo.Store{ID: 13, StoreName: "No Geofence Yet", WifiWhitelistEnabled: true},
 					IPAddresses:  []string{},
 					MACAddresses: []string{},
 				}, nil)

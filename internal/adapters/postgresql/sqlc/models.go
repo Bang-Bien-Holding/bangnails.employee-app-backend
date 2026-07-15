@@ -35,16 +35,16 @@ type PasswordResetToken struct {
 }
 
 type Store struct {
-	ID           int64              `json:"id"`
-	OdooStoreID  pgtype.Text        `json:"odoo_store_id"`
-	StoreName    string             `json:"store_name"`
-	City         pgtype.Text        `json:"city"`
-	Latitude     pgtype.Numeric     `json:"latitude"`
-	Longitude    pgtype.Numeric     `json:"longitude"`
-	RadiusMeters pgtype.Int4        `json:"radius_meters"`
-	IsActive     bool               `json:"is_active"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ID                   int64              `json:"id"`
+	OdooStoreID          pgtype.Text        `json:"odoo_store_id"`
+	StoreName            string             `json:"store_name"`
+	City                 pgtype.Text        `json:"city"`
+	Latitude             pgtype.Numeric     `json:"latitude"`
+	Longitude            pgtype.Numeric     `json:"longitude"`
+	RadiusMeters         pgtype.Int4        `json:"radius_meters"`
+	WifiWhitelistEnabled bool               `json:"wifi_whitelist_enabled"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
 }
 
 type StoreWifiIp struct {
