@@ -203,16 +203,36 @@ func (q *Queries) DeleteStoreWifiMacsNotIn(ctx context.Context, arg DeleteStoreW
 	return err
 }
 
+const deleteStores = `-- name: DeleteStores :execrows
+DELETE FROM store
+WHERE id = ANY($1::bigint[])
+`
+
+// Hard-deletes stores Odoo no longer reports (see ADR-0005) — replaces the
+// former SoftDeleteStores. store_wifi_ip/store_wifi_mac cascade
+// automatically (ON DELETE CASCADE, migration 00006); employees.store_id is
+// nulled automatically (ON DELETE SET NULL, migration 00009).
+func (q *Queries) DeleteStores(ctx context.Context, storeIds []int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStores, storeIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const findStoresNotInOdoo = `-- name: FindStoresNotInOdoo :many
 SELECT id FROM store
-WHERE wifi_whitelist_enabled = true
-  AND odoo_store_id IS NOT NULL
+WHERE odoo_store_id IS NOT NULL
   AND odoo_store_id != ALL($1::varchar[])
 `
 
 // Locally-created stores that have never been linked to Odoo
 // (odoo_store_id IS NULL) are deliberately excluded — only stores Odoo
-// once reported and has since stopped reporting count as deleted.
+// once reported and has since stopped reporting count as deleted. No
+// wifi_whitelist_enabled filter (see ADR-0005) — that flag is unrelated to a
+// store's existence, so filtering on it would permanently orphan a
+// wifi-disabled store once it left Odoo, since it would never be selected
+// here as stale.
 func (q *Queries) FindStoresNotInOdoo(ctx context.Context, activeOdooStoreIds []string) ([]int64, error) {
 	rows, err := q.db.Query(ctx, findStoresNotInOdoo, activeOdooStoreIds)
 	if err != nil {
@@ -609,20 +629,6 @@ type SetEmployeePasswordParams struct {
 
 func (q *Queries) SetEmployeePassword(ctx context.Context, arg SetEmployeePasswordParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setEmployeePassword, arg.ID, arg.Password)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const softDeleteStores = `-- name: SoftDeleteStores :execrows
-UPDATE store
-SET wifi_whitelist_enabled = false, updated_at = now()
-WHERE id = ANY($1::bigint[])
-`
-
-func (q *Queries) SoftDeleteStores(ctx context.Context, storeIds []int64) (int64, error) {
-	result, err := q.db.Exec(ctx, softDeleteStores, storeIds)
 	if err != nil {
 		return 0, err
 	}

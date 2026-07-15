@@ -577,7 +577,7 @@ func TestStoreService_SyncStores(t *testing.T) {
 		}
 	})
 
-	t.Run("soft-deletes stores odoo no longer reports", func(t *testing.T) {
+	t.Run("hard-deletes stores odoo no longer reports", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockOdoo := odoomocks.NewMockClient(ctrl)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
@@ -595,7 +595,7 @@ func TestStoreService_SyncStores(t *testing.T) {
 		}, nil)
 
 		mockRepo.EXPECT().FindStoresNotInOdoo(gomock.Any(), []string{"1"}).Return([]int64{5, 6}, nil)
-		mockRepo.EXPECT().SoftDeleteStores(gomock.Any(), []int64{5, 6}).Return(int64(2), nil)
+		mockRepo.EXPECT().DeleteStores(gomock.Any(), []int64{5, 6}).Return(int64(2), nil)
 
 		svc := newTestService(mockRepo, mockOdoo)
 
@@ -608,7 +608,7 @@ func TestStoreService_SyncStores(t *testing.T) {
 		}
 	})
 
-	t.Run("empty store list from odoo soft-deletes every previously active store", func(t *testing.T) {
+	t.Run("empty store list from odoo hard-deletes every previously known store", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockOdoo := odoomocks.NewMockClient(ctrl)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
@@ -622,7 +622,7 @@ func TestStoreService_SyncStores(t *testing.T) {
 		}).Return([]repo.UpsertStoresRow{}, nil)
 
 		mockRepo.EXPECT().FindStoresNotInOdoo(gomock.Any(), []string{}).Return([]int64{5, 6, 7}, nil)
-		mockRepo.EXPECT().SoftDeleteStores(gomock.Any(), []int64{5, 6, 7}).Return(int64(3), nil)
+		mockRepo.EXPECT().DeleteStores(gomock.Any(), []int64{5, 6, 7}).Return(int64(3), nil)
 
 		svc := newTestService(mockRepo, mockOdoo)
 

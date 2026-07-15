@@ -146,6 +146,21 @@ func (mr *MockQuerierMockRecorder) DeleteStoreWifiMacsNotIn(ctx, arg any) *gomoc
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteStoreWifiMacsNotIn", reflect.TypeOf((*MockQuerier)(nil).DeleteStoreWifiMacsNotIn), ctx, arg)
 }
 
+// DeleteStores mocks base method.
+func (m *MockQuerier) DeleteStores(ctx context.Context, storeIds []int64) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteStores", ctx, storeIds)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteStores indicates an expected call of DeleteStores.
+func (mr *MockQuerierMockRecorder) DeleteStores(ctx, storeIds any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteStores", reflect.TypeOf((*MockQuerier)(nil).DeleteStores), ctx, storeIds)
+}
+
 // FindStoresNotInOdoo mocks base method.
 func (m *MockQuerier) FindStoresNotInOdoo(ctx context.Context, activeOdooStoreIds []string) ([]int64, error) {
 	m.ctrl.T.Helper()
@@ -367,21 +382,6 @@ func (m *MockQuerier) SetEmployeePassword(ctx context.Context, arg repo.SetEmplo
 func (mr *MockQuerierMockRecorder) SetEmployeePassword(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetEmployeePassword", reflect.TypeOf((*MockQuerier)(nil).SetEmployeePassword), ctx, arg)
-}
-
-// SoftDeleteStores mocks base method.
-func (m *MockQuerier) SoftDeleteStores(ctx context.Context, storeIds []int64) (int64, error) {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "SoftDeleteStores", ctx, storeIds)
-	ret0, _ := ret[0].(int64)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// SoftDeleteStores indicates an expected call of SoftDeleteStores.
-func (mr *MockQuerierMockRecorder) SoftDeleteStores(ctx, storeIds any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SoftDeleteStores", reflect.TypeOf((*MockQuerier)(nil).SoftDeleteStores), ctx, storeIds)
 }
 
 // UpdateEmployee mocks base method.

@@ -34,9 +34,18 @@ type Querier interface {
 	DeleteStoreWifiMacsByValue(ctx context.Context, arg DeleteStoreWifiMacsByValueParams) ([]net.HardwareAddr, error)
 	// MAC-address counterpart of DeleteStoreWifiIPsNotIn.
 	DeleteStoreWifiMacsNotIn(ctx context.Context, arg DeleteStoreWifiMacsNotInParams) error
+	// Hard-deletes stores Odoo no longer reports (see ADR-0005) — replaces the
+	// former SoftDeleteStores. store_wifi_ip/store_wifi_mac cascade
+	// automatically (ON DELETE CASCADE, migration 00006); employees.store_id is
+	// nulled automatically (ON DELETE SET NULL, migration 00009).
+	DeleteStores(ctx context.Context, storeIds []int64) (int64, error)
 	// Locally-created stores that have never been linked to Odoo
 	// (odoo_store_id IS NULL) are deliberately excluded — only stores Odoo
-	// once reported and has since stopped reporting count as deleted.
+	// once reported and has since stopped reporting count as deleted. No
+	// wifi_whitelist_enabled filter (see ADR-0005) — that flag is unrelated to a
+	// store's existence, so filtering on it would permanently orphan a
+	// wifi-disabled store once it left Odoo, since it would never be selected
+	// here as stale.
 	FindStoresNotInOdoo(ctx context.Context, activeOdooStoreIds []string) ([]int64, error)
 	GetEmployeeByEmail(ctx context.Context, email string) (Employee, error)
 	GetEmployeeByID(ctx context.Context, id int64) (Employee, error)
@@ -72,7 +81,6 @@ type Querier interface {
 	RedeemPasswordResetToken(ctx context.Context, tokenHash string) (PasswordResetToken, error)
 	SetEmployeeActive(ctx context.Context, arg SetEmployeeActiveParams) (int64, error)
 	SetEmployeePassword(ctx context.Context, arg SetEmployeePasswordParams) (int64, error)
-	SoftDeleteStores(ctx context.Context, storeIds []int64) (int64, error)
 	UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) (Employee, error)
 	// Updates a store's geofence, and unconditionally bumps updated_at whenever
 	// expected_updated_at still matches the current row — the

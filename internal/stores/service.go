@@ -352,11 +352,12 @@ func parseAddresses[T any](values []string, parse func(string) (T, error)) ([]T,
 
 // SyncStores runs the store-sync workflow: fetch every store from Odoo in a
 // single call (the store count is small enough that pagination isn't
-// needed), then in one transaction bulk-upsert them and soft-delete any
-// local store Odoo no longer reports. Only one call runs at a time; a
-// concurrent call is rejected with ErrSyncInProgress rather than queued or
-// run in parallel. This endpoint only reconciles the store table — it does
-// not touch employees.store_id.
+// needed), then in one transaction bulk-upsert them and hard-delete any
+// local store Odoo no longer reports (see ADR-0005) — store_wifi_ip/
+// store_wifi_mac cascade and employees.store_id is nulled automatically via
+// DB constraints, no application-level query needed for either. Only one
+// call runs at a time; a concurrent call is rejected with ErrSyncInProgress
+// rather than queued or run in parallel.
 func (s *service) SyncStores(ctx context.Context) (SyncSummary, error) {
 	if !s.tryLock() {
 		return SyncSummary{}, ErrSyncInProgress
@@ -404,7 +405,7 @@ func (s *service) SyncStores(ctx context.Context) (SyncSummary, error) {
 			return nil
 		}
 
-		deleted, err := q.SoftDeleteStores(ctx, staleStoreIDs)
+		deleted, err := q.DeleteStores(ctx, staleStoreIDs)
 		if err != nil {
 			return err
 		}

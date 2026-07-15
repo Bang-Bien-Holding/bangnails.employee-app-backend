@@ -103,15 +103,21 @@ RETURNING id, odoo_store_id, (xmax = 0) AS inserted;
 -- name: FindStoresNotInOdoo :many
 -- Locally-created stores that have never been linked to Odoo
 -- (odoo_store_id IS NULL) are deliberately excluded — only stores Odoo
--- once reported and has since stopped reporting count as deleted.
+-- once reported and has since stopped reporting count as deleted. No
+-- wifi_whitelist_enabled filter (see ADR-0005) — that flag is unrelated to a
+-- store's existence, so filtering on it would permanently orphan a
+-- wifi-disabled store once it left Odoo, since it would never be selected
+-- here as stale.
 SELECT id FROM store
-WHERE wifi_whitelist_enabled = true
-  AND odoo_store_id IS NOT NULL
+WHERE odoo_store_id IS NOT NULL
   AND odoo_store_id != ALL(sqlc.arg(active_odoo_store_ids)::varchar[]);
 
--- name: SoftDeleteStores :execrows
-UPDATE store
-SET wifi_whitelist_enabled = false, updated_at = now()
+-- name: DeleteStores :execrows
+-- Hard-deletes stores Odoo no longer reports (see ADR-0005) — replaces the
+-- former SoftDeleteStores. store_wifi_ip/store_wifi_mac cascade
+-- automatically (ON DELETE CASCADE, migration 00006); employees.store_id is
+-- nulled automatically (ON DELETE SET NULL, migration 00009).
+DELETE FROM store
 WHERE id = ANY(sqlc.arg(store_ids)::bigint[]);
 
 -- name: GetStoreByID :one
