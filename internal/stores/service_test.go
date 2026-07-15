@@ -772,3 +772,202 @@ func TestStoreService_SyncStores(t *testing.T) {
 		}
 	})
 }
+
+func boolPtr(b bool) *bool {
+	return &b
+}
+
+func TestStoreService_SetStoreWifiWhitelistEnabled(t *testing.T) {
+	t.Run("toggling on bumps updated_at and returns fresh state", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		updatedAt := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+		newUpdatedAt := pgtype.Timestamptz{Time: time.Date(2026, 7, 14, 10, 5, 0, 0, time.UTC), Valid: true}
+
+		mockRepo.EXPECT().SetStoreWifiWhitelistEnabled(gomock.Any(), repo.SetStoreWifiWhitelistEnabledParams{
+			ID:                   12,
+			WifiWhitelistEnabled: true,
+			ExpectedUpdatedAt:    pgtype.Timestamptz{Time: updatedAt, Valid: true},
+		}).Return(repo.SetStoreWifiWhitelistEnabledRow{ID: 12, UpdatedAt: newUpdatedAt}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		result, err := svc.SetStoreWifiWhitelistEnabled(t.Context(), 12, setWifiWhitelistEnabledParams{
+			UpdatedAt: updatedAt, WifiWhitelistEnabled: boolPtr(true),
+		})
+		if err != nil {
+			t.Fatalf("SetStoreWifiWhitelistEnabled() error = %v", err)
+		}
+		want := StoreWifiToggleResult{ID: 12, WifiWhitelistEnabled: true, UpdatedAt: newUpdatedAt}
+		if result != want {
+			t.Errorf("SetStoreWifiWhitelistEnabled() = %+v, want %+v", result, want)
+		}
+	})
+
+	t.Run("toggling off returns fresh state with wifi_whitelist_enabled false", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().SetStoreWifiWhitelistEnabled(gomock.Any(), gomock.Any()).Return(
+			repo.SetStoreWifiWhitelistEnabledRow{ID: 12}, nil,
+		)
+
+		svc := newTestService(mockRepo, nil)
+
+		result, err := svc.SetStoreWifiWhitelistEnabled(t.Context(), 12, setWifiWhitelistEnabledParams{
+			UpdatedAt: time.Now(), WifiWhitelistEnabled: boolPtr(false),
+		})
+		if err != nil {
+			t.Fatalf("SetStoreWifiWhitelistEnabled() error = %v", err)
+		}
+		if result.WifiWhitelistEnabled {
+			t.Errorf("SetStoreWifiWhitelistEnabled() WifiWhitelistEnabled = true, want false")
+		}
+	})
+
+	t.Run("a stale updated_at is rejected with ErrStoreConflict and nothing changes", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().SetStoreWifiWhitelistEnabled(gomock.Any(), gomock.Any()).Return(
+			repo.SetStoreWifiWhitelistEnabledRow{}, pgx.ErrNoRows,
+		)
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(12)).Return(repo.Store{ID: 12}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		_, err := svc.SetStoreWifiWhitelistEnabled(t.Context(), 12, setWifiWhitelistEnabledParams{
+			UpdatedAt: time.Now(), WifiWhitelistEnabled: boolPtr(true),
+		})
+		if !errors.Is(err, ErrStoreConflict) {
+			t.Errorf("SetStoreWifiWhitelistEnabled() error = %v, want ErrStoreConflict", err)
+		}
+	})
+
+	t.Run("an unknown store id returns ErrStoreNotFound", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		mockRepo.EXPECT().SetStoreWifiWhitelistEnabled(gomock.Any(), gomock.Any()).Return(
+			repo.SetStoreWifiWhitelistEnabledRow{}, pgx.ErrNoRows,
+		)
+		mockRepo.EXPECT().GetStoreByID(gomock.Any(), int64(999)).Return(repo.Store{}, pgx.ErrNoRows)
+
+		svc := newTestService(mockRepo, nil)
+
+		_, err := svc.SetStoreWifiWhitelistEnabled(t.Context(), 999, setWifiWhitelistEnabledParams{
+			UpdatedAt: time.Now(), WifiWhitelistEnabled: boolPtr(true),
+		})
+		if !errors.Is(err, ErrStoreNotFound) {
+			t.Errorf("SetStoreWifiWhitelistEnabled() error = %v, want ErrStoreNotFound", err)
+		}
+	})
+}
+
+func TestStoreService_BulkSetWifiWhitelistEnabled(t *testing.T) {
+	t.Run("all ids match and exist: succeeds, returning fresh state for every store", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		t1 := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+		t2 := time.Date(2026, 7, 14, 10, 5, 0, 0, time.UTC)
+
+		mockRepo.EXPECT().GetStoresByIDsForUpdate(gomock.Any(), []int64{1, 2}).Return([]repo.GetStoresByIDsForUpdateRow{
+			{ID: 1, UpdatedAt: pgtype.Timestamptz{Time: t1, Valid: true}},
+			{ID: 2, UpdatedAt: pgtype.Timestamptz{Time: t2, Valid: true}},
+		}, nil)
+		mockRepo.EXPECT().BulkSetStoreWifiWhitelistEnabled(gomock.Any(), repo.BulkSetStoreWifiWhitelistEnabledParams{
+			WifiWhitelistEnabled: false,
+			StoreIds:             []int64{1, 2},
+		}).Return([]repo.BulkSetStoreWifiWhitelistEnabledRow{
+			{ID: 1, WifiWhitelistEnabled: false, UpdatedAt: pgtype.Timestamptz{Time: t1.Add(time.Minute), Valid: true}},
+			{ID: 2, WifiWhitelistEnabled: false, UpdatedAt: pgtype.Timestamptz{Time: t2.Add(time.Minute), Valid: true}},
+		}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		results, err := svc.BulkSetWifiWhitelistEnabled(t.Context(), bulkSetWifiWhitelistEnabledParams{
+			Stores: []storeUpdatedAtRef{
+				{ID: 1, UpdatedAt: t1},
+				{ID: 2, UpdatedAt: t2},
+			},
+			WifiWhitelistEnabled: boolPtr(false),
+		})
+		if err != nil {
+			t.Fatalf("BulkSetWifiWhitelistEnabled() error = %v", err)
+		}
+		if len(results) != 2 {
+			t.Fatalf("BulkSetWifiWhitelistEnabled() returned %d results, want 2", len(results))
+		}
+		for _, r := range results {
+			if r.WifiWhitelistEnabled {
+				t.Errorf("result %+v WifiWhitelistEnabled = true, want false", r)
+			}
+		}
+	})
+
+	t.Run("one stale updated_at among several ids aborts the whole call with zero side effects", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		t1 := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+		t2 := time.Date(2026, 7, 14, 10, 5, 0, 0, time.UTC)
+		staleT2 := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+		mockRepo.EXPECT().GetStoresByIDsForUpdate(gomock.Any(), []int64{1, 2}).Return([]repo.GetStoresByIDsForUpdateRow{
+			{ID: 1, UpdatedAt: pgtype.Timestamptz{Time: t1, Valid: true}},
+			{ID: 2, UpdatedAt: pgtype.Timestamptz{Time: t2, Valid: true}},
+		}, nil)
+		// No EXPECT for BulkSetStoreWifiWhitelistEnabled — gomock fails the
+		// test if the mismatch doesn't stop the request before any write.
+
+		svc := newTestService(mockRepo, nil)
+
+		_, err := svc.BulkSetWifiWhitelistEnabled(t.Context(), bulkSetWifiWhitelistEnabledParams{
+			Stores: []storeUpdatedAtRef{
+				{ID: 1, UpdatedAt: t1},
+				{ID: 2, UpdatedAt: staleT2},
+			},
+			WifiWhitelistEnabled: boolPtr(false),
+		})
+		var conflictErr *BulkWifiWhitelistConflictError
+		if !errors.As(err, &conflictErr) {
+			t.Fatalf("BulkSetWifiWhitelistEnabled() error = %v, want *BulkWifiWhitelistConflictError", err)
+		}
+		if !errors.Is(err, ErrStoreConflict) {
+			t.Errorf("BulkSetWifiWhitelistEnabled() error does not wrap ErrStoreConflict")
+		}
+		if want := []int64{2}; !reflect.DeepEqual(conflictErr.FailedIDs, want) {
+			t.Errorf("FailedIDs = %v, want %v", conflictErr.FailedIDs, want)
+		}
+	})
+
+	t.Run("one unknown id among several existing ones also aborts the whole call", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
+
+		t1 := time.Date(2026, 7, 14, 10, 0, 0, 0, time.UTC)
+
+		mockRepo.EXPECT().GetStoresByIDsForUpdate(gomock.Any(), []int64{1, 999}).Return([]repo.GetStoresByIDsForUpdateRow{
+			{ID: 1, UpdatedAt: pgtype.Timestamptz{Time: t1, Valid: true}},
+		}, nil)
+
+		svc := newTestService(mockRepo, nil)
+
+		_, err := svc.BulkSetWifiWhitelistEnabled(t.Context(), bulkSetWifiWhitelistEnabledParams{
+			Stores: []storeUpdatedAtRef{
+				{ID: 1, UpdatedAt: t1},
+				{ID: 999, UpdatedAt: t1},
+			},
+			WifiWhitelistEnabled: boolPtr(false),
+		})
+		var conflictErr *BulkWifiWhitelistConflictError
+		if !errors.As(err, &conflictErr) {
+			t.Fatalf("BulkSetWifiWhitelistEnabled() error = %v, want *BulkWifiWhitelistConflictError", err)
+		}
+		if want := []int64{999}; !reflect.DeepEqual(conflictErr.FailedIDs, want) {
+			t.Errorf("FailedIDs = %v, want %v", conflictErr.FailedIDs, want)
+		}
+	})
+}

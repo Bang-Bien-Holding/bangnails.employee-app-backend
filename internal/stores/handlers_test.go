@@ -750,3 +750,218 @@ func TestStoreHandler_GetStoreByID(t *testing.T) {
 		})
 	}
 }
+
+func TestStoreHandler_SetStoreWifiWhitelistEnabled(t *testing.T) {
+	tests := []struct {
+		name          string
+		idParam       string
+		body          string
+		setupMock     func(mockSvc *MockService)
+		expectedCode  int
+		checkResponse func(t *testing.T, rec *httptest.ResponseRecorder)
+	}{
+		{
+			name:    "a successful toggle returns 200 with fresh state",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","wifi_whitelist_enabled":true}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().SetStoreWifiWhitelistEnabled(gomock.Any(), int64(12), gomock.Any()).Return(StoreWifiToggleResult{
+					ID: 12, WifiWhitelistEnabled: true,
+				}, nil)
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var got storeToggleResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal response body: %v", err)
+				}
+				if got.ID != 12 || !got.WifiWhitelistEnabled {
+					t.Errorf("got = %+v, want id 12, wifi_whitelist_enabled true", got)
+				}
+			},
+		},
+		{
+			name:    "missing updated_at returns 400, service not called",
+			idParam: "12",
+			body:    `{"wifi_whitelist_enabled":true}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "missing wifi_whitelist_enabled returns 400, service not called",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z"}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "non-numeric id path param returns 400, service not called",
+			idParam: "not-a-number",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","wifi_whitelist_enabled":true}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "unknown store id maps ErrStoreNotFound to 404",
+			idParam: "999",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","wifi_whitelist_enabled":true}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().SetStoreWifiWhitelistEnabled(gomock.Any(), int64(999), gomock.Any()).Return(StoreWifiToggleResult{}, ErrStoreNotFound)
+			},
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name:    "a stale updated_at maps ErrStoreConflict to 409",
+			idParam: "12",
+			body:    `{"updated_at":"2020-01-01T00:00:00Z","wifi_whitelist_enabled":true}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().SetStoreWifiWhitelistEnabled(gomock.Any(), int64(12), gomock.Any()).Return(StoreWifiToggleResult{}, ErrStoreConflict)
+			},
+			expectedCode: http.StatusConflict,
+		},
+		{
+			name:    "an unexpected service error maps to 500",
+			idParam: "12",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","wifi_whitelist_enabled":true}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().SetStoreWifiWhitelistEnabled(gomock.Any(), int64(12), gomock.Any()).Return(StoreWifiToggleResult{}, errors.New("db exploded"))
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockService(ctrl)
+			tt.setupMock(mockSvc)
+
+			h := NewHandler(mockSvc)
+
+			req := httptest.NewRequest(http.MethodPatch, "/v1/stores/"+tt.idParam+"/wifi-whitelist-enabled", strings.NewReader(tt.body))
+			req = withURLParam(req, "id", tt.idParam)
+			rec := httptest.NewRecorder()
+
+			h.SetStoreWifiWhitelistEnabled(rec, req)
+
+			if rec.Code != tt.expectedCode {
+				t.Errorf("status code = %d, want %d, body = %s", rec.Code, tt.expectedCode, rec.Body.String())
+			}
+			if tt.checkResponse != nil {
+				tt.checkResponse(t, rec)
+			}
+		})
+	}
+}
+
+func TestStoreHandler_BulkSetWifiWhitelistEnabled(t *testing.T) {
+	tests := []struct {
+		name          string
+		body          string
+		setupMock     func(mockSvc *MockService)
+		expectedCode  int
+		checkResponse func(t *testing.T, rec *httptest.ResponseRecorder)
+	}{
+		{
+			name: "a successful bulk toggle returns 200 with fresh state per store",
+			body: `{"stores":[{"id":1,"updated_at":"2026-07-14T10:00:00Z"},{"id":2,"updated_at":"2026-07-14T10:05:00Z"}],"wifi_whitelist_enabled":false}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().BulkSetWifiWhitelistEnabled(gomock.Any(), gomock.Any()).Return([]StoreWifiToggleResult{
+					{ID: 1, WifiWhitelistEnabled: false},
+					{ID: 2, WifiWhitelistEnabled: false},
+				}, nil)
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var got []storeToggleResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal response body: %v", err)
+				}
+				if len(got) != 2 || got[0].ID != 1 || got[1].ID != 2 {
+					t.Errorf("got = %+v, want ids 1 and 2", got)
+				}
+			},
+		},
+		{
+			name: "empty stores array returns 400, service not called",
+			body: `{"stores":[],"wifi_whitelist_enabled":false}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name: "missing stores returns 400, service not called",
+			body: `{"wifi_whitelist_enabled":false}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name: "missing wifi_whitelist_enabled returns 400, service not called",
+			body: `{"stores":[{"id":1,"updated_at":"2026-07-14T10:00:00Z"}]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name: "a store entry missing updated_at returns 400, service not called",
+			body: `{"stores":[{"id":1}],"wifi_whitelist_enabled":false}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name: "any unknown id or stale updated_at in the batch returns 409 with failed_ids",
+			body: `{"stores":[{"id":1,"updated_at":"2026-07-14T10:00:00Z"},{"id":2,"updated_at":"2026-07-14T10:05:00Z"}],"wifi_whitelist_enabled":false}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().BulkSetWifiWhitelistEnabled(gomock.Any(), gomock.Any()).Return(
+					nil, &BulkWifiWhitelistConflictError{FailedIDs: []int64{2}},
+				)
+			},
+			expectedCode: http.StatusConflict,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var got bulkWifiWhitelistConflictResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal response body: %v", err)
+				}
+				want := []int64{2}
+				if len(got.FailedIDs) != 1 || got.FailedIDs[0] != want[0] {
+					t.Errorf("failed_ids = %v, want %v", got.FailedIDs, want)
+				}
+			},
+		},
+		{
+			name: "an unexpected service error maps to 500",
+			body: `{"stores":[{"id":1,"updated_at":"2026-07-14T10:00:00Z"}],"wifi_whitelist_enabled":false}`,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().BulkSetWifiWhitelistEnabled(gomock.Any(), gomock.Any()).Return(nil, errors.New("db exploded"))
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockService(ctrl)
+			tt.setupMock(mockSvc)
+
+			h := NewHandler(mockSvc)
+
+			req := httptest.NewRequest(http.MethodPatch, "/v1/stores", strings.NewReader(tt.body))
+			rec := httptest.NewRecorder()
+
+			h.BulkSetWifiWhitelistEnabled(rec, req)
+
+			if rec.Code != tt.expectedCode {
+				t.Errorf("status code = %d, want %d, body = %s", rec.Code, tt.expectedCode, rec.Body.String())
+			}
+			if tt.checkResponse != nil {
+				tt.checkResponse(t, rec)
+			}
+		})
+	}
+}

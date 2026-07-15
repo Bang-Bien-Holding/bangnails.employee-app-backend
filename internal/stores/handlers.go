@@ -145,3 +145,72 @@ func (h *Handler) DeleteWifiWhitelistEntries(w http.ResponseWriter, r *http.Requ
 
 	json.Write(w, http.StatusOK, results)
 }
+
+// SetStoreWifiWhitelistEnabled handles PATCH
+// /v1/stores/{id}/wifi-whitelist-enabled — the list screen's per-row
+// Activate/Deactivate toggle (see ADR-0006).
+func (h *Handler) SetStoreWifiWhitelistEnabled(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "invalid store id", http.StatusBadRequest)
+		return
+	}
+
+	var params setWifiWhitelistEnabledParams
+	if err := json.Read(w, r, &params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := validate.Struct(params); err != nil {
+		http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	result, err := h.service.SetStoreWifiWhitelistEnabled(r.Context(), id, params)
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, ErrStoreNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, ErrStoreConflict):
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+
+	json.Write(w, http.StatusOK, newStoreToggleResponse(result))
+}
+
+// BulkSetWifiWhitelistEnabled handles the collection-level PATCH /v1/stores —
+// the list screen's "deactivate all" (or any explicit multi-select) action
+// (see ADR-0006). Atomic and all-or-nothing: any unknown id or stale
+// updated_at in the batch fails the whole request with 409 and
+// {"failed_ids": [...]}, rather than DeleteWifiWhitelistEntries' best-effort,
+// partial-application model.
+func (h *Handler) BulkSetWifiWhitelistEnabled(w http.ResponseWriter, r *http.Request) {
+	var params bulkSetWifiWhitelistEnabledParams
+	if err := json.Read(w, r, &params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := validate.Struct(params); err != nil {
+		http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	results, err := h.service.BulkSetWifiWhitelistEnabled(r.Context(), params)
+	if err != nil {
+		var conflictErr *BulkWifiWhitelistConflictError
+		if errors.As(err, &conflictErr) {
+			json.Write(w, http.StatusConflict, bulkWifiWhitelistConflictResponse{FailedIDs: conflictErr.FailedIDs})
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	json.Write(w, http.StatusOK, newStoreToggleResponses(results))
+}

@@ -84,8 +84,10 @@ func (app *application) mount() http.Handler {
 		storesHandler := stores.NewHandler(storesService)
 		r.Post("/stores/syncs", storesHandler.SyncStores)
 		r.Get("/stores", storesHandler.ListStores)
+		r.Patch("/stores", storesHandler.BulkSetWifiWhitelistEnabled)
 		r.Get("/stores/{id}", storesHandler.GetStoreByID)
 		r.Patch("/stores/{id}", storesHandler.PatchStore)
+		r.Patch("/stores/{id}/wifi-whitelist-enabled", storesHandler.SetStoreWifiWhitelistEnabled)
 		r.Delete("/stores/{id}/wifi-whitelist", storesHandler.DeleteWifiWhitelistEntries)
 	})
 

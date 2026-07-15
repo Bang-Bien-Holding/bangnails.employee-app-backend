@@ -237,3 +237,40 @@ DELETE FROM store_wifi_mac
 WHERE store_id = sqlc.arg(store_id)
   AND mac_address = ANY(sqlc.arg(mac_addresses)::macaddr[])
 RETURNING mac_address;
+
+-- name: SetStoreWifiWhitelistEnabled :one
+-- PATCH /v1/stores/{id}/wifi-whitelist-enabled's single query — same
+-- conditional-update-returning-0-rows-on-mismatch shape as
+-- UpdateStoreGeofence, but scoped to just this one column since this
+-- endpoint only ever does one thing (see ADR-0006). No returned row
+-- (pgx.ErrNoRows) means either the store doesn't exist, or
+-- expected_updated_at is stale; the caller disambiguates with a follow-up
+-- GetStoreByID.
+UPDATE store
+SET wifi_whitelist_enabled = sqlc.arg(wifi_whitelist_enabled),
+    updated_at = now()
+WHERE id = sqlc.arg(id)
+  AND updated_at = sqlc.arg(expected_updated_at)
+RETURNING id, updated_at;
+
+-- name: GetStoresByIDsForUpdate :many
+-- Pre-check pass for bulk PATCH /v1/stores (see ADR-0006): fetches every
+-- submitted id's current (id, updated_at) inside the same transaction as the
+-- bulk UPDATE that follows, so the service can compare against the caller's
+-- submitted pairs before writing anything — any missing id or stale
+-- updated_at aborts the whole request. FOR UPDATE locks these rows so a
+-- concurrent mutation can't slip in between this check and the bulk UPDATE.
+SELECT id, updated_at FROM store
+WHERE id = ANY(sqlc.arg(store_ids)::bigint[])
+FOR UPDATE;
+
+-- name: BulkSetStoreWifiWhitelistEnabled :many
+-- Applies the bulk PATCH /v1/stores write once GetStoresByIDsForUpdate has
+-- confirmed every id exists and every updated_at matched — see ADR-0006.
+-- RETURNING fresh state for every affected store so the handler can build
+-- the success response without a follow-up fetch.
+UPDATE store
+SET wifi_whitelist_enabled = sqlc.arg(wifi_whitelist_enabled),
+    updated_at = now()
+WHERE id = ANY(sqlc.arg(store_ids)::bigint[])
+RETURNING id, wifi_whitelist_enabled, updated_at;

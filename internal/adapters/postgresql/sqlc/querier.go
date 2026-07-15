@@ -11,6 +11,11 @@ import (
 )
 
 type Querier interface {
+	// Applies the bulk PATCH /v1/stores write once GetStoresByIDsForUpdate has
+	// confirmed every id exists and every updated_at matched — see ADR-0006.
+	// RETURNING fresh state for every affected store so the handler can build
+	// the success response without a follow-up fetch.
+	BulkSetStoreWifiWhitelistEnabled(ctx context.Context, arg BulkSetStoreWifiWhitelistEnabledParams) ([]BulkSetStoreWifiWhitelistEnabledRow, error)
 	CreateEmployee(ctx context.Context, arg CreateEmployeeParams) (Employee, error)
 	CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) (PasswordResetToken, error)
 	DeleteEmployee(ctx context.Context, id int64) (int64, error)
@@ -54,6 +59,13 @@ type Querier interface {
 	// editable field, not a soft-delete tombstone, so a wifi-disabled store is
 	// still a normal fetch here, not a 404.
 	GetStoreByID(ctx context.Context, id int64) (Store, error)
+	// Pre-check pass for bulk PATCH /v1/stores (see ADR-0006): fetches every
+	// submitted id's current (id, updated_at) inside the same transaction as the
+	// bulk UPDATE that follows, so the service can compare against the caller's
+	// submitted pairs before writing anything — any missing id or stale
+	// updated_at aborts the whole request. FOR UPDATE locks these rows so a
+	// concurrent mutation can't slip in between this check and the bulk UPDATE.
+	GetStoresByIDsForUpdate(ctx context.Context, storeIds []int64) ([]GetStoresByIDsForUpdateRow, error)
 	// Other half of the replace diff: inserts whatever's newly submitted.
 	// ON CONFLICT DO NOTHING is what makes values already present in both the
 	// old and new set stay untouched rather than being deleted and reinserted.
@@ -81,6 +93,14 @@ type Querier interface {
 	RedeemPasswordResetToken(ctx context.Context, tokenHash string) (PasswordResetToken, error)
 	SetEmployeeActive(ctx context.Context, arg SetEmployeeActiveParams) (int64, error)
 	SetEmployeePassword(ctx context.Context, arg SetEmployeePasswordParams) (int64, error)
+	// PATCH /v1/stores/{id}/wifi-whitelist-enabled's single query — same
+	// conditional-update-returning-0-rows-on-mismatch shape as
+	// UpdateStoreGeofence, but scoped to just this one column since this
+	// endpoint only ever does one thing (see ADR-0006). No returned row
+	// (pgx.ErrNoRows) means either the store doesn't exist, or
+	// expected_updated_at is stale; the caller disambiguates with a follow-up
+	// GetStoreByID.
+	SetStoreWifiWhitelistEnabled(ctx context.Context, arg SetStoreWifiWhitelistEnabledParams) (SetStoreWifiWhitelistEnabledRow, error)
 	UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) (Employee, error)
 	// Updates a store's geofence, and unconditionally bumps updated_at whenever
 	// expected_updated_at still matches the current row — the

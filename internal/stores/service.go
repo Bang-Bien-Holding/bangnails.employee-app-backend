@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
+	"time"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
@@ -296,6 +297,108 @@ func newWifiWhitelistDeleteResult(value, addrType string, success bool) WifiWhit
 		result.Error = "not found in whitelist"
 	}
 	return result
+}
+
+// SetStoreWifiWhitelistEnabled sets one store's wifi_whitelist_enabled flag —
+// the list screen's per-row Activate/Deactivate toggle (see ADR-0006),
+// separate from UpdateStore so the caller can flip one boolean without the
+// weight of the full-store PATCH. Optimistic-locked the same way as
+// UpdateStore: a mismatched params.UpdatedAt updates nothing and surfaces as
+// ErrStoreConflict, disambiguated from ErrStoreNotFound via a follow-up
+// GetStoreByID.
+func (s *service) SetStoreWifiWhitelistEnabled(ctx context.Context, id int64, params setWifiWhitelistEnabledParams) (StoreWifiToggleResult, error) {
+	var result StoreWifiToggleResult
+	err := s.withTx(ctx, func(q repo.Querier) error {
+		row, err := q.SetStoreWifiWhitelistEnabled(ctx, repo.SetStoreWifiWhitelistEnabledParams{
+			ID:                   id,
+			WifiWhitelistEnabled: *params.WifiWhitelistEnabled,
+			ExpectedUpdatedAt:    pgtype.Timestamptz{Time: params.UpdatedAt, Valid: true},
+		})
+		if err != nil {
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
+			if _, existsErr := q.GetStoreByID(ctx, id); errors.Is(existsErr, pgx.ErrNoRows) {
+				return ErrStoreNotFound
+			}
+			return ErrStoreConflict
+		}
+		result = StoreWifiToggleResult{
+			ID:                   row.ID,
+			WifiWhitelistEnabled: *params.WifiWhitelistEnabled,
+			UpdatedAt:            row.UpdatedAt,
+		}
+		return nil
+	})
+	if err != nil {
+		return StoreWifiToggleResult{}, err
+	}
+	return result, nil
+}
+
+// BulkSetWifiWhitelistEnabled atomically sets wifi_whitelist_enabled on every
+// store in params.Stores — the list screen's "deactivate all" (or any
+// explicit multi-select) action (see ADR-0006). All-or-nothing: inside one
+// transaction, GetStoresByIDsForUpdate fetches every submitted id's current
+// (id, updated_at) and locks those rows (FOR UPDATE), which this function
+// compares against the caller's submitted pairs — any missing id or any
+// updated_at mismatch aborts before the UPDATE runs, with every
+// missing/mismatched id collected into BulkWifiWhitelistConflictError.
+// Only if every id matched does BulkSetStoreWifiWhitelistEnabled apply the
+// write and return fresh state for every store.
+func (s *service) BulkSetWifiWhitelistEnabled(ctx context.Context, params bulkSetWifiWhitelistEnabledParams) ([]StoreWifiToggleResult, error) {
+	submitted := make(map[int64]time.Time, len(params.Stores))
+	ids := make([]int64, len(params.Stores))
+	for i, store := range params.Stores {
+		submitted[store.ID] = store.UpdatedAt
+		ids[i] = store.ID
+	}
+
+	var results []StoreWifiToggleResult
+	err := s.withTx(ctx, func(q repo.Querier) error {
+		current, err := q.GetStoresByIDsForUpdate(ctx, ids)
+		if err != nil {
+			return err
+		}
+
+		found := make(map[int64]bool, len(current))
+		var failedIDs []int64
+		for _, row := range current {
+			found[row.ID] = true
+			if !row.UpdatedAt.Time.Equal(submitted[row.ID]) {
+				failedIDs = append(failedIDs, row.ID)
+			}
+		}
+		for id := range submitted {
+			if !found[id] {
+				failedIDs = append(failedIDs, id)
+			}
+		}
+		if len(failedIDs) > 0 {
+			return &BulkWifiWhitelistConflictError{FailedIDs: failedIDs}
+		}
+
+		rows, err := q.BulkSetStoreWifiWhitelistEnabled(ctx, repo.BulkSetStoreWifiWhitelistEnabledParams{
+			WifiWhitelistEnabled: *params.WifiWhitelistEnabled,
+			StoreIds:             ids,
+		})
+		if err != nil {
+			return err
+		}
+		results = make([]StoreWifiToggleResult, len(rows))
+		for i, row := range rows {
+			results[i] = StoreWifiToggleResult{
+				ID:                   row.ID,
+				WifiWhitelistEnabled: row.WifiWhitelistEnabled,
+				UpdatedAt:            row.UpdatedAt,
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
 }
 
 // stringifyAddresses formats a list of typed addresses (netip.Addr or

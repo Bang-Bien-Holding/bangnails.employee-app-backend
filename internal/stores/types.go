@@ -24,8 +24,26 @@ var ErrStoreNotFound = errors.New("store not found")
 // ErrStoreConflict is returned by UpdateStore when the caller's UpdatedAt no
 // longer matches the store's current updated_at — another admin edited this
 // store (wifi whitelist or geofence) since the caller last fetched it. The
-// caller must re-fetch and redo its edit against the latest state.
+// caller must re-fetch and redo its edit against the latest state. Also
+// reused by SetStoreWifiWhitelistEnabled and BulkSetWifiWhitelistEnabled (the
+// latter wrapped in BulkWifiWhitelistConflictError to carry the failed ids).
 var ErrStoreConflict = errors.New("store was modified since it was last fetched")
+
+// BulkWifiWhitelistConflictError is BulkSetWifiWhitelistEnabled's conflict
+// error — wraps the ErrStoreConflict sentinel (so errors.Is still works the
+// same way as every other endpoint) while also carrying every id that was
+// missing or had a stale updated_at, for the 409 response's failed_ids body.
+type BulkWifiWhitelistConflictError struct {
+	FailedIDs []int64
+}
+
+func (e *BulkWifiWhitelistConflictError) Error() string {
+	return ErrStoreConflict.Error()
+}
+
+func (e *BulkWifiWhitelistConflictError) Unwrap() error {
+	return ErrStoreConflict
+}
 
 // SyncSummary reports the outcome of one SyncStores run.
 type SyncSummary struct {
@@ -122,12 +140,56 @@ type WifiWhitelistDeleteResult struct {
 	Error   string `json:"error,omitempty"`
 }
 
+// setWifiWhitelistEnabledParams is the body for PATCH
+// /v1/stores/{id}/wifi-whitelist-enabled. Both fields are required — this
+// endpoint only ever does one thing, unlike patchStoreParams' omit-vs-present
+// pointer fields, so there's no "leave untouched" case to support.
+// WifiWhitelistEnabled is still a pointer despite that: encoding/json can't
+// tell "field omitted" from an explicit "false" on a plain bool, and false is
+// this endpoint's other, equally valid value (turning wifi off) — go
+// validator's required tag treats false as bool's zero value and would
+// wrongly reject it on a non-pointer field, the same reason patchStoreParams'
+// geofence fields are pointers.
+type setWifiWhitelistEnabledParams struct {
+	UpdatedAt            time.Time `json:"updated_at" validate:"required"`
+	WifiWhitelistEnabled *bool     `json:"wifi_whitelist_enabled" validate:"required"`
+}
+
+// storeUpdatedAtRef identifies one store in a BulkSetWifiWhitelistEnabled
+// request by id, paired with the caller's last-known updated_at for that
+// store — the same optimistic-lock token patchStoreParams.UpdatedAt uses,
+// just one per store instead of one for the whole request.
+type storeUpdatedAtRef struct {
+	ID        int64     `json:"id" validate:"required"`
+	UpdatedAt time.Time `json:"updated_at" validate:"required"`
+}
+
+// bulkSetWifiWhitelistEnabledParams is the body for the collection-level
+// PATCH /v1/stores — see setWifiWhitelistEnabledParams for why
+// WifiWhitelistEnabled is a pointer despite being required.
+type bulkSetWifiWhitelistEnabledParams struct {
+	Stores               []storeUpdatedAtRef `json:"stores" validate:"required,min=1,dive"`
+	WifiWhitelistEnabled *bool               `json:"wifi_whitelist_enabled" validate:"required"`
+}
+
+// StoreWifiToggleResult is the fresh state returned by
+// SetStoreWifiWhitelistEnabled/BulkSetWifiWhitelistEnabled on success — just
+// the three fields either endpoint's response reports, not a full
+// StoreDetail, since neither touches the wifi whitelist tables or geofence.
+type StoreWifiToggleResult struct {
+	ID                   int64
+	WifiWhitelistEnabled bool
+	UpdatedAt            pgtype.Timestamptz
+}
+
 type Service interface {
 	SyncStores(ctx context.Context) (SyncSummary, error)
 	GetStoreByID(ctx context.Context, id int64) (StoreDetail, error)
 	UpdateStore(ctx context.Context, id int64, params patchStoreParams) (StoreDetail, error)
 	ListStores(ctx context.Context) ([]StoreDetail, error)
 	DeleteWifiWhitelistEntries(ctx context.Context, id int64, params deleteWifiWhitelistParams) ([]WifiWhitelistDeleteResult, error)
+	SetStoreWifiWhitelistEnabled(ctx context.Context, id int64, params setWifiWhitelistEnabledParams) (StoreWifiToggleResult, error)
+	BulkSetWifiWhitelistEnabled(ctx context.Context, params bulkSetWifiWhitelistEnabledParams) ([]StoreWifiToggleResult, error)
 }
 
 // storeResponse is the JSON shape returned by GetStoreByID (and, later,
@@ -175,6 +237,37 @@ func newStoreResponses(details []StoreDetail) []storeResponse {
 		responses[i] = newStoreResponse(detail)
 	}
 	return responses
+}
+
+// storeToggleResponse is the JSON shape returned by both
+// SetStoreWifiWhitelistEnabled (single store, one object) and
+// BulkSetWifiWhitelistEnabled (bulk, an array of these) on success.
+type storeToggleResponse struct {
+	ID                   int64              `json:"id"`
+	WifiWhitelistEnabled bool               `json:"wifi_whitelist_enabled"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+func newStoreToggleResponse(r StoreWifiToggleResult) storeToggleResponse {
+	return storeToggleResponse{
+		ID:                   r.ID,
+		WifiWhitelistEnabled: r.WifiWhitelistEnabled,
+		UpdatedAt:            r.UpdatedAt,
+	}
+}
+
+func newStoreToggleResponses(results []StoreWifiToggleResult) []storeToggleResponse {
+	responses := make([]storeToggleResponse, len(results))
+	for i, r := range results {
+		responses[i] = newStoreToggleResponse(r)
+	}
+	return responses
+}
+
+// bulkWifiWhitelistConflictResponse is the JSON shape returned by
+// BulkSetWifiWhitelistEnabled's 409 — see BulkWifiWhitelistConflictError.
+type bulkWifiWhitelistConflictResponse struct {
+	FailedIDs []int64 `json:"failed_ids"`
 }
 
 func pgTextPtr(t pgtype.Text) *string {

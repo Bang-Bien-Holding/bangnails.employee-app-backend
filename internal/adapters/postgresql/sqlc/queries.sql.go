@@ -13,6 +13,49 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bulkSetStoreWifiWhitelistEnabled = `-- name: BulkSetStoreWifiWhitelistEnabled :many
+UPDATE store
+SET wifi_whitelist_enabled = $1,
+    updated_at = now()
+WHERE id = ANY($2::bigint[])
+RETURNING id, wifi_whitelist_enabled, updated_at
+`
+
+type BulkSetStoreWifiWhitelistEnabledParams struct {
+	WifiWhitelistEnabled bool    `json:"wifi_whitelist_enabled"`
+	StoreIds             []int64 `json:"store_ids"`
+}
+
+type BulkSetStoreWifiWhitelistEnabledRow struct {
+	ID                   int64              `json:"id"`
+	WifiWhitelistEnabled bool               `json:"wifi_whitelist_enabled"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+// Applies the bulk PATCH /v1/stores write once GetStoresByIDsForUpdate has
+// confirmed every id exists and every updated_at matched — see ADR-0006.
+// RETURNING fresh state for every affected store so the handler can build
+// the success response without a follow-up fetch.
+func (q *Queries) BulkSetStoreWifiWhitelistEnabled(ctx context.Context, arg BulkSetStoreWifiWhitelistEnabledParams) ([]BulkSetStoreWifiWhitelistEnabledRow, error) {
+	rows, err := q.db.Query(ctx, bulkSetStoreWifiWhitelistEnabled, arg.WifiWhitelistEnabled, arg.StoreIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BulkSetStoreWifiWhitelistEnabledRow
+	for rows.Next() {
+		var i BulkSetStoreWifiWhitelistEnabledRow
+		if err := rows.Scan(&i.ID, &i.WifiWhitelistEnabled, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createEmployee = `-- name: CreateEmployee :one
 INSERT INTO employees (employee_id, full_name, email, username, role)
 VALUES ($1, $2, $3, $4, $5)
@@ -351,6 +394,43 @@ func (q *Queries) GetStoreByID(ctx context.Context, id int64) (Store, error) {
 	return i, err
 }
 
+const getStoresByIDsForUpdate = `-- name: GetStoresByIDsForUpdate :many
+SELECT id, updated_at FROM store
+WHERE id = ANY($1::bigint[])
+FOR UPDATE
+`
+
+type GetStoresByIDsForUpdateRow struct {
+	ID        int64              `json:"id"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+// Pre-check pass for bulk PATCH /v1/stores (see ADR-0006): fetches every
+// submitted id's current (id, updated_at) inside the same transaction as the
+// bulk UPDATE that follows, so the service can compare against the caller's
+// submitted pairs before writing anything — any missing id or stale
+// updated_at aborts the whole request. FOR UPDATE locks these rows so a
+// concurrent mutation can't slip in between this check and the bulk UPDATE.
+func (q *Queries) GetStoresByIDsForUpdate(ctx context.Context, storeIds []int64) ([]GetStoresByIDsForUpdateRow, error) {
+	rows, err := q.db.Query(ctx, getStoresByIDsForUpdate, storeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetStoresByIDsForUpdateRow
+	for rows.Next() {
+		var i GetStoresByIDsForUpdateRow
+		if err := rows.Scan(&i.ID, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertStoreWifiIPs = `-- name: InsertStoreWifiIPs :exec
 INSERT INTO store_wifi_ip (store_id, ip_address)
 SELECT $1, unnest($2::inet[])
@@ -633,6 +713,40 @@ func (q *Queries) SetEmployeePassword(ctx context.Context, arg SetEmployeePasswo
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setStoreWifiWhitelistEnabled = `-- name: SetStoreWifiWhitelistEnabled :one
+UPDATE store
+SET wifi_whitelist_enabled = $1,
+    updated_at = now()
+WHERE id = $2
+  AND updated_at = $3
+RETURNING id, updated_at
+`
+
+type SetStoreWifiWhitelistEnabledParams struct {
+	WifiWhitelistEnabled bool               `json:"wifi_whitelist_enabled"`
+	ID                   int64              `json:"id"`
+	ExpectedUpdatedAt    pgtype.Timestamptz `json:"expected_updated_at"`
+}
+
+type SetStoreWifiWhitelistEnabledRow struct {
+	ID        int64              `json:"id"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+// PATCH /v1/stores/{id}/wifi-whitelist-enabled's single query — same
+// conditional-update-returning-0-rows-on-mismatch shape as
+// UpdateStoreGeofence, but scoped to just this one column since this
+// endpoint only ever does one thing (see ADR-0006). No returned row
+// (pgx.ErrNoRows) means either the store doesn't exist, or
+// expected_updated_at is stale; the caller disambiguates with a follow-up
+// GetStoreByID.
+func (q *Queries) SetStoreWifiWhitelistEnabled(ctx context.Context, arg SetStoreWifiWhitelistEnabledParams) (SetStoreWifiWhitelistEnabledRow, error) {
+	row := q.db.QueryRow(ctx, setStoreWifiWhitelistEnabled, arg.WifiWhitelistEnabled, arg.ID, arg.ExpectedUpdatedAt)
+	var i SetStoreWifiWhitelistEnabledRow
+	err := row.Scan(&i.ID, &i.UpdatedAt)
+	return i, err
 }
 
 const updateEmployee = `-- name: UpdateEmployee :one

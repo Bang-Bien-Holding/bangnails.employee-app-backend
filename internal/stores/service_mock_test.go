@@ -40,6 +40,21 @@ func (m *MockService) EXPECT() *MockServiceMockRecorder {
 	return m.recorder
 }
 
+// BulkSetWifiWhitelistEnabled mocks base method.
+func (m *MockService) BulkSetWifiWhitelistEnabled(ctx context.Context, params bulkSetWifiWhitelistEnabledParams) ([]StoreWifiToggleResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BulkSetWifiWhitelistEnabled", ctx, params)
+	ret0, _ := ret[0].([]StoreWifiToggleResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BulkSetWifiWhitelistEnabled indicates an expected call of BulkSetWifiWhitelistEnabled.
+func (mr *MockServiceMockRecorder) BulkSetWifiWhitelistEnabled(ctx, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BulkSetWifiWhitelistEnabled", reflect.TypeOf((*MockService)(nil).BulkSetWifiWhitelistEnabled), ctx, params)
+}
+
 // DeleteWifiWhitelistEntries mocks base method.
 func (m *MockService) DeleteWifiWhitelistEntries(ctx context.Context, id int64, params deleteWifiWhitelistParams) ([]WifiWhitelistDeleteResult, error) {
 	m.ctrl.T.Helper()
@@ -83,6 +98,21 @@ func (m *MockService) ListStores(ctx context.Context) ([]StoreDetail, error) {
 func (mr *MockServiceMockRecorder) ListStores(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStores", reflect.TypeOf((*MockService)(nil).ListStores), ctx)
+}
+
+// SetStoreWifiWhitelistEnabled mocks base method.
+func (m *MockService) SetStoreWifiWhitelistEnabled(ctx context.Context, id int64, params setWifiWhitelistEnabledParams) (StoreWifiToggleResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetStoreWifiWhitelistEnabled", ctx, id, params)
+	ret0, _ := ret[0].(StoreWifiToggleResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SetStoreWifiWhitelistEnabled indicates an expected call of SetStoreWifiWhitelistEnabled.
+func (mr *MockServiceMockRecorder) SetStoreWifiWhitelistEnabled(ctx, id, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetStoreWifiWhitelistEnabled", reflect.TypeOf((*MockService)(nil).SetStoreWifiWhitelistEnabled), ctx, id, params)
 }
 
 // SyncStores mocks base method.

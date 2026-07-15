@@ -43,6 +43,21 @@ func (m *MockQuerier) EXPECT() *MockQuerierMockRecorder {
 	return m.recorder
 }
 
+// BulkSetStoreWifiWhitelistEnabled mocks base method.
+func (m *MockQuerier) BulkSetStoreWifiWhitelistEnabled(ctx context.Context, arg repo.BulkSetStoreWifiWhitelistEnabledParams) ([]repo.BulkSetStoreWifiWhitelistEnabledRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BulkSetStoreWifiWhitelistEnabled", ctx, arg)
+	ret0, _ := ret[0].([]repo.BulkSetStoreWifiWhitelistEnabledRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// BulkSetStoreWifiWhitelistEnabled indicates an expected call of BulkSetStoreWifiWhitelistEnabled.
+func (mr *MockQuerierMockRecorder) BulkSetStoreWifiWhitelistEnabled(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BulkSetStoreWifiWhitelistEnabled", reflect.TypeOf((*MockQuerier)(nil).BulkSetStoreWifiWhitelistEnabled), ctx, arg)
+}
+
 // CreateEmployee mocks base method.
 func (m *MockQuerier) CreateEmployee(ctx context.Context, arg repo.CreateEmployeeParams) (repo.Employee, error) {
 	m.ctrl.T.Helper()
@@ -236,6 +251,21 @@ func (mr *MockQuerierMockRecorder) GetStoreByID(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStoreByID", reflect.TypeOf((*MockQuerier)(nil).GetStoreByID), ctx, id)
 }
 
+// GetStoresByIDsForUpdate mocks base method.
+func (m *MockQuerier) GetStoresByIDsForUpdate(ctx context.Context, storeIds []int64) ([]repo.GetStoresByIDsForUpdateRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetStoresByIDsForUpdate", ctx, storeIds)
+	ret0, _ := ret[0].([]repo.GetStoresByIDsForUpdateRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetStoresByIDsForUpdate indicates an expected call of GetStoresByIDsForUpdate.
+func (mr *MockQuerierMockRecorder) GetStoresByIDsForUpdate(ctx, storeIds any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetStoresByIDsForUpdate", reflect.TypeOf((*MockQuerier)(nil).GetStoresByIDsForUpdate), ctx, storeIds)
+}
+
 // InsertStoreWifiIPs mocks base method.
 func (m *MockQuerier) InsertStoreWifiIPs(ctx context.Context, arg repo.InsertStoreWifiIPsParams) error {
 	m.ctrl.T.Helper()
@@ -382,6 +412,21 @@ func (m *MockQuerier) SetEmployeePassword(ctx context.Context, arg repo.SetEmplo
 func (mr *MockQuerierMockRecorder) SetEmployeePassword(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetEmployeePassword", reflect.TypeOf((*MockQuerier)(nil).SetEmployeePassword), ctx, arg)
+}
+
+// SetStoreWifiWhitelistEnabled mocks base method.
+func (m *MockQuerier) SetStoreWifiWhitelistEnabled(ctx context.Context, arg repo.SetStoreWifiWhitelistEnabledParams) (repo.SetStoreWifiWhitelistEnabledRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetStoreWifiWhitelistEnabled", ctx, arg)
+	ret0, _ := ret[0].(repo.SetStoreWifiWhitelistEnabledRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SetStoreWifiWhitelistEnabled indicates an expected call of SetStoreWifiWhitelistEnabled.
+func (mr *MockQuerierMockRecorder) SetStoreWifiWhitelistEnabled(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetStoreWifiWhitelistEnabled", reflect.TypeOf((*MockQuerier)(nil).SetStoreWifiWhitelistEnabled), ctx, arg)
 }
 
 // UpdateEmployee mocks base method.
