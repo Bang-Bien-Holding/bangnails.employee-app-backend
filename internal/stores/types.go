@@ -249,11 +249,7 @@ type storeToggleResponse struct {
 }
 
 func newStoreToggleResponse(r StoreWifiToggleResult) storeToggleResponse {
-	return storeToggleResponse{
-		ID:                   r.ID,
-		WifiWhitelistEnabled: r.WifiWhitelistEnabled,
-		UpdatedAt:            r.UpdatedAt,
-	}
+	return storeToggleResponse(r)
 }
 
 func newStoreToggleResponses(results []StoreWifiToggleResult) []storeToggleResponse {
