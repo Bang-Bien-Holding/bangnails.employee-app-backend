@@ -37,6 +37,13 @@ var (
 	// positionIds references an id that isn't a real position — a clear
 	// client error, not a raw FK-violation 500 (see ADR-0008).
 	ErrUnknownPositionID = errors.New("unknown position id")
+	// ErrOdooEmployeeIDNotFound is returned by CreateEmployee (always) and
+	// UpdateEmployee (only when odooEmployeeId is changing) when Odoo
+	// doesn't confirm a matching hr.employee, or the existence check itself
+	// couldn't be completed (timeout, 5xx, network error) — both fail
+	// closed the same way, since an unverified id must not enter the system
+	// either way (see ADR-0007).
+	ErrOdooEmployeeIDNotFound = errors.New("odoo employee id not found or could not be verified")
 )
 
 // createEmployeeParams.PositionIDs is optional and, when present, always

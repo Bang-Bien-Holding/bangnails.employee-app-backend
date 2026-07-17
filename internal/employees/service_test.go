@@ -86,8 +86,12 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 		// email is sent from a background goroutine (service.go), so the
 		// test must wait on this before asserting mock expectations were met.
 		setupMailerMock func(mockMailer *mailermocks.MockClient) <-chan struct{}
-		expectedErr     error
-		checkResponse   func(t *testing.T, detail EmployeeDetail)
+		// setupOdooMock, when set, overrides the default "Odoo confirms the
+		// submitted id exists" expectation CreateEmployee always checks
+		// first (ADR-0007) — used by the fail-closed test cases below.
+		setupOdooMock func(mockOdoo *odoomocks.MockClient)
+		expectedErr   error
+		checkResponse func(t *testing.T, detail EmployeeDetail)
 	}{
 		{
 			name:        "TC-POST-01: Create employee successfully",
@@ -415,6 +419,40 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:        "TC-POST-13: Create employee rejected when Odoo doesn't confirm the id exists",
+			inputParams: defaultParams,
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				// No CreateEmployee expectation: the mock controller fails
+				// the test if it's called, proving the Odoo existence check
+				// runs before any write.
+			},
+			setupOdooMock: func(mockOdoo *odoomocks.MockClient) {
+				mockOdoo.EXPECT().
+					FetchEmployeesByOdooEmployeeIDs(gomock.Any(), []int64{defaultParams.OdooEmployeeID}).
+					Return([]odoo.Employee{}, nil)
+			},
+			expectedErr: ErrOdooEmployeeIDNotFound,
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID != 0 {
+					t.Error("Expected zero-value employee response when an error occurs")
+				}
+			},
+		},
+		{
+			name:        "TC-POST-14: Create employee rejected when the Odoo existence check itself fails",
+			inputParams: defaultParams,
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				// No CreateEmployee expectation: an unreachable Odoo must
+				// fail closed, never letting the write through.
+			},
+			setupOdooMock: func(mockOdoo *odoomocks.MockClient) {
+				mockOdoo.EXPECT().
+					FetchEmployeesByOdooEmployeeIDs(gomock.Any(), []int64{defaultParams.OdooEmployeeID}).
+					Return(nil, errors.New("odoo: connection refused"))
+			},
+			expectedErr: ErrOdooEmployeeIDNotFound,
+		},
 	}
 
 	for _, tc := range tests {
@@ -425,6 +463,13 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 			mockOdoo := odoomocks.NewMockClient(ctrl)
 
 			tc.setupMock(mockRepo)
+			if tc.setupOdooMock != nil {
+				tc.setupOdooMock(mockOdoo)
+			} else {
+				mockOdoo.EXPECT().
+					FetchEmployeesByOdooEmployeeIDs(gomock.Any(), []int64{tc.inputParams.OdooEmployeeID}).
+					Return([]odoo.Employee{{OdooEmployeeID: tc.inputParams.OdooEmployeeID}}, nil)
+			}
 			var mailerDone <-chan struct{}
 			if tc.setupMailerMock != nil {
 				mailerDone = tc.setupMailerMock(mockMailer)
@@ -737,9 +782,13 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 	dbErr := errors.New("connection refused")
 
 	tests := []struct {
-		name          string
-		params        updateEmployeeParams
-		setupMock     func(mockRepo *mocks.MockQuerier)
+		name      string
+		params    updateEmployeeParams
+		setupMock func(mockRepo *mocks.MockQuerier)
+		// setupOdooMock, when set, overrides the default "no Odoo call
+		// expected" assumption — used by the cases below that change
+		// odooEmployeeId and so must re-validate against Odoo (ADR-0007).
+		setupOdooMock func(mockOdoo *odoomocks.MockClient)
 		expectedErr   error
 		checkResponse func(t *testing.T, detail EmployeeDetail)
 	}{
@@ -747,6 +796,9 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			name:   "TC-PUT-01: Update employee successfully",
 			params: inputParams,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{
@@ -773,9 +825,17 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			},
 		},
 		{
-			name:   "TC-PUT-02: Translates a no-rows repo error to ErrEmployeeNotFound",
+			name:   "TC-PUT-02: Translates a no-rows repo error from the update itself to ErrEmployeeNotFound",
 			params: inputParams,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				// The initial GetEmployeeByID lookup still finds the row —
+				// this exercises the race where it's gone by the time the
+				// actual UPDATE runs (e.g. deleted concurrently), a
+				// different path than the id never existing at all (see
+				// TC-PUT-09).
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{}, pgx.ErrNoRows)
@@ -787,6 +847,9 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			params: inputParams,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
+				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{}, dupEmailErr)
 			},
@@ -796,6 +859,9 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			name:   "TC-PUT-04: Translates a Postgres unique-violation on username to ErrUsernameAlreadyExists",
 			params: inputParams,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{}, dupUsernameErr)
@@ -807,6 +873,9 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			params: inputParams,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
+				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{}, dupEmployeeIDErr)
 			},
@@ -816,6 +885,9 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			name:   "TC-PUT-05: Update employee fails on database error",
 			params: inputParams,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{}, dbErr)
@@ -830,6 +902,9 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 				return p
 			}(),
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
 				mockRepo.EXPECT().
 					CountPositionsByIDs(gomock.Any(), []int64{10, 20}).
 					Return(int64(2), nil)
@@ -870,6 +945,9 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			}(),
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
+				mockRepo.EXPECT().
 					CountPositionsByIDs(gomock.Any(), []int64{10, 999}).
 					Return(int64(1), nil)
 				// No UpdateEmployee/Delete/InsertEmployeePositions expectation:
@@ -888,6 +966,9 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				// No CountPositionsByIDs/InsertEmployeePositions expectation:
 				// an empty submitted set short-circuits both.
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{
@@ -910,6 +991,107 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:   "TC-PUT-09: Unknown employee id (initial lookup) maps to ErrEmployeeNotFound without touching Odoo",
+			params: inputParams,
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{}, pgx.ErrNoRows)
+				// No UpdateEmployee expectation: the lookup failing must
+				// short-circuit before any write is attempted.
+			},
+			expectedErr: ErrEmployeeNotFound,
+		},
+		{
+			name:   "TC-PUT-10: Initial lookup fails on a database error",
+			params: inputParams,
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{}, dbErr)
+			},
+			expectedErr: dbErr,
+		},
+		{
+			name: "TC-PUT-11: Changing odooEmployeeId re-validates against Odoo and succeeds",
+			params: func() updateEmployeeParams {
+				p := inputParams
+				p.OdooEmployeeID = 2
+				return p
+			}(),
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
+				mockRepo.EXPECT().
+					UpdateEmployee(gomock.Any(), repo.UpdateEmployeeParams{
+						ID:             1,
+						OdooEmployeeID: 2,
+						FullName:       inputParams.FullName,
+						Email:          inputParams.Email,
+						Username:       inputParams.Username,
+					}).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: 2}, nil)
+				mockRepo.EXPECT().
+					DeleteEmployeePositionsNotIn(gomock.Any(), repo.DeleteEmployeePositionsNotInParams{
+						EmployeeID:  1,
+						PositionIds: nil,
+					}).
+					Return(nil)
+			},
+			setupOdooMock: func(mockOdoo *odoomocks.MockClient) {
+				mockOdoo.EXPECT().
+					FetchEmployeesByOdooEmployeeIDs(gomock.Any(), []int64{2}).
+					Return([]odoo.Employee{{OdooEmployeeID: 2}}, nil)
+			},
+			expectedErr: nil,
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.OdooEmployeeID != 2 {
+					t.Errorf("expected OdooEmployeeID 2, got %d", detail.Employee.OdooEmployeeID)
+				}
+			},
+		},
+		{
+			name: "TC-PUT-12: Changing odooEmployeeId to one Odoo doesn't confirm fails closed",
+			params: func() updateEmployeeParams {
+				p := inputParams
+				p.OdooEmployeeID = 2
+				return p
+			}(),
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
+				// No UpdateEmployee/position expectation: Odoo not
+				// confirming the new id must block the write entirely.
+			},
+			setupOdooMock: func(mockOdoo *odoomocks.MockClient) {
+				mockOdoo.EXPECT().
+					FetchEmployeesByOdooEmployeeIDs(gomock.Any(), []int64{2}).
+					Return([]odoo.Employee{}, nil)
+			},
+			expectedErr: ErrOdooEmployeeIDNotFound,
+		},
+		{
+			name: "TC-PUT-13: Changing odooEmployeeId fails closed when the Odoo check itself errors",
+			params: func() updateEmployeeParams {
+				p := inputParams
+				p.OdooEmployeeID = 2
+				return p
+			}(),
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
+			},
+			setupOdooMock: func(mockOdoo *odoomocks.MockClient) {
+				mockOdoo.EXPECT().
+					FetchEmployeesByOdooEmployeeIDs(gomock.Any(), []int64{2}).
+					Return(nil, errors.New("odoo: connection refused"))
+			},
+			expectedErr: ErrOdooEmployeeIDNotFound,
+		},
 	}
 
 	for _, tc := range tests {
@@ -920,6 +1102,13 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			mockOdoo := odoomocks.NewMockClient(ctrl)
 
 			tc.setupMock(mockRepo)
+			if tc.setupOdooMock != nil {
+				tc.setupOdooMock(mockOdoo)
+			}
+			// No default Odoo expectation here (unlike CreateEmployee's
+			// loop): most cases leave odooEmployeeId unchanged, and
+			// UpdateEmployee must not call Odoo at all in that case — an
+			// unexpected call would fail the test via the mock controller.
 
 			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
@@ -976,6 +1165,9 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 			}(),
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: baseParams.OdooEmployeeID}, nil)
+				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{ID: 1}, nil)
 				mockRepo.EXPECT().
@@ -994,6 +1186,9 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 				return p
 			}(),
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: baseParams.OdooEmployeeID}, nil)
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{ID: 1}, nil)
@@ -1023,6 +1218,9 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 				return p
 			}(),
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: baseParams.OdooEmployeeID}, nil)
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{ID: 1}, nil)
@@ -1595,6 +1793,9 @@ func TestEmployeeService_CreateEmployee_SendsActivationEmailAsynchronously(t *te
 	mockMailer := mailermocks.NewMockClient(ctrl)
 	mockOdoo := odoomocks.NewMockClient(ctrl)
 
+	mockOdoo.EXPECT().
+		FetchEmployeesByOdooEmployeeIDs(gomock.Any(), []int64{params.OdooEmployeeID}).
+		Return([]odoo.Employee{{OdooEmployeeID: params.OdooEmployeeID}}, nil)
 	mockRepo.EXPECT().
 		CreateEmployee(gomock.Any(), repoParams).
 		Return(repo.Employee{

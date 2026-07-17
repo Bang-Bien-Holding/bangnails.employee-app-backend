@@ -39,7 +39,7 @@ func (h *Handler) CreateEmployee(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, ErrEmailAlreadyExists), errors.Is(err, ErrUsernameAlreadyExists), errors.Is(err, ErrOdooEmployeeIDAlreadyExists):
 			status = http.StatusConflict
-		case errors.Is(err, ErrUnknownPositionID):
+		case errors.Is(err, ErrUnknownPositionID), errors.Is(err, ErrOdooEmployeeIDNotFound):
 			status = http.StatusBadRequest
 		}
 		http.Error(w, err.Error(), status)
@@ -95,7 +95,7 @@ func (h *Handler) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusNotFound
 		case errors.Is(err, ErrEmailAlreadyExists), errors.Is(err, ErrUsernameAlreadyExists), errors.Is(err, ErrOdooEmployeeIDAlreadyExists):
 			status = http.StatusConflict
-		case errors.Is(err, ErrUnknownPositionID):
+		case errors.Is(err, ErrUnknownPositionID), errors.Is(err, ErrOdooEmployeeIDNotFound):
 			status = http.StatusBadRequest
 		}
 		http.Error(w, err.Error(), status)

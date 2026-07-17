@@ -105,7 +105,29 @@ func validatePositionIDs(ctx context.Context, q repo.Querier, ids []int64) error
 	return nil
 }
 
+// validateOdooEmployeeID confirms odooEmployeeID exists in Odoo
+// (existence-only — the returned FullName/Email are never used to
+// overwrite what the caller submitted). Fails closed on ADR-0007's terms:
+// no match, or the Odoo call itself failing, both reject with the same
+// sentinel error.
+func (s *service) validateOdooEmployeeID(ctx context.Context, odooEmployeeID int64) error {
+	found, err := s.odoo.FetchEmployeesByOdooEmployeeIDs(ctx, []int64{odooEmployeeID})
+	if err != nil {
+		return ErrOdooEmployeeIDNotFound
+	}
+	for _, e := range found {
+		if e.OdooEmployeeID == odooEmployeeID {
+			return nil
+		}
+	}
+	return ErrOdooEmployeeIDNotFound
+}
+
 func (s *service) CreateEmployee(ctx context.Context, params createEmployeeParams) (EmployeeDetail, error) {
+	if err := s.validateOdooEmployeeID(ctx, params.OdooEmployeeID); err != nil {
+		return EmployeeDetail{}, err
+	}
+
 	var detail EmployeeDetail
 	err := s.withTx(ctx, func(q repo.Querier) error {
 		if err := validatePositionIDs(ctx, q, params.PositionIDs); err != nil {
@@ -181,8 +203,24 @@ func (s *service) ListEmployees(ctx context.Context) ([]EmployeeDetail, error) {
 }
 
 func (s *service) UpdateEmployee(ctx context.Context, id int64, params updateEmployeeParams) (EmployeeDetail, error) {
+	current, err := s.repo.GetEmployeeByID(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return EmployeeDetail{}, ErrEmployeeNotFound
+		}
+		return EmployeeDetail{}, err
+	}
+	// Only re-validate when odooEmployeeId is actually changing — a routine
+	// edit (name, positions, ...) that leaves it untouched must not be
+	// slowed down or blocked by an unrelated Odoo outage (ADR-0007).
+	if params.OdooEmployeeID != current.OdooEmployeeID {
+		if err := s.validateOdooEmployeeID(ctx, params.OdooEmployeeID); err != nil {
+			return EmployeeDetail{}, err
+		}
+	}
+
 	var detail EmployeeDetail
-	err := s.withTx(ctx, func(q repo.Querier) error {
+	err = s.withTx(ctx, func(q repo.Querier) error {
 		if err := validatePositionIDs(ctx, q, params.PositionIDs); err != nil {
 			return err
 		}

@@ -228,6 +228,17 @@ func TestEmployeeHandler_UpdateEmployee(t *testing.T) {
 			expectedCode: http.StatusBadRequest,
 		},
 		{
+			name:        "TS-HDL-24e: Map unverified odoo employee id to 400",
+			idParam:     "1",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					UpdateEmployee(gomock.Any(), int64(1), validParams).
+					Return(EmployeeDetail{}, ErrOdooEmployeeIDNotFound)
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
 			name:        "TS-HDL-25: Map internal server error on database failure",
 			idParam:     "1",
 			bodyPayload: validParams,
@@ -995,6 +1006,16 @@ func TestEmployeeHandler_CreateEmployee(t *testing.T) {
 					Return(EmployeeDetail{}, ErrUsernameAlreadyExists)
 			},
 			expectedCode: http.StatusConflict,
+		},
+		{
+			name:        "TS-HDL-04e: Map unverified odoo employee id to 400",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					CreateEmployee(gomock.Any(), validParams).
+					Return(EmployeeDetail{}, ErrOdooEmployeeIDNotFound)
+			},
+			expectedCode: http.StatusBadRequest,
 		},
 		{
 			name:        "TS-HDL-04d: Map unknown position id to 400",
