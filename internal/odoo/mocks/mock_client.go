@@ -41,19 +41,19 @@ func (m *MockClient) EXPECT() *MockClientMockRecorder {
 	return m.recorder
 }
 
-// FetchEmployeesByEmployeeIDs mocks base method.
-func (m *MockClient) FetchEmployeesByEmployeeIDs(ctx context.Context, employeeIDs []string) ([]odoo.Employee, error) {
+// FetchEmployeesByOdooEmployeeIDs mocks base method.
+func (m *MockClient) FetchEmployeesByOdooEmployeeIDs(ctx context.Context, odooEmployeeIDs []int64) ([]odoo.Employee, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "FetchEmployeesByEmployeeIDs", ctx, employeeIDs)
+	ret := m.ctrl.Call(m, "FetchEmployeesByOdooEmployeeIDs", ctx, odooEmployeeIDs)
 	ret0, _ := ret[0].([]odoo.Employee)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
-// FetchEmployeesByEmployeeIDs indicates an expected call of FetchEmployeesByEmployeeIDs.
-func (mr *MockClientMockRecorder) FetchEmployeesByEmployeeIDs(ctx, employeeIDs any) *gomock.Call {
+// FetchEmployeesByOdooEmployeeIDs indicates an expected call of FetchEmployeesByOdooEmployeeIDs.
+func (mr *MockClientMockRecorder) FetchEmployeesByOdooEmployeeIDs(ctx, odooEmployeeIDs any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FetchEmployeesByEmployeeIDs", reflect.TypeOf((*MockClient)(nil).FetchEmployeesByEmployeeIDs), ctx, employeeIDs)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "FetchEmployeesByOdooEmployeeIDs", reflect.TypeOf((*MockClient)(nil).FetchEmployeesByOdooEmployeeIDs), ctx, odooEmployeeIDs)
 }
 
 // FetchStores mocks base method.

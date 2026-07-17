@@ -46,46 +46,46 @@ func TestFakeClient_FetchStores(t *testing.T) {
 	})
 }
 
-func TestFakeClient_FetchEmployeesByEmployeeIDs(t *testing.T) {
+func TestFakeClient_FetchEmployeesByOdooEmployeeIDs(t *testing.T) {
 	c := NewFakeClient()
 
 	t.Run("returns a matching employee for each known id", func(t *testing.T) {
-		ids := []string{fakeEmployeeID(1), fakeEmployeeID(2)}
-		employees, err := c.FetchEmployeesByEmployeeIDs(t.Context(), ids)
+		ids := []int64{fakeOdooEmployeeID(1), fakeOdooEmployeeID(2)}
+		employees, err := c.FetchEmployeesByOdooEmployeeIDs(t.Context(), ids)
 		if err != nil {
-			t.Fatalf("FetchEmployeesByEmployeeIDs() error = %v", err)
+			t.Fatalf("FetchEmployeesByOdooEmployeeIDs() error = %v", err)
 		}
 		if len(employees) != 2 {
 			t.Fatalf("len(employees) = %d, want 2", len(employees))
 		}
 		for i, e := range employees {
-			if e.EmployeeID != ids[i] {
-				t.Errorf("employees[%d].EmployeeID = %q, want %q", i, e.EmployeeID, ids[i])
+			if e.OdooEmployeeID != ids[i] {
+				t.Errorf("employees[%d].OdooEmployeeID = %d, want %d", i, e.OdooEmployeeID, ids[i])
 			}
-			if e.FullName == "" || e.Email == "" || e.Username == "" || e.Role == "" {
+			if e.FullName == "" || e.Email == "" || e.Username == "" {
 				t.Errorf("employee %+v has an empty field", e)
 			}
 		}
 	})
 
 	t.Run("omits ids Odoo doesn't recognize", func(t *testing.T) {
-		ids := []string{fakeEmployeeID(1), "unknown-id"}
-		employees, err := c.FetchEmployeesByEmployeeIDs(t.Context(), ids)
+		ids := []int64{fakeOdooEmployeeID(1), 999999}
+		employees, err := c.FetchEmployeesByOdooEmployeeIDs(t.Context(), ids)
 		if err != nil {
-			t.Fatalf("FetchEmployeesByEmployeeIDs() error = %v", err)
+			t.Fatalf("FetchEmployeesByOdooEmployeeIDs() error = %v", err)
 		}
 		if len(employees) != 1 {
 			t.Fatalf("len(employees) = %d, want 1", len(employees))
 		}
-		if employees[0].EmployeeID != fakeEmployeeID(1) {
-			t.Errorf("employees[0].EmployeeID = %q, want %q", employees[0].EmployeeID, fakeEmployeeID(1))
+		if employees[0].OdooEmployeeID != fakeOdooEmployeeID(1) {
+			t.Errorf("employees[0].OdooEmployeeID = %d, want %d", employees[0].OdooEmployeeID, fakeOdooEmployeeID(1))
 		}
 	})
 
 	t.Run("empty input returns an empty result", func(t *testing.T) {
-		employees, err := c.FetchEmployeesByEmployeeIDs(t.Context(), nil)
+		employees, err := c.FetchEmployeesByOdooEmployeeIDs(t.Context(), nil)
 		if err != nil {
-			t.Fatalf("FetchEmployeesByEmployeeIDs() error = %v", err)
+			t.Fatalf("FetchEmployeesByOdooEmployeeIDs() error = %v", err)
 		}
 		if len(employees) != 0 {
 			t.Fatalf("len(employees) = %d, want 0", len(employees))

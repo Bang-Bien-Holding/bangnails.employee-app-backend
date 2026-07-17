@@ -41,8 +41,7 @@ type Querier interface {
 	DeleteStoreWifiMacsNotIn(ctx context.Context, arg DeleteStoreWifiMacsNotInParams) error
 	// Hard-deletes stores Odoo no longer reports (see ADR-0005) — replaces the
 	// former SoftDeleteStores. store_wifi_ip/store_wifi_mac cascade
-	// automatically (ON DELETE CASCADE, migration 00006); employees.store_id is
-	// nulled automatically (ON DELETE SET NULL, migration 00007).
+	// automatically (ON DELETE CASCADE, migration 00006).
 	DeleteStores(ctx context.Context, storeIds []int64) (int64, error)
 	// Locally-created stores that have never been linked to Odoo
 	// (odoo_store_id IS NULL) are deliberately excluded — only stores Odoo
@@ -73,9 +72,9 @@ type Querier interface {
 	// MAC-address counterpart of InsertStoreWifiIPs.
 	InsertStoreWifiMacs(ctx context.Context, arg InsertStoreWifiMacsParams) error
 	// Translates the internal ids a SyncEmployees caller supplies into the
-	// Odoo-facing employee_id values runSync actually sends to Odoo. An id with
-	// no matching row is silently omitted from the result.
-	ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]string, error)
+	// Odoo-facing odoo_employee_id values runSync actually sends to Odoo. An id
+	// with no matching row is silently omitted from the result.
+	ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int64, error)
 	ListEmployees(ctx context.Context) ([]Employee, error)
 	ListStoreWifiIPsByStoreID(ctx context.Context, storeID int64) ([]netip.Addr, error)
 	ListStoreWifiMacsByStoreID(ctx context.Context, storeID int64) ([]net.HardwareAddr, error)
@@ -121,7 +120,7 @@ type Querier interface {
 	// Bulk-upserts one batch of Odoo employees (at most 50, see
 	// employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
 	// trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
-	// without a second query. employee_id is the shared key with Odoo (see
+	// without a second query. odoo_employee_id is the shared key with Odoo (see
 	// odoo.Employee), so it's the conflict target.
 	UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams) ([]UpsertEmployeesRow, error)
 	// Bulk-upserts one page of Odoo stores in a single round trip. "(xmax = 0)"

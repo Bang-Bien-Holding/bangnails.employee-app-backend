@@ -12,17 +12,15 @@ import (
 )
 
 type Employee struct {
-	ID         int64              `json:"id"`
-	EmployeeID string             `json:"employee_id"`
-	FullName   string             `json:"full_name"`
-	Email      string             `json:"email"`
-	Username   string             `json:"username"`
-	Password   []byte             `json:"password"`
-	Role       string             `json:"role"`
-	IsActive   bool               `json:"is_active"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
-	StoreID    pgtype.Int8        `json:"store_id"`
+	ID             int64              `json:"id"`
+	OdooEmployeeID int64              `json:"odoo_employee_id"`
+	FullName       string             `json:"full_name"`
+	Email          string             `json:"email"`
+	Username       string             `json:"username"`
+	Password       []byte             `json:"password"`
+	IsActive       bool               `json:"is_active"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 type PasswordResetToken struct {

@@ -25,11 +25,13 @@ import (
 const uniqueViolationCode = "23505"
 
 // Constraint names come from internal/adapters/postgresql/migrations/00001_create_employees.sql
-// (Postgres' default naming: <table>_<column>_key).
+// (Postgres' default naming: <table>_<column>_key); employees_odoo_employee_id_key
+// was renamed in migration 00009 alongside the employee_id -> odoo_employee_id
+// column rename.
 const (
-	employeesEmailKeyConstraint      = "employees_email_key"
-	employeesEmployeeIDKeyConstraint = "employees_employee_id_key"
-	employeesUsernameKeyConstraint   = "employees_username_key"
+	employeesEmailKeyConstraint          = "employees_email_key"
+	employeesOdooEmployeeIDKeyConstraint = "employees_odoo_employee_id_key"
+	employeesUsernameKeyConstraint       = "employees_username_key"
 )
 
 // activationTokenTTL matches the existing password-reset scope (30 minutes),
@@ -63,11 +65,10 @@ func NewService(r repo.Querier, m mailer.Client, o odoo.Client) Service {
 
 func (s *service) CreateEmployee(ctx context.Context, params createEmployeeParams) (repo.Employee, error) {
 	employee, err := s.repo.CreateEmployee(ctx, repo.CreateEmployeeParams{
-		EmployeeID: params.EmployeeID,
-		FullName:   params.FullName,
-		Email:      params.Email,
-		Username:   params.Username,
-		Role:       params.Role,
+		OdooEmployeeID: params.OdooEmployeeID,
+		FullName:       params.FullName,
+		Email:          params.Email,
+		Username:       params.Username,
 	})
 	if err != nil {
 		return repo.Employee{}, translateEmployeeUniqueViolation(err)
@@ -87,12 +88,11 @@ func (s *service) ListEmployees(ctx context.Context) ([]repo.Employee, error) {
 
 func (s *service) UpdateEmployee(ctx context.Context, id int64, params updateEmployeeParams) (repo.Employee, error) {
 	employee, err := s.repo.UpdateEmployee(ctx, repo.UpdateEmployeeParams{
-		ID:         id,
-		EmployeeID: params.EmployeeID,
-		FullName:   params.FullName,
-		Email:      params.Email,
-		Username:   params.Username,
-		Role:       params.Role,
+		ID:             id,
+		OdooEmployeeID: params.OdooEmployeeID,
+		FullName:       params.FullName,
+		Email:          params.Email,
+		Username:       params.Username,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -254,8 +254,8 @@ func (s *service) BulkSendPasswordResetLinks(ctx context.Context, ids []int64) [
 	return results
 }
 
-// SyncEmployees looks up the Odoo employee_id for each given internal id,
-// then pulls those from Odoo and bulk-upserts them into employees, in a
+// SyncEmployees looks up the Odoo odoo_employee_id for each given internal
+// id, then pulls those from Odoo and bulk-upserts them into employees, in a
 // detached goroutine so the caller gets a quick response (Step 3 of the sync
 // spec) instead of waiting on Odoo/DB latency. An id with no matching row is
 // silently dropped by ListEmployeeIDsByIDs rather than failing the request.
@@ -267,7 +267,7 @@ func (s *service) SyncEmployees(ctx context.Context, ids []int64) error {
 		return ErrSyncInProgress
 	}
 
-	employeeIDs, err := s.repo.ListEmployeeIDsByIDs(ctx, ids)
+	odooEmployeeIDs, err := s.repo.ListEmployeeIDsByIDs(ctx, ids)
 	if err != nil {
 		s.unlock()
 		return err
@@ -279,7 +279,7 @@ func (s *service) SyncEmployees(ctx context.Context, ids []int64) error {
 	// employeeSyncTimeout so a stalled Odoo/DB call can't hold s.syncing
 	// true forever; runSync owns cancel and releases it when it returns.
 	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), employeeSyncTimeout)
-	go s.runSync(syncCtx, cancel, employeeIDs)
+	go s.runSync(syncCtx, cancel, odooEmployeeIDs)
 
 	return nil
 }
@@ -299,36 +299,34 @@ func (s *service) SyncStatus(ctx context.Context) SyncStatus {
 // else observes this goroutine once SyncEmployees has already returned to
 // its caller. A batch's fetch or upsert error aborts the remaining batches
 // rather than skipping past them.
-func (s *service) runSync(ctx context.Context, cancel context.CancelFunc, ids []string) {
+func (s *service) runSync(ctx context.Context, cancel context.CancelFunc, ids []int64) {
 	defer cancel()
 	defer s.unlock()
 
-	var notFound []string
+	var notFound []int64
 	var inserted, updated int
 
 	for start := 0; start < len(ids); start += employeeSyncBatchSize {
 		end := min(start+employeeSyncBatchSize, len(ids))
 		batch := ids[start:end]
 
-		found, err := s.odoo.FetchEmployeesByEmployeeIDs(ctx, batch)
+		found, err := s.odoo.FetchEmployeesByOdooEmployeeIDs(ctx, batch)
 		if err != nil {
 			slog.Error("employees: sync fetch from odoo", "batch_size", len(batch), "error", err)
 			return
 		}
 
-		foundIDs := make(map[string]bool, len(found))
-		employeeIDs := make([]string, len(found))
+		foundIDs := make(map[int64]bool, len(found))
+		odooEmployeeIDs := make([]int64, len(found))
 		fullNames := make([]string, len(found))
 		emails := make([]string, len(found))
 		usernames := make([]string, len(found))
-		roles := make([]string, len(found))
 		for i, e := range found {
-			foundIDs[e.EmployeeID] = true
-			employeeIDs[i] = e.EmployeeID
+			foundIDs[e.OdooEmployeeID] = true
+			odooEmployeeIDs[i] = e.OdooEmployeeID
 			fullNames[i] = e.FullName
 			emails[i] = e.Email
 			usernames[i] = e.Username
-			roles[i] = e.Role
 		}
 
 		for _, id := range batch {
@@ -342,14 +340,13 @@ func (s *service) runSync(ctx context.Context, cancel context.CancelFunc, ids []
 		}
 
 		rows, err := s.repo.UpsertEmployees(ctx, repo.UpsertEmployeesParams{
-			EmployeeIds: employeeIDs,
-			FullNames:   fullNames,
-			Emails:      emails,
-			Usernames:   usernames,
-			Roles:       roles,
+			OdooEmployeeIds: odooEmployeeIDs,
+			FullNames:       fullNames,
+			Emails:          emails,
+			Usernames:       usernames,
 		})
 		if err != nil {
-			slog.Error("employees: sync upsert", "ids", employeeIDs, "error", err)
+			slog.Error("employees: sync upsert", "ids", odooEmployeeIDs, "error", err)
 			return
 		}
 
@@ -466,8 +463,8 @@ func translateEmployeeUniqueViolation(err error) error {
 	switch pgErr.ConstraintName {
 	case employeesEmailKeyConstraint:
 		return ErrEmailAlreadyExists
-	case employeesEmployeeIDKeyConstraint:
-		return ErrEmployeeIDAlreadyExists
+	case employeesOdooEmployeeIDKeyConstraint:
+		return ErrOdooEmployeeIDAlreadyExists
 	case employeesUsernameKeyConstraint:
 		return ErrUsernameAlreadyExists
 	default:

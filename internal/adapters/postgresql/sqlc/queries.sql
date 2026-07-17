@@ -1,6 +1,6 @@
 -- name: CreateEmployee :one
-INSERT INTO employees (employee_id, full_name, email, username, role)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO employees (odoo_employee_id, full_name, email, username)
+VALUES ($1, $2, $3, $4)
 RETURNING *;
 
 -- name: GetEmployeeByID :one
@@ -21,11 +21,10 @@ ORDER BY id;
 
 -- name: UpdateEmployee :one
 UPDATE employees
-SET employee_id = $2,
+SET odoo_employee_id = $2,
     full_name = $3,
     email = $4,
     username = $5,
-    role = $6,
     updated_at = now()
 WHERE id = $1
 RETURNING *;
@@ -48,26 +47,25 @@ WHERE id = $1;
 
 -- name: ListEmployeeIDsByIDs :many
 -- Translates the internal ids a SyncEmployees caller supplies into the
--- Odoo-facing employee_id values runSync actually sends to Odoo. An id with
--- no matching row is silently omitted from the result.
-SELECT employee_id FROM employees
+-- Odoo-facing odoo_employee_id values runSync actually sends to Odoo. An id
+-- with no matching row is silently omitted from the result.
+SELECT odoo_employee_id FROM employees
 WHERE id = ANY(sqlc.arg(ids)::bigint[]);
 
 -- name: UpsertEmployees :many
 -- Bulk-upserts one batch of Odoo employees (at most 50, see
 -- employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
 -- trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
--- without a second query. employee_id is the shared key with Odoo (see
+-- without a second query. odoo_employee_id is the shared key with Odoo (see
 -- odoo.Employee), so it's the conflict target.
-INSERT INTO employees (employee_id, full_name, email, username, role)
-SELECT unnest(@employee_ids::varchar[]), unnest(@full_names::varchar[]), unnest(@emails::citext[]), unnest(@usernames::varchar[]), unnest(@roles::varchar[])
-ON CONFLICT (employee_id) DO UPDATE
+INSERT INTO employees (odoo_employee_id, full_name, email, username)
+SELECT unnest(@odoo_employee_ids::bigint[]), unnest(@full_names::varchar[]), unnest(@emails::citext[]), unnest(@usernames::varchar[])
+ON CONFLICT (odoo_employee_id) DO UPDATE
 SET full_name = EXCLUDED.full_name,
     email = EXCLUDED.email,
     username = EXCLUDED.username,
-    role = EXCLUDED.role,
     updated_at = now()
-RETURNING id, employee_id, (xmax = 0) AS inserted;
+RETURNING id, odoo_employee_id, (xmax = 0) AS inserted;
 
 -- name: CreatePasswordResetToken :one
 INSERT INTO password_reset_tokens (employee_id, token_hash, expires_at)
@@ -124,8 +122,7 @@ WHERE odoo_store_id IS NOT NULL
 -- name: DeleteStores :execrows
 -- Hard-deletes stores Odoo no longer reports (see ADR-0005) — replaces the
 -- former SoftDeleteStores. store_wifi_ip/store_wifi_mac cascade
--- automatically (ON DELETE CASCADE, migration 00006); employees.store_id is
--- nulled automatically (ON DELETE SET NULL, migration 00007).
+-- automatically (ON DELETE CASCADE, migration 00006).
 DELETE FROM store
 WHERE id = ANY(sqlc.arg(store_ids)::bigint[]);
 

@@ -57,40 +57,36 @@ func (q *Queries) BulkSetStoreWifiWhitelistEnabled(ctx context.Context, arg Bulk
 }
 
 const createEmployee = `-- name: CreateEmployee :one
-INSERT INTO employees (employee_id, full_name, email, username, role)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id
+INSERT INTO employees (odoo_employee_id, full_name, email, username)
+VALUES ($1, $2, $3, $4)
+RETURNING id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at
 `
 
 type CreateEmployeeParams struct {
-	EmployeeID string `json:"employee_id"`
-	FullName   string `json:"full_name"`
-	Email      string `json:"email"`
-	Username   string `json:"username"`
-	Role       string `json:"role"`
+	OdooEmployeeID int64  `json:"odoo_employee_id"`
+	FullName       string `json:"full_name"`
+	Email          string `json:"email"`
+	Username       string `json:"username"`
 }
 
 func (q *Queries) CreateEmployee(ctx context.Context, arg CreateEmployeeParams) (Employee, error) {
 	row := q.db.QueryRow(ctx, createEmployee,
-		arg.EmployeeID,
+		arg.OdooEmployeeID,
 		arg.FullName,
 		arg.Email,
 		arg.Username,
-		arg.Role,
 	)
 	var i Employee
 	err := row.Scan(
 		&i.ID,
-		&i.EmployeeID,
+		&i.OdooEmployeeID,
 		&i.FullName,
 		&i.Email,
 		&i.Username,
 		&i.Password,
-		&i.Role,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StoreID,
 	)
 	return i, err
 }
@@ -253,8 +249,7 @@ WHERE id = ANY($1::bigint[])
 
 // Hard-deletes stores Odoo no longer reports (see ADR-0005) — replaces the
 // former SoftDeleteStores. store_wifi_ip/store_wifi_mac cascade
-// automatically (ON DELETE CASCADE, migration 00006); employees.store_id is
-// nulled automatically (ON DELETE SET NULL, migration 00007).
+// automatically (ON DELETE CASCADE, migration 00006).
 func (q *Queries) DeleteStores(ctx context.Context, storeIds []int64) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteStores, storeIds)
 	if err != nil {
@@ -297,7 +292,7 @@ func (q *Queries) FindStoresNotInOdoo(ctx context.Context, activeOdooStoreIds []
 }
 
 const getEmployeeByEmail = `-- name: GetEmployeeByEmail :one
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
+SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at FROM employees
 WHERE email = $1
 `
 
@@ -306,22 +301,20 @@ func (q *Queries) GetEmployeeByEmail(ctx context.Context, email string) (Employe
 	var i Employee
 	err := row.Scan(
 		&i.ID,
-		&i.EmployeeID,
+		&i.OdooEmployeeID,
 		&i.FullName,
 		&i.Email,
 		&i.Username,
 		&i.Password,
-		&i.Role,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StoreID,
 	)
 	return i, err
 }
 
 const getEmployeeByID = `-- name: GetEmployeeByID :one
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
+SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at FROM employees
 WHERE id = $1
 `
 
@@ -330,22 +323,20 @@ func (q *Queries) GetEmployeeByID(ctx context.Context, id int64) (Employee, erro
 	var i Employee
 	err := row.Scan(
 		&i.ID,
-		&i.EmployeeID,
+		&i.OdooEmployeeID,
 		&i.FullName,
 		&i.Email,
 		&i.Username,
 		&i.Password,
-		&i.Role,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StoreID,
 	)
 	return i, err
 }
 
 const getEmployeeByUsername = `-- name: GetEmployeeByUsername :one
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
+SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at FROM employees
 WHERE username = $1
 `
 
@@ -354,16 +345,14 @@ func (q *Queries) GetEmployeeByUsername(ctx context.Context, username string) (E
 	var i Employee
 	err := row.Scan(
 		&i.ID,
-		&i.EmployeeID,
+		&i.OdooEmployeeID,
 		&i.FullName,
 		&i.Email,
 		&i.Username,
 		&i.Password,
-		&i.Role,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StoreID,
 	)
 	return i, err
 }
@@ -468,26 +457,26 @@ func (q *Queries) InsertStoreWifiMacs(ctx context.Context, arg InsertStoreWifiMa
 }
 
 const listEmployeeIDsByIDs = `-- name: ListEmployeeIDsByIDs :many
-SELECT employee_id FROM employees
+SELECT odoo_employee_id FROM employees
 WHERE id = ANY($1::bigint[])
 `
 
 // Translates the internal ids a SyncEmployees caller supplies into the
-// Odoo-facing employee_id values runSync actually sends to Odoo. An id with
-// no matching row is silently omitted from the result.
-func (q *Queries) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]string, error) {
+// Odoo-facing odoo_employee_id values runSync actually sends to Odoo. An id
+// with no matching row is silently omitted from the result.
+func (q *Queries) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int64, error) {
 	rows, err := q.db.Query(ctx, listEmployeeIDsByIDs, ids)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items []int64
 	for rows.Next() {
-		var employee_id string
-		if err := rows.Scan(&employee_id); err != nil {
+		var odoo_employee_id int64
+		if err := rows.Scan(&odoo_employee_id); err != nil {
 			return nil, err
 		}
-		items = append(items, employee_id)
+		items = append(items, odoo_employee_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -496,7 +485,7 @@ func (q *Queries) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]stri
 }
 
 const listEmployees = `-- name: ListEmployees :many
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
+SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at FROM employees
 ORDER BY id
 `
 
@@ -511,16 +500,14 @@ func (q *Queries) ListEmployees(ctx context.Context) ([]Employee, error) {
 		var i Employee
 		if err := rows.Scan(
 			&i.ID,
-			&i.EmployeeID,
+			&i.OdooEmployeeID,
 			&i.FullName,
 			&i.Email,
 			&i.Username,
 			&i.Password,
-			&i.Role,
 			&i.IsActive,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.StoreID,
 		); err != nil {
 			return nil, err
 		}
@@ -751,47 +738,42 @@ func (q *Queries) SetStoreWifiWhitelistEnabled(ctx context.Context, arg SetStore
 
 const updateEmployee = `-- name: UpdateEmployee :one
 UPDATE employees
-SET employee_id = $2,
+SET odoo_employee_id = $2,
     full_name = $3,
     email = $4,
     username = $5,
-    role = $6,
     updated_at = now()
 WHERE id = $1
-RETURNING id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id
+RETURNING id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at
 `
 
 type UpdateEmployeeParams struct {
-	ID         int64  `json:"id"`
-	EmployeeID string `json:"employee_id"`
-	FullName   string `json:"full_name"`
-	Email      string `json:"email"`
-	Username   string `json:"username"`
-	Role       string `json:"role"`
+	ID             int64  `json:"id"`
+	OdooEmployeeID int64  `json:"odoo_employee_id"`
+	FullName       string `json:"full_name"`
+	Email          string `json:"email"`
+	Username       string `json:"username"`
 }
 
 func (q *Queries) UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) (Employee, error) {
 	row := q.db.QueryRow(ctx, updateEmployee,
 		arg.ID,
-		arg.EmployeeID,
+		arg.OdooEmployeeID,
 		arg.FullName,
 		arg.Email,
 		arg.Username,
-		arg.Role,
 	)
 	var i Employee
 	err := row.Scan(
 		&i.ID,
-		&i.EmployeeID,
+		&i.OdooEmployeeID,
 		&i.FullName,
 		&i.Email,
 		&i.Username,
 		&i.Password,
-		&i.Role,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StoreID,
 	)
 	return i, err
 }
@@ -855,43 +837,40 @@ func (q *Queries) UpdateStoreGeofence(ctx context.Context, arg UpdateStoreGeofen
 }
 
 const upsertEmployees = `-- name: UpsertEmployees :many
-INSERT INTO employees (employee_id, full_name, email, username, role)
-SELECT unnest($1::varchar[]), unnest($2::varchar[]), unnest($3::citext[]), unnest($4::varchar[]), unnest($5::varchar[])
-ON CONFLICT (employee_id) DO UPDATE
+INSERT INTO employees (odoo_employee_id, full_name, email, username)
+SELECT unnest($1::bigint[]), unnest($2::varchar[]), unnest($3::citext[]), unnest($4::varchar[])
+ON CONFLICT (odoo_employee_id) DO UPDATE
 SET full_name = EXCLUDED.full_name,
     email = EXCLUDED.email,
     username = EXCLUDED.username,
-    role = EXCLUDED.role,
     updated_at = now()
-RETURNING id, employee_id, (xmax = 0) AS inserted
+RETURNING id, odoo_employee_id, (xmax = 0) AS inserted
 `
 
 type UpsertEmployeesParams struct {
-	EmployeeIds []string `json:"employee_ids"`
-	FullNames   []string `json:"full_names"`
-	Emails      []string `json:"emails"`
-	Usernames   []string `json:"usernames"`
-	Roles       []string `json:"roles"`
+	OdooEmployeeIds []int64  `json:"odoo_employee_ids"`
+	FullNames       []string `json:"full_names"`
+	Emails          []string `json:"emails"`
+	Usernames       []string `json:"usernames"`
 }
 
 type UpsertEmployeesRow struct {
-	ID         int64  `json:"id"`
-	EmployeeID string `json:"employee_id"`
-	Inserted   bool   `json:"inserted"`
+	ID             int64 `json:"id"`
+	OdooEmployeeID int64 `json:"odoo_employee_id"`
+	Inserted       bool  `json:"inserted"`
 }
 
 // Bulk-upserts one batch of Odoo employees (at most 50, see
 // employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
 // trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
-// without a second query. employee_id is the shared key with Odoo (see
+// without a second query. odoo_employee_id is the shared key with Odoo (see
 // odoo.Employee), so it's the conflict target.
 func (q *Queries) UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams) ([]UpsertEmployeesRow, error) {
 	rows, err := q.db.Query(ctx, upsertEmployees,
-		arg.EmployeeIds,
+		arg.OdooEmployeeIds,
 		arg.FullNames,
 		arg.Emails,
 		arg.Usernames,
-		arg.Roles,
 	)
 	if err != nil {
 		return nil, err
@@ -900,7 +879,7 @@ func (q *Queries) UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams
 	var items []UpsertEmployeesRow
 	for rows.Next() {
 		var i UpsertEmployeesRow
-		if err := rows.Scan(&i.ID, &i.EmployeeID, &i.Inserted); err != nil {
+		if err := rows.Scan(&i.ID, &i.OdooEmployeeID, &i.Inserted); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

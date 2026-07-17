@@ -12,26 +12,25 @@ type Store struct {
 }
 
 // Employee is one employee record as Odoo reports it, keyed by the same
-// employee_id business identifier used in our own employees table — Odoo
-// never sees our internal bigserial id.
+// odoo_employee_id business identifier used in our own employees table —
+// Odoo never sees our internal bigserial id.
 type Employee struct {
-	EmployeeID string
-	FullName   string
-	Email      string
-	Username   string
-	Role       string
+	OdooEmployeeID int64
+	FullName       string
+	Email          string
+	Username       string
 }
 
 // Client fetches store and employee data from Odoo. The store count is
 // small enough that FetchStores returns the full list in one call — no
-// pagination. FetchEmployeesByEmployeeIDs has no such guarantee, so its
+// pagination. FetchEmployeesByOdooEmployeeIDs has no such guarantee, so its
 // caller (employees.service.runSync) pages through its ids in fixed-size
 // batches rather than sending them all in one call.
 type Client interface {
 	FetchStores(ctx context.Context) ([]Store, error)
-	// FetchEmployeesByEmployeeIDs looks up employees by employee_id. An id
-	// Odoo doesn't recognize is simply omitted from the result rather than
-	// erroring — the caller distinguishes "not found" from "found" by
-	// checking which requested ids came back.
-	FetchEmployeesByEmployeeIDs(ctx context.Context, employeeIDs []string) ([]Employee, error)
+	// FetchEmployeesByOdooEmployeeIDs looks up employees by
+	// odoo_employee_id. An id Odoo doesn't recognize is simply omitted from
+	// the result rather than erroring — the caller distinguishes "not
+	// found" from "found" by checking which requested ids came back.
+	FetchEmployeesByOdooEmployeeIDs(ctx context.Context, odooEmployeeIDs []int64) ([]Employee, error)
 }

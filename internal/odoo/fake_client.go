@@ -13,18 +13,21 @@ var fakeCityNames = []string{
 	"Nha Trang", "Hue", "Vung Tau", "Bien Hoa", "Quy Nhon",
 }
 
-// totalFakeEmployees is how many employee_ids FakeClient recognizes — any
-// other id passed to FetchEmployeesByEmployeeIDs is treated as unknown to
-// Odoo and simply omitted from the result, so callers can exercise the
-// "not found" path deterministically.
+// totalFakeEmployees is how many odoo_employee_ids FakeClient recognizes —
+// any other id passed to FetchEmployeesByOdooEmployeeIDs is treated as
+// unknown to Odoo and simply omitted from the result, so callers can
+// exercise the "not found" path deterministically.
 const totalFakeEmployees = 10
 
-var fakeEmployeeRoles = []string{"technician", "manager", "cashier", "admin"}
+// fakeOdooEmployeeIDBase offsets fakeOdooEmployeeID's output so fake Odoo
+// employee ids are visibly distinct from this system's own internal
+// bigserial employee ids in test output/logs.
+const fakeOdooEmployeeIDBase = 2000
 
-// fakeEmployeeID returns the deterministic employee_id FakeClient recognizes
-// for the nth fake employee (1-indexed), e.g. "ODOO-EMP-001".
-func fakeEmployeeID(n int) string {
-	return fmt.Sprintf("ODOO-EMP-%03d", n)
+// fakeOdooEmployeeID returns the deterministic odoo_employee_id FakeClient
+// recognizes for the nth fake employee (1-indexed).
+func fakeOdooEmployeeID(n int) int64 {
+	return int64(fakeOdooEmployeeIDBase + n)
 }
 
 // FakeClient is a deterministic, in-memory stand-in for a real Odoo
@@ -50,27 +53,27 @@ func (c *FakeClient) FetchStores(ctx context.Context) ([]Store, error) {
 	return stores, nil
 }
 
-// FetchEmployeesByEmployeeIDs recognizes only fakeEmployeeID(1)..fakeEmployeeID(totalFakeEmployees);
-// any other requested id is omitted from the result, simulating an id Odoo
-// doesn't know about.
-func (c *FakeClient) FetchEmployeesByEmployeeIDs(ctx context.Context, employeeIDs []string) ([]Employee, error) {
-	known := make(map[string]int, totalFakeEmployees)
+// FetchEmployeesByOdooEmployeeIDs recognizes only
+// fakeOdooEmployeeID(1)..fakeOdooEmployeeID(totalFakeEmployees); any other
+// requested id is omitted from the result, simulating an id Odoo doesn't
+// know about.
+func (c *FakeClient) FetchEmployeesByOdooEmployeeIDs(ctx context.Context, odooEmployeeIDs []int64) ([]Employee, error) {
+	known := make(map[int64]int, totalFakeEmployees)
 	for n := 1; n <= totalFakeEmployees; n++ {
-		known[fakeEmployeeID(n)] = n
+		known[fakeOdooEmployeeID(n)] = n
 	}
 
-	employees := make([]Employee, 0, len(employeeIDs))
-	for _, id := range employeeIDs {
+	employees := make([]Employee, 0, len(odooEmployeeIDs))
+	for _, id := range odooEmployeeIDs {
 		n, ok := known[id]
 		if !ok {
 			continue
 		}
 		employees = append(employees, Employee{
-			EmployeeID: id,
-			FullName:   fmt.Sprintf("Fake Employee #%d", n),
-			Email:      fmt.Sprintf("fake-employee-%d@example.com", n),
-			Username:   fmt.Sprintf("fakeemployee%d", n),
-			Role:       fakeEmployeeRoles[n%len(fakeEmployeeRoles)],
+			OdooEmployeeID: id,
+			FullName:       fmt.Sprintf("Fake Employee #%d", n),
+			Email:          fmt.Sprintf("fake-employee-%d@example.com", n),
+			Username:       fmt.Sprintf("fakeemployee%d", n),
 		})
 	}
 	return employees, nil

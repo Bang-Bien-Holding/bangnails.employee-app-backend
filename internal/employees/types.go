@@ -15,10 +15,10 @@ import (
 // repo's Postgres unique-violation errors into these — so the HTTP handler
 // can map known conflicts to 409.
 var (
-	ErrEmailAlreadyExists      = errors.New("email already exists")
-	ErrEmployeeIDAlreadyExists = errors.New("employee ID already exists")
-	ErrUsernameAlreadyExists   = errors.New("username already exists")
-	ErrEmployeeNotFound        = errors.New("employee not found")
+	ErrEmailAlreadyExists          = errors.New("email already exists")
+	ErrOdooEmployeeIDAlreadyExists = errors.New("odoo employee ID already exists")
+	ErrUsernameAlreadyExists       = errors.New("username already exists")
+	ErrEmployeeNotFound            = errors.New("employee not found")
 	// ErrEmployeeNotActive is returned by BulkSendPasswordResetLinks for a
 	// deactivated employee — per the user's explicit choice, only active
 	// employees are eligible to receive a password-set/reset link; a
@@ -36,11 +36,10 @@ var (
 )
 
 type createEmployeeParams struct {
-	EmployeeID string `json:"employeeId" validate:"required"`
-	FullName   string `json:"fullName" validate:"required"`
-	Email      string `json:"email" validate:"required,email"`
-	Username   string `json:"username" validate:"required"`
-	Role       string `json:"role" validate:"required"`
+	OdooEmployeeID int64  `json:"odooEmployeeId" validate:"required"`
+	FullName       string `json:"fullName" validate:"required"`
+	Email          string `json:"email" validate:"required,email"`
+	Username       string `json:"username" validate:"required"`
 }
 
 // updateEmployeeParams.Password is optional (a *string, unlike
@@ -48,12 +47,11 @@ type createEmployeeParams struct {
 // other fields unconditionally, but a nil Password leaves the existing
 // password untouched rather than requiring every update to resupply it.
 type updateEmployeeParams struct {
-	EmployeeID string  `json:"employeeId" validate:"required"`
-	FullName   string  `json:"fullName" validate:"required"`
-	Email      string  `json:"email" validate:"required,email"`
-	Username   string  `json:"username" validate:"required"`
-	Role       string  `json:"role" validate:"required"`
-	Password   *string `json:"password,omitempty" validate:"omitempty,min=8"`
+	OdooEmployeeID int64   `json:"odooEmployeeId" validate:"required"`
+	FullName       string  `json:"fullName" validate:"required"`
+	Email          string  `json:"email" validate:"required,email"`
+	Username       string  `json:"username" validate:"required"`
+	Password       *string `json:"password,omitempty" validate:"omitempty,min=8"`
 }
 
 // setEmployeePasswordParams is the body for PATCH /employees/{id}/password —
@@ -131,28 +129,26 @@ type SyncStatus struct {
 // straight to the client. Handlers must convert via newEmployeeResponse
 // instead of writing repo.Employee directly.
 type employeeResponse struct {
-	ID         int64              `json:"id"`
-	EmployeeID string             `json:"employee_id"`
-	FullName   string             `json:"full_name"`
-	Email      string             `json:"email"`
-	Username   string             `json:"username"`
-	Role       string             `json:"role"`
-	IsActive   bool               `json:"is_active"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	ID             int64              `json:"id"`
+	OdooEmployeeID int64              `json:"odoo_employee_id"`
+	FullName       string             `json:"full_name"`
+	Email          string             `json:"email"`
+	Username       string             `json:"username"`
+	IsActive       bool               `json:"is_active"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
 func newEmployeeResponse(e repo.Employee) employeeResponse {
 	return employeeResponse{
-		ID:         e.ID,
-		EmployeeID: e.EmployeeID,
-		FullName:   e.FullName,
-		Email:      e.Email,
-		Username:   e.Username,
-		Role:       e.Role,
-		IsActive:   e.IsActive,
-		CreatedAt:  e.CreatedAt,
-		UpdatedAt:  e.UpdatedAt,
+		ID:             e.ID,
+		OdooEmployeeID: e.OdooEmployeeID,
+		FullName:       e.FullName,
+		Email:          e.Email,
+		Username:       e.Username,
+		IsActive:       e.IsActive,
+		CreatedAt:      e.CreatedAt,
+		UpdatedAt:      e.UpdatedAt,
 	}
 }
 

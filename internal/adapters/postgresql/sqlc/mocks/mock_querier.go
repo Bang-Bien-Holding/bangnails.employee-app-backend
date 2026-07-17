@@ -295,10 +295,10 @@ func (mr *MockQuerierMockRecorder) InsertStoreWifiMacs(ctx, arg any) *gomock.Cal
 }
 
 // ListEmployeeIDsByIDs mocks base method.
-func (m *MockQuerier) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]string, error) {
+func (m *MockQuerier) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int64, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ListEmployeeIDsByIDs", ctx, ids)
-	ret0, _ := ret[0].([]string)
+	ret0, _ := ret[0].([]int64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
