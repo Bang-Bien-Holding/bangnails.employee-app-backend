@@ -7,6 +7,7 @@ import (
 
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/env"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/mailer"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -51,10 +52,20 @@ func main() {
 		panic(err)
 	}
 
+	// Odoo
+	odooClient := odoo.NewHTTPClient(odoo.Config{
+		BaseURL:      env.GetString("ODOO_BASE_URL", ""),
+		ClientID:     env.GetString("ODOO_CLIENT_ID", ""),
+		ClientSecret: env.GetString("ODOO_CLIENT_SECRET", ""),
+		Username:     env.GetString("ODOO_USERNAME", ""),
+		Password:     env.GetString("ODOO_PASSWORD", ""),
+	})
+
 	api := application{
 		config: cfg,
 		db:     pool,
 		mailer: mailClient,
+		odoo:   odooClient,
 		logger: logger,
 	}
 

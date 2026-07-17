@@ -26,6 +26,7 @@ type application struct {
 	config config
 	db     *pgxpool.Pool
 	mailer mailer.Client
+	odoo   odoo.Client
 	logger *slog.Logger
 }
 
@@ -58,11 +59,7 @@ func (app *application) mount() http.Handler {
 			}
 		})
 
-		// odoo.NewFakeClient stands in for a real Odoo connection — no live
-		// integration exists yet (see internal/odoo).
-		odooClient := odoo.NewFakeClient()
-
-		employeeService := employees.NewService(app.db, app.mailer, odooClient)
+		employeeService := employees.NewService(app.db, app.mailer, app.odoo)
 		employeeHandler := employees.NewHandler(employeeService)
 		r.Post("/employees", employeeHandler.CreateEmployee)
 		r.Get("/employees", employeeHandler.ListEmployees)
@@ -88,7 +85,7 @@ func (app *application) mount() http.Handler {
 		r.Put("/positions/{id}", positionsHandler.UpdatePosition)
 		r.Delete("/positions/{id}", positionsHandler.DeletePosition)
 
-		storesService := stores.NewService(app.db, odooClient)
+		storesService := stores.NewService(app.db, app.odoo)
 		storesHandler := stores.NewHandler(storesService)
 		r.Post("/stores/syncs", storesHandler.SyncStores)
 		r.Get("/stores", storesHandler.ListStores)
