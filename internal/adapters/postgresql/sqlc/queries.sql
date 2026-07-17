@@ -280,3 +280,23 @@ SET wifi_whitelist_enabled = sqlc.arg(wifi_whitelist_enabled),
     updated_at = now()
 WHERE id = ANY(sqlc.arg(store_ids)::bigint[])
 RETURNING id, wifi_whitelist_enabled, updated_at;
+
+-- name: CreatePosition :one
+INSERT INTO positions (name)
+VALUES ($1)
+RETURNING *;
+
+-- name: ListPositions :many
+SELECT * FROM positions
+ORDER BY name;
+
+-- name: UpdatePosition :one
+UPDATE positions
+SET name = $2,
+    updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: DeletePosition :execrows
+DELETE FROM positions
+WHERE id = $1;

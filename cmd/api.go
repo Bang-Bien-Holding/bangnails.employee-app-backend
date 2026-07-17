@@ -14,6 +14,7 @@ import (
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/employees"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/mailer"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/positions"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/stores"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -79,6 +80,13 @@ func (app *application) mount() http.Handler {
 		// it's not a CRUD action on a specific employee resource; the
 		// token in the body identifies the employee.
 		r.Post("/activate", employeeHandler.CompleteActivation)
+
+		positionsService := positions.NewService(repo.New(app.db))
+		positionsHandler := positions.NewHandler(positionsService)
+		r.Post("/positions", positionsHandler.CreatePosition)
+		r.Get("/positions", positionsHandler.ListPositions)
+		r.Put("/positions/{id}", positionsHandler.UpdatePosition)
+		r.Delete("/positions/{id}", positionsHandler.DeletePosition)
 
 		storesService := stores.NewService(app.db, odooClient)
 		storesHandler := stores.NewHandler(storesService)

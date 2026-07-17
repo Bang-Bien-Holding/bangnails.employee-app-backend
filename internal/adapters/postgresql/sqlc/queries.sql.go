@@ -117,6 +117,24 @@ func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswo
 	return i, err
 }
 
+const createPosition = `-- name: CreatePosition :one
+INSERT INTO positions (name)
+VALUES ($1)
+RETURNING id, name, created_at, updated_at
+`
+
+func (q *Queries) CreatePosition(ctx context.Context, name string) (Position, error) {
+	row := q.db.QueryRow(ctx, createPosition, name)
+	var i Position
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const deleteEmployee = `-- name: DeleteEmployee :execrows
 DELETE FROM employees
 WHERE id = $1
@@ -124,6 +142,19 @@ WHERE id = $1
 
 func (q *Queries) DeleteEmployee(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteEmployee, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deletePosition = `-- name: DeletePosition :execrows
+DELETE FROM positions
+WHERE id = $1
+`
+
+func (q *Queries) DeletePosition(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePosition, id)
 	if err != nil {
 		return 0, err
 	}
@@ -519,6 +550,36 @@ func (q *Queries) ListEmployees(ctx context.Context) ([]Employee, error) {
 	return items, nil
 }
 
+const listPositions = `-- name: ListPositions :many
+SELECT id, name, created_at, updated_at FROM positions
+ORDER BY name
+`
+
+func (q *Queries) ListPositions(ctx context.Context) ([]Position, error) {
+	rows, err := q.db.Query(ctx, listPositions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Position
+	for rows.Next() {
+		var i Position
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStoreWifiIPsByStoreID = `-- name: ListStoreWifiIPsByStoreID :many
 SELECT ip_address FROM store_wifi_ip
 WHERE store_id = $1
@@ -772,6 +833,31 @@ func (q *Queries) UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) 
 		&i.Username,
 		&i.Password,
 		&i.IsActive,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updatePosition = `-- name: UpdatePosition :one
+UPDATE positions
+SET name = $2,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, name, created_at, updated_at
+`
+
+type UpdatePositionParams struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+func (q *Queries) UpdatePosition(ctx context.Context, arg UpdatePositionParams) (Position, error) {
+	row := q.db.QueryRow(ctx, updatePosition, arg.ID, arg.Name)
+	var i Position
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

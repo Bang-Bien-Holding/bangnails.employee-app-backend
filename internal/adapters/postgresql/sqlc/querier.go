@@ -18,7 +18,9 @@ type Querier interface {
 	BulkSetStoreWifiWhitelistEnabled(ctx context.Context, arg BulkSetStoreWifiWhitelistEnabledParams) ([]BulkSetStoreWifiWhitelistEnabledRow, error)
 	CreateEmployee(ctx context.Context, arg CreateEmployeeParams) (Employee, error)
 	CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) (PasswordResetToken, error)
+	CreatePosition(ctx context.Context, name string) (Position, error)
 	DeleteEmployee(ctx context.Context, id int64) (int64, error)
+	DeletePosition(ctx context.Context, id int64) (int64, error)
 	// Deletes specific store_wifi_ip rows by value, not the table's internal id
 	// (see ADR-0003 — a value unambiguously identifies the row within a store
 	// thanks to the UNIQUE (store_id, ip_address) constraint) — the surgical
@@ -76,6 +78,7 @@ type Querier interface {
 	// with no matching row is silently omitted from the result.
 	ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int64, error)
 	ListEmployees(ctx context.Context) ([]Employee, error)
+	ListPositions(ctx context.Context) ([]Position, error)
 	ListStoreWifiIPsByStoreID(ctx context.Context, storeID int64) ([]netip.Addr, error)
 	ListStoreWifiMacsByStoreID(ctx context.Context, storeID int64) ([]net.HardwareAddr, error)
 	// Every store (wifi-enabled and wifi-disabled — the list screen's Activate
@@ -101,6 +104,7 @@ type Querier interface {
 	// GetStoreByID.
 	SetStoreWifiWhitelistEnabled(ctx context.Context, arg SetStoreWifiWhitelistEnabledParams) (SetStoreWifiWhitelistEnabledRow, error)
 	UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) (Employee, error)
+	UpdatePosition(ctx context.Context, arg UpdatePositionParams) (Position, error)
 	// Updates a store's geofence, and unconditionally bumps updated_at whenever
 	// expected_updated_at still matches the current row — the
 	// optimistic-concurrency check for the whole PATCH /v1/stores/{id} aggregate

@@ -32,6 +32,13 @@ type PasswordResetToken struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type Position struct {
+	ID        int64              `json:"id"`
+	Name      string             `json:"name"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Store struct {
 	ID                   int64              `json:"id"`
 	OdooStoreID          pgtype.Text        `json:"odoo_store_id"`
