@@ -35,7 +35,6 @@ dist-ssr
 *.sw?
 
 # Coding agent harness (local only, not pushed)
-CLAUDE.md
 AGENTS.md
 feature_list.json
 progress.md
@@ -43,4 +42,3 @@ session-handoff.md
 init.sh
 docs/harness-report.html
 docs/harness-benchmark.json
-docs/agents/*.md

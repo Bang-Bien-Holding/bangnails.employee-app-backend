@@ -28,3 +28,7 @@ This delete is fully automatic — triggered by a sync run's Odoo response omitt
 - `SyncSummary.DeletedStores` now counts hard deletes instead of soft-deletes — same field, different underlying operation.
 - Existing `SyncStores` service tests asserting soft-delete behavior are updated to assert the hard delete instead.
 - See ticket [08](/.scratch/store-wifi-credentials/issues/08-hard-delete-store-on-odoo-removal.md) for the implementation checklist.
+
+## Superseded (partial)
+
+The `employees.store_id` `ON DELETE SET NULL` mechanism described above is superseded: that column is dropped entirely in favor of an `employee_stores` join table, so a store's hard delete now cascades through that table instead of nulling a column. This ADR's actual ruling — store removal from Odoo is a hard delete — is untouched. See [ADR-0009](/docs/adr/0009-employee-store-membership-is-many-to-many-from-odoo.md).

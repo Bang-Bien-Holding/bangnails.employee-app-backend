@@ -7,8 +7,8 @@
 **Status:** done
 
 - [ ] `GET /v1/stores` is registered in the router.
-- [ ] Response is a JSON array, one element per store, each using the exact same shape as `GET /v1/stores/{id}`'s response body (`id`, `store_name`, `odoo_store_id`, `city`, `latitude`, `longitude`, `radius_meters`, `ip_addresses`, `mac_addresses`, `is_active`, `created_at`, `updated_at`).
-- [ ] Inactive stores (`is_active = false`) are included in the list, not filtered out — the Activate toggle needs to see and re-enable them.
+- [ ] Response is a JSON array, one element per store, each using the exact same shape as `GET /v1/stores/{id}`'s response body (`id`, `store_name`, `odoo_store_id`, `city`, `latitude`, `longitude`, `radius_meters`, `ip_addresses`, `mac_addresses`, `wifi_whitelist_enabled`, `created_at`, `updated_at`).
+- [ ] Wifi-disabled stores (`wifi_whitelist_enabled = false`) are included in the list, not filtered out — the Activate toggle needs to see and re-enable them.
 - [ ] Results are ordered by `city`, then `store_name`.
 - [ ] No query parameters are accepted or required — the endpoint always returns the full set.
 - [ ] `Service` gains a `ListStores(ctx) ([]StoreDetail, error)` method; the new `repo.Querier` query aggregates each store's IP/MAC lists the same way `GetStoreByID`'s does, without N+1 per-store round trips.
