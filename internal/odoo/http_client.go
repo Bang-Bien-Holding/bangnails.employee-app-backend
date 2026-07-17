@@ -21,14 +21,15 @@ import (
 // confirmed against the live erp.bangnails.fr instance, which is what the
 // E2E verification ticket is for.
 const (
-	employeeModel      = "hr.employee"
-	employeeIDField    = "user_id"
-	employeeNameField  = "name"
-	employeeEmailField = "email"
-	storeModel         = "x_pos_shop"
-	storeIDField       = "id"
-	storeNameField     = "name"
-	storeCityField     = "city"
+	employeeModel         = "hr.employee"
+	employeeIDField       = "user_id"
+	employeeNameField     = "name"
+	employeeEmailField    = "email"
+	employeeStoreIDsField = "x_pos_shop_ids"
+	storeModel            = "x_pos_shop"
+	storeIDField          = "id"
+	storeNameField        = "name"
+	storeCityField        = "city"
 )
 
 // tokenEndpoint and tokenExpiryLeeway are the MuK REST OAuth2 password-grant
@@ -254,7 +255,7 @@ func (c *HTTPClient) FetchEmployeesByOdooEmployeeIDs(ctx context.Context, odooEm
 	}
 	domain := []any{[]any{employeeIDField, "in", ids}}
 
-	records, err := c.searchRead(ctx, employeeModel, domain, []string{employeeIDField, employeeNameField, employeeEmailField}, 0, 0)
+	records, err := c.searchRead(ctx, employeeModel, domain, []string{employeeIDField, employeeNameField, employeeEmailField, employeeStoreIDsField}, 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -265,10 +266,15 @@ func (c *HTTPClient) FetchEmployeesByOdooEmployeeIDs(ctx context.Context, odooEm
 		if err != nil {
 			return nil, fmt.Errorf("odoo: employee record: %w", err)
 		}
+		storeIDs, err := recordIntList(r, employeeStoreIDsField)
+		if err != nil {
+			return nil, fmt.Errorf("odoo: employee record: %w", err)
+		}
 		employees = append(employees, Employee{
 			OdooEmployeeID: id,
 			FullName:       recordString(r, employeeNameField),
 			Email:          recordString(r, employeeEmailField),
+			StoreIDs:       storeIDs,
 		})
 	}
 	return employees, nil
@@ -303,4 +309,22 @@ func recordMany2OneID(record map[string]any, field string) (int64, error) {
 		return 0, fmt.Errorf("field %q: expected a numeric id, got %T", field, tuple[0])
 	}
 	return int64(id), nil
+}
+
+// recordIntList reads a many2many field, which Odoo represents as a flat
+// list of related record ids (unlike many2one's [id, name] tuple).
+func recordIntList(record map[string]any, field string) ([]int, error) {
+	raw, ok := record[field].([]any)
+	if !ok {
+		return nil, fmt.Errorf("field %q: expected a list of ids, got %T", field, record[field])
+	}
+	ids := make([]int, len(raw))
+	for i, v := range raw {
+		id, ok := v.(float64)
+		if !ok {
+			return nil, fmt.Errorf("field %q: expected a numeric id at index %d, got %T", field, i, v)
+		}
+		ids[i] = int(id)
+	}
+	return ids, nil
 }

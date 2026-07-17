@@ -164,8 +164,10 @@ func TestHTTPClient_ReAuthenticatesOn401(t *testing.T) {
 }
 
 // TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_ParsesMany2One verifies
-// the domain filter sent for the lookup and that a many2one field (Odoo's
-// [id, display_name] tuple shape) is correctly unpacked to just the id.
+// the domain filter sent for the lookup, that a many2one field (Odoo's
+// [id, display_name] tuple shape) is correctly unpacked to just the id, and
+// that the many2many x_pos_shop_ids field (a flat list of ids, per
+// ADR-0009) is requested and parsed into StoreIDs.
 func TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_ParsesMany2One(t *testing.T) {
 	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -177,9 +179,13 @@ func TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_ParsesMany2One(t *testing.T)
 			if domain != want {
 				t.Errorf("expected domain %q, got %q", want, domain)
 			}
+			fields := r.URL.Query().Get("fields")
+			if !strings.Contains(fields, `"x_pos_shop_ids"`) {
+				t.Errorf("expected fields to include x_pos_shop_ids, got %q", fields)
+			}
 			writeJSON(w, []map[string]any{
-				{"user_id": []any{101, "Nguyen Van A"}, "name": "Nguyen Van A", "email": "van-a@example.com"},
-				{"user_id": []any{102, "Tran Thi B"}, "name": "Tran Thi B", "email": "tran-b@example.com"},
+				{"user_id": []any{101, "Nguyen Van A"}, "name": "Nguyen Van A", "email": "van-a@example.com", "x_pos_shop_ids": []any{10, 20}},
+				{"user_id": []any{102, "Tran Thi B"}, "name": "Tran Thi B", "email": "tran-b@example.com", "x_pos_shop_ids": []any{}},
 			})
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -196,8 +202,14 @@ func TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_ParsesMany2One(t *testing.T)
 	if employees[0].OdooEmployeeID != 101 || employees[0].FullName != "Nguyen Van A" || employees[0].Email != "van-a@example.com" {
 		t.Errorf("unexpected first employee: %+v", employees[0])
 	}
+	if fmt.Sprint(employees[0].StoreIDs) != fmt.Sprint([]int{10, 20}) {
+		t.Errorf("expected first employee StoreIDs [10 20], got %v", employees[0].StoreIDs)
+	}
 	if employees[1].OdooEmployeeID != 102 {
 		t.Errorf("expected second employee OdooEmployeeID 102, got %d", employees[1].OdooEmployeeID)
+	}
+	if len(employees[1].StoreIDs) != 0 {
+		t.Errorf("expected second employee to have no store ids, got %v", employees[1].StoreIDs)
 	}
 }
 
