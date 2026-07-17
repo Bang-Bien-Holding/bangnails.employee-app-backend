@@ -39,7 +39,7 @@ func (h *Handler) SyncStores(w http.ResponseWriter, r *http.Request) {
 
 	json.Write(w, http.StatusCreated, syncStoresResponse{
 		Status:  "success",
-		Message: "Store synchronization and user assignments updated successfully.",
+		Message: "Store synchronization completed successfully.",
 		Meta:    summary,
 	})
 }

@@ -42,7 +42,7 @@ type Querier interface {
 	// Hard-deletes stores Odoo no longer reports (see ADR-0005) — replaces the
 	// former SoftDeleteStores. store_wifi_ip/store_wifi_mac cascade
 	// automatically (ON DELETE CASCADE, migration 00006); employees.store_id is
-	// nulled automatically (ON DELETE SET NULL, migration 00009).
+	// nulled automatically (ON DELETE SET NULL, migration 00007).
 	DeleteStores(ctx context.Context, storeIds []int64) (int64, error)
 	// Locally-created stores that have never been linked to Odoo
 	// (odoo_store_id IS NULL) are deliberately excluded — only stores Odoo
@@ -128,7 +128,11 @@ type Querier interface {
 	// is Postgres' standard trick for distinguishing an INSERT from an
 	// ON CONFLICT UPDATE in the same statement: xmax is only set by an UPDATE,
 	// so a fresh row's xmax is 0. The store-sync service uses it to report
-	// inserted_stores vs updated_stores without a second query.
+	// inserted_stores vs updated_stores without a second query. updated_at only
+	// advances when store_name/city actually changed — store.updated_at also
+	// doubles as the admin-facing optimistic-lock version for the whole store
+	// aggregate, so a sync run that finds no real change must not invalidate a
+	// concurrently-in-flight admin edit's lock token.
 	UpsertStores(ctx context.Context, arg UpsertStoresParams) ([]UpsertStoresRow, error)
 }
 

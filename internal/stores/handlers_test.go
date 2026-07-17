@@ -56,6 +56,10 @@ func TestStoreHandler_SyncStores(t *testing.T) {
 				if got.Status != "success" {
 					t.Errorf("status = %q, want %q", got.Status, "success")
 				}
+				wantMessage := "Store synchronization completed successfully."
+				if got.Message != wantMessage {
+					t.Errorf("message = %q, want %q", got.Message, wantMessage)
+				}
 				want := SyncSummary{TotalStoresProcessed: 250, InsertedStores: 20, UpdatedStores: 220, DeletedStores: 10}
 				if got.Meta != want {
 					t.Errorf("meta = %+v, want %+v", got.Meta, want)

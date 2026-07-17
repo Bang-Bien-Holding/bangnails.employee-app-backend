@@ -42,6 +42,12 @@ const activationTokenTTL = 30 * time.Minute
 // a time instead of sending them all in one round trip.
 const employeeSyncBatchSize = 50
 
+// employeeSyncTimeout bounds runSync's detached goroutine so a stalled Odoo
+// or database call can't leave s.syncing stuck true indefinitely — the
+// goroutine deliberately outlives the triggering request's context, but
+// still needs its own deadline.
+const employeeSyncTimeout = 5 * time.Minute
+
 type service struct {
 	repo   repo.Querier
 	mailer mailer.Client
@@ -269,8 +275,11 @@ func (s *service) SyncEmployees(ctx context.Context, ids []int64) error {
 
 	// Detached from ctx: the HTTP handler's request context is canceled the
 	// moment it returns, which would race with (and likely abort) this
-	// goroutine if it inherited that cancellation.
-	go s.runSync(context.WithoutCancel(ctx), employeeIDs)
+	// goroutine if it inherited that cancellation. Still bounded by
+	// employeeSyncTimeout so a stalled Odoo/DB call can't hold s.syncing
+	// true forever; runSync owns cancel and releases it when it returns.
+	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), employeeSyncTimeout)
+	go s.runSync(syncCtx, cancel, employeeIDs)
 
 	return nil
 }
@@ -290,7 +299,8 @@ func (s *service) SyncStatus(ctx context.Context) SyncStatus {
 // else observes this goroutine once SyncEmployees has already returned to
 // its caller. A batch's fetch or upsert error aborts the remaining batches
 // rather than skipping past them.
-func (s *service) runSync(ctx context.Context, ids []string) {
+func (s *service) runSync(ctx context.Context, cancel context.CancelFunc, ids []string) {
+	defer cancel()
 	defer s.unlock()
 
 	var notFound []string
@@ -302,7 +312,7 @@ func (s *service) runSync(ctx context.Context, ids []string) {
 
 		found, err := s.odoo.FetchEmployeesByEmployeeIDs(ctx, batch)
 		if err != nil {
-			slog.Error("employees: sync fetch from odoo", "ids", batch, "error", err)
+			slog.Error("employees: sync fetch from odoo", "batch_size", len(batch), "error", err)
 			return
 		}
 

@@ -2,6 +2,7 @@ package employees
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -274,11 +275,12 @@ func (h *Handler) SyncEmployees(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.SyncEmployees(r.Context(), params.IDs); err != nil {
-		status := http.StatusInternalServerError
 		if errors.Is(err, ErrSyncInProgress) {
-			status = http.StatusConflict
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
 		}
-		http.Error(w, err.Error(), status)
+		slog.Error("employees: sync employees", "error", err)
+		http.Error(w, "failed to start employee sync", http.StatusInternalServerError)
 		return
 	}
 

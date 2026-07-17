@@ -91,13 +91,22 @@ RETURNING *;
 -- is Postgres' standard trick for distinguishing an INSERT from an
 -- ON CONFLICT UPDATE in the same statement: xmax is only set by an UPDATE,
 -- so a fresh row's xmax is 0. The store-sync service uses it to report
--- inserted_stores vs updated_stores without a second query.
+-- inserted_stores vs updated_stores without a second query. updated_at only
+-- advances when store_name/city actually changed — store.updated_at also
+-- doubles as the admin-facing optimistic-lock version for the whole store
+-- aggregate, so a sync run that finds no real change must not invalidate a
+-- concurrently-in-flight admin edit's lock token.
 INSERT INTO store (odoo_store_id, store_name, city)
 SELECT unnest(@odoo_store_ids::varchar[]), unnest(@store_names::varchar[]), unnest(@cities::varchar[])
 ON CONFLICT (odoo_store_id) DO UPDATE
 SET store_name = EXCLUDED.store_name,
     city = EXCLUDED.city,
-    updated_at = now()
+    updated_at = CASE
+        WHEN store.store_name IS DISTINCT FROM EXCLUDED.store_name
+          OR store.city IS DISTINCT FROM EXCLUDED.city
+        THEN now()
+        ELSE store.updated_at
+    END
 RETURNING id, odoo_store_id, (xmax = 0) AS inserted;
 
 -- name: FindStoresNotInOdoo :many
@@ -116,7 +125,7 @@ WHERE odoo_store_id IS NOT NULL
 -- Hard-deletes stores Odoo no longer reports (see ADR-0005) — replaces the
 -- former SoftDeleteStores. store_wifi_ip/store_wifi_mac cascade
 -- automatically (ON DELETE CASCADE, migration 00006); employees.store_id is
--- nulled automatically (ON DELETE SET NULL, migration 00009).
+-- nulled automatically (ON DELETE SET NULL, migration 00007).
 DELETE FROM store
 WHERE id = ANY(sqlc.arg(store_ids)::bigint[]);
 

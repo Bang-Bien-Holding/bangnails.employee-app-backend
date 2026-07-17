@@ -168,7 +168,10 @@ type storeUpdatedAtRef struct {
 // PATCH /v1/stores — see setWifiWhitelistEnabledParams for why
 // WifiWhitelistEnabled is a pointer despite being required.
 type bulkSetWifiWhitelistEnabledParams struct {
-	Stores               []storeUpdatedAtRef `json:"stores" validate:"required,min=1,dive"`
+	// unique=ID rejects a store id repeated within the batch — without it, a
+	// duplicate silently collapses to one (id, updated_at) pair in the
+	// service's lookup map, dropping the other submitted pair's lock check.
+	Stores               []storeUpdatedAtRef `json:"stores" validate:"required,min=1,unique=ID,dive"`
 	WifiWhitelistEnabled *bool               `json:"wifi_whitelist_enabled" validate:"required"`
 }
 

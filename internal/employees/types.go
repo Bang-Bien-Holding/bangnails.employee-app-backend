@@ -109,10 +109,12 @@ type completeActivationParams struct {
 // syncEmployeesParams is the body for POST /employees/syncs. IDs are internal
 // employees.id values (same convention as bulkDeleteEmployeesParams), not
 // Odoo employee_ids — SyncEmployees looks up each one's employee_id before
-// calling Odoo. There's no upper bound here — SyncEmployees paginates
-// internally, fetching employeeSyncBatchSize ids from Odoo per round trip.
+// calling Odoo. SyncEmployees paginates internally, fetching
+// employeeSyncBatchSize ids from Odoo per round trip, but the request itself
+// is still capped at max=100 (same bound as bulkSendPasswordResetLinksParams)
+// so a single call can't force an unbounded ListEmployeeIDsByIDs lookup.
 type syncEmployeesParams struct {
-	IDs []int64 `json:"ids" validate:"required,min=1"`
+	IDs []int64 `json:"ids" validate:"required,min=1,max=100"`
 }
 
 // SyncStatus reports whether a SyncEmployees background job is currently

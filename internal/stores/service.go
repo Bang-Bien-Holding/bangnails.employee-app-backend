@@ -101,10 +101,15 @@ func (s *service) UpdateStore(ctx context.Context, id int64, params patchStorePa
 			// No row matched id + updated_at together — find out which of
 			// those failed: if the store doesn't exist it's a 404, otherwise
 			// the row exists and updated_at was stale.
-			if _, existsErr := q.GetStoreByID(ctx, id); errors.Is(existsErr, pgx.ErrNoRows) {
+			_, existsErr := q.GetStoreByID(ctx, id)
+			switch {
+			case errors.Is(existsErr, pgx.ErrNoRows):
 				return ErrStoreNotFound
+			case existsErr != nil:
+				return existsErr
+			default:
+				return ErrStoreConflict
 			}
-			return ErrStoreConflict
 		}
 
 		if params.IPAddresses != nil {
@@ -318,10 +323,15 @@ func (s *service) SetStoreWifiWhitelistEnabled(ctx context.Context, id int64, pa
 			if !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
-			if _, existsErr := q.GetStoreByID(ctx, id); errors.Is(existsErr, pgx.ErrNoRows) {
+			_, existsErr := q.GetStoreByID(ctx, id)
+			switch {
+			case errors.Is(existsErr, pgx.ErrNoRows):
 				return ErrStoreNotFound
+			case existsErr != nil:
+				return existsErr
+			default:
+				return ErrStoreConflict
 			}
-			return ErrStoreConflict
 		}
 		result = StoreWifiToggleResult{
 			ID:                   row.ID,

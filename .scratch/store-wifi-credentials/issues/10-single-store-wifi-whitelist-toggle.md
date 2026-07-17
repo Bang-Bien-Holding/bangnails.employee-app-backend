@@ -7,7 +7,7 @@
 **Status:** done
 
 - [ ] `PATCH /v1/stores/{id}/wifi-whitelist-enabled` registered in the router, distinct from `PATCH /v1/stores/{id}`.
-- [ ] Request body: `{"updated_at": "...", "wifi_whitelist_enabled": true}`. Both fields required (`updated_at` a `time.Time` tagged `required`; `wifi_whitelist_enabled` a non-pointer `bool` tagged `required` — this endpoint only ever does one thing, unlike `patchStoreParams`'s omit-vs-explicit pointer fields).
+- [ ] Request body: `{"updated_at": "...", "wifi_whitelist_enabled": true}`. Both fields required (`updated_at` a `time.Time` tagged `required`; `wifi_whitelist_enabled` a `*bool` tagged `required` — still a pointer despite always being required, since a plain `bool` can't distinguish an omitted field from an explicit `false`, which is this endpoint's other valid value).
 - [ ] Optimistic-locked like the rest of the single-store surface: the submitted `updated_at` is checked against the store's current `updated_at` inside a transaction. A mismatch updates nothing and returns `409 Conflict` (`ErrStoreConflict`, reused from the existing sentinel).
 - [ ] A store id that doesn't exist returns `404` (`ErrStoreNotFound`, reused).
 - [ ] Every successful call bumps `store.updated_at` to `now()`.
