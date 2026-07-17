@@ -1125,3 +1125,145 @@ func TestEmployeeHandler_ResponseOmitsPasswordHash(t *testing.T) {
 		assertNoPassword(t, rec.Body.Bytes())
 	})
 }
+
+func TestEmployeeHandler_SyncEmployees(t *testing.T) {
+	tests := []struct {
+		name          string
+		bodyPayload   any
+		setupMock     func(mockSvc *MockService)
+		expectedCode  int
+		checkResponse func(t *testing.T, rec *httptest.ResponseRecorder)
+	}{
+		{
+			name:        "TS-HDL-40: Starts a sync and returns 202 immediately",
+			bodyPayload: syncEmployeesParams{IDs: []int64{1, 2}},
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					SyncEmployees(gomock.Any(), []int64{1, 2}).
+					Return(nil)
+			},
+			expectedCode: http.StatusAccepted,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var got syncEmployeesResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal response body: %v", err)
+				}
+				if got.Status != "accepted" {
+					t.Errorf("expected status %q, got %q", "accepted", got.Status)
+				}
+			},
+		},
+		{
+			name:        "TS-HDL-41: Empty ids list returns 400",
+			bodyPayload: syncEmployeesParams{IDs: []int64{}},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called because validation happens at the Handler layer
+			},
+			expectedCode: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				if !bytes.Contains(rec.Body.Bytes(), []byte("validation")) {
+					t.Errorf("expected response to mention validation, got %q", rec.Body.String())
+				}
+			},
+		},
+		{
+			name:        "TS-HDL-42: Ids list over 50 is accepted — the service pages through it internally",
+			bodyPayload: syncEmployeesParams{IDs: make([]int64, 51)},
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					SyncEmployees(gomock.Any(), make([]int64, 51)).
+					Return(nil)
+			},
+			expectedCode: http.StatusAccepted,
+		},
+		{
+			name:        "TS-HDL-43: A sync already in progress maps ErrSyncInProgress to 409",
+			bodyPayload: syncEmployeesParams{IDs: []int64{1}},
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					SyncEmployees(gomock.Any(), []int64{1}).
+					Return(ErrSyncInProgress)
+			},
+			expectedCode: http.StatusConflict,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockService(ctrl)
+
+			tc.setupMock(mockSvc)
+
+			h := NewHandler(mockSvc)
+
+			jsonBody, err := json.Marshal(tc.bodyPayload)
+			if err != nil {
+				t.Fatalf("failed to marshal request body: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/employees/syncs", bytes.NewReader(jsonBody))
+			rec := httptest.NewRecorder()
+
+			h.SyncEmployees(rec, req)
+
+			if rec.Code != tc.expectedCode {
+				t.Errorf("expected status %d, got %d", tc.expectedCode, rec.Code)
+			}
+
+			if tc.checkResponse != nil {
+				tc.checkResponse(t, rec)
+			}
+		})
+	}
+}
+
+func TestEmployeeHandler_SyncStatus(t *testing.T) {
+	tests := []struct {
+		name      string
+		setupMock func(mockSvc *MockService)
+		want      SyncStatus
+	}{
+		{
+			name: "TS-HDL-44: Reports syncing=true while a sync is in flight",
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().SyncStatus(gomock.Any()).Return(SyncStatus{Syncing: true})
+			},
+			want: SyncStatus{Syncing: true},
+		},
+		{
+			name: "TS-HDL-45: Reports syncing=false when idle",
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().SyncStatus(gomock.Any()).Return(SyncStatus{Syncing: false})
+			},
+			want: SyncStatus{Syncing: false},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockService(ctrl)
+
+			tc.setupMock(mockSvc)
+
+			h := NewHandler(mockSvc)
+
+			req := httptest.NewRequest(http.MethodGet, "/employees/syncs", nil)
+			rec := httptest.NewRecorder()
+
+			h.SyncStatus(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+			}
+
+			var got SyncStatus
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("failed to unmarshal response body: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("expected %+v, got %+v", tc.want, got)
+			}
+		})
+	}
+}

@@ -170,6 +170,34 @@ func (mr *MockServiceMockRecorder) SetEmployeePassword(ctx, id, password any) *g
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetEmployeePassword", reflect.TypeOf((*MockService)(nil).SetEmployeePassword), ctx, id, password)
 }
 
+// SyncEmployees mocks base method.
+func (m *MockService) SyncEmployees(ctx context.Context, ids []int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SyncEmployees", ctx, ids)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// SyncEmployees indicates an expected call of SyncEmployees.
+func (mr *MockServiceMockRecorder) SyncEmployees(ctx, ids any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncEmployees", reflect.TypeOf((*MockService)(nil).SyncEmployees), ctx, ids)
+}
+
+// SyncStatus mocks base method.
+func (m *MockService) SyncStatus(ctx context.Context) SyncStatus {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SyncStatus", ctx)
+	ret0, _ := ret[0].(SyncStatus)
+	return ret0
+}
+
+// SyncStatus indicates an expected call of SyncStatus.
+func (mr *MockServiceMockRecorder) SyncStatus(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncStatus", reflect.TypeOf((*MockService)(nil).SyncStatus), ctx)
+}
+
 // UpdateEmployee mocks base method.
 func (m *MockService) UpdateEmployee(ctx context.Context, id int64, params updateEmployeeParams) (repo.Employee, error) {
 	m.ctrl.T.Helper()

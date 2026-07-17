@@ -5,6 +5,9 @@
 package repo
 
 import (
+	"net"
+	"net/netip"
+
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -19,6 +22,7 @@ type Employee struct {
 	IsActive   bool               `json:"is_active"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	StoreID    pgtype.Int8        `json:"store_id"`
 }
 
 type PasswordResetToken struct {
@@ -27,5 +31,34 @@ type PasswordResetToken struct {
 	TokenHash  string             `json:"token_hash"`
 	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
 	UsedAt     pgtype.Timestamptz `json:"used_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type Store struct {
+	ID                   int64              `json:"id"`
+	OdooStoreID          pgtype.Text        `json:"odoo_store_id"`
+	StoreName            string             `json:"store_name"`
+	City                 pgtype.Text        `json:"city"`
+	Latitude             pgtype.Numeric     `json:"latitude"`
+	Longitude            pgtype.Numeric     `json:"longitude"`
+	RadiusMeters         pgtype.Int4        `json:"radius_meters"`
+	WifiWhitelistEnabled bool               `json:"wifi_whitelist_enabled"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+type StoreWifiIp struct {
+	ID        int64              `json:"id"`
+	StoreID   int64              `json:"store_id"`
+	IpAddress netip.Addr         `json:"ip_address"`
+	Label     pgtype.Text        `json:"label"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type StoreWifiMac struct {
+	ID         int64              `json:"id"`
+	StoreID    int64              `json:"store_id"`
+	MacAddress net.HardwareAddr   `json:"mac_address"`
+	Label      pgtype.Text        `json:"label"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }

@@ -7,14 +7,59 @@ package repo
 
 import (
 	"context"
+	"net"
+	"net/netip"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bulkSetStoreWifiWhitelistEnabled = `-- name: BulkSetStoreWifiWhitelistEnabled :many
+UPDATE store
+SET wifi_whitelist_enabled = $1,
+    updated_at = now()
+WHERE id = ANY($2::bigint[])
+RETURNING id, wifi_whitelist_enabled, updated_at
+`
+
+type BulkSetStoreWifiWhitelistEnabledParams struct {
+	WifiWhitelistEnabled bool    `json:"wifi_whitelist_enabled"`
+	StoreIds             []int64 `json:"store_ids"`
+}
+
+type BulkSetStoreWifiWhitelistEnabledRow struct {
+	ID                   int64              `json:"id"`
+	WifiWhitelistEnabled bool               `json:"wifi_whitelist_enabled"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
+// Applies the bulk PATCH /v1/stores write once GetStoresByIDsForUpdate has
+// confirmed every id exists and every updated_at matched — see ADR-0006.
+// RETURNING fresh state for every affected store so the handler can build
+// the success response without a follow-up fetch.
+func (q *Queries) BulkSetStoreWifiWhitelistEnabled(ctx context.Context, arg BulkSetStoreWifiWhitelistEnabledParams) ([]BulkSetStoreWifiWhitelistEnabledRow, error) {
+	rows, err := q.db.Query(ctx, bulkSetStoreWifiWhitelistEnabled, arg.WifiWhitelistEnabled, arg.StoreIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BulkSetStoreWifiWhitelistEnabledRow
+	for rows.Next() {
+		var i BulkSetStoreWifiWhitelistEnabledRow
+		if err := rows.Scan(&i.ID, &i.WifiWhitelistEnabled, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createEmployee = `-- name: CreateEmployee :one
 INSERT INTO employees (employee_id, full_name, email, username, role)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at
+RETURNING id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id
 `
 
 type CreateEmployeeParams struct {
@@ -45,6 +90,7 @@ func (q *Queries) CreateEmployee(ctx context.Context, arg CreateEmployeeParams) 
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StoreID,
 	)
 	return i, err
 }
@@ -88,8 +134,170 @@ func (q *Queries) DeleteEmployee(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const deleteStoreWifiIPsByValue = `-- name: DeleteStoreWifiIPsByValue :many
+DELETE FROM store_wifi_ip
+WHERE store_id = $1
+  AND ip_address = ANY($2::inet[])
+RETURNING ip_address
+`
+
+type DeleteStoreWifiIPsByValueParams struct {
+	StoreID     int64        `json:"store_id"`
+	IpAddresses []netip.Addr `json:"ip_addresses"`
+}
+
+// Deletes specific store_wifi_ip rows by value, not the table's internal id
+// (see ADR-0003 — a value unambiguously identifies the row within a store
+// thanks to the UNIQUE (store_id, ip_address) constraint) — the surgical
+// per-entry removal path for DELETE /v1/stores/{id}/wifi-whitelist, as
+// opposed to DeleteStoreWifiIPsNotIn's whole-list replace. RETURNING the
+// deleted values (rather than a row count) lets the caller report each
+// submitted value's success/failure independently and best-effort: a
+// submitted value not present in the whitelist simply doesn't come back in
+// this set, without erroring or blocking the rest of the batch.
+func (q *Queries) DeleteStoreWifiIPsByValue(ctx context.Context, arg DeleteStoreWifiIPsByValueParams) ([]netip.Addr, error) {
+	rows, err := q.db.Query(ctx, deleteStoreWifiIPsByValue, arg.StoreID, arg.IpAddresses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []netip.Addr
+	for rows.Next() {
+		var ip_address netip.Addr
+		if err := rows.Scan(&ip_address); err != nil {
+			return nil, err
+		}
+		items = append(items, ip_address)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const deleteStoreWifiIPsNotIn = `-- name: DeleteStoreWifiIPsNotIn :exec
+DELETE FROM store_wifi_ip
+WHERE store_id = $1
+  AND ip_address != ALL($2::inet[])
+`
+
+type DeleteStoreWifiIPsNotInParams struct {
+	StoreID     int64        `json:"store_id"`
+	IpAddresses []netip.Addr `json:"ip_addresses"`
+}
+
+// Half of the "replace this store's IP whitelist to match ip_addresses
+// exactly" diff (paired with InsertStoreWifiIPs) — deletes whatever's
+// currently there but no longer submitted. "!= ALL(...)" over an empty
+// ip_addresses array is vacuously true for every row, so submitting []
+// correctly clears the whole whitelist rather than being a no-op.
+func (q *Queries) DeleteStoreWifiIPsNotIn(ctx context.Context, arg DeleteStoreWifiIPsNotInParams) error {
+	_, err := q.db.Exec(ctx, deleteStoreWifiIPsNotIn, arg.StoreID, arg.IpAddresses)
+	return err
+}
+
+const deleteStoreWifiMacsByValue = `-- name: DeleteStoreWifiMacsByValue :many
+DELETE FROM store_wifi_mac
+WHERE store_id = $1
+  AND mac_address = ANY($2::macaddr[])
+RETURNING mac_address
+`
+
+type DeleteStoreWifiMacsByValueParams struct {
+	StoreID      int64              `json:"store_id"`
+	MacAddresses []net.HardwareAddr `json:"mac_addresses"`
+}
+
+// MAC-address counterpart of DeleteStoreWifiIPsByValue.
+func (q *Queries) DeleteStoreWifiMacsByValue(ctx context.Context, arg DeleteStoreWifiMacsByValueParams) ([]net.HardwareAddr, error) {
+	rows, err := q.db.Query(ctx, deleteStoreWifiMacsByValue, arg.StoreID, arg.MacAddresses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []net.HardwareAddr
+	for rows.Next() {
+		var mac_address net.HardwareAddr
+		if err := rows.Scan(&mac_address); err != nil {
+			return nil, err
+		}
+		items = append(items, mac_address)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const deleteStoreWifiMacsNotIn = `-- name: DeleteStoreWifiMacsNotIn :exec
+DELETE FROM store_wifi_mac
+WHERE store_id = $1
+  AND mac_address != ALL($2::macaddr[])
+`
+
+type DeleteStoreWifiMacsNotInParams struct {
+	StoreID      int64              `json:"store_id"`
+	MacAddresses []net.HardwareAddr `json:"mac_addresses"`
+}
+
+// MAC-address counterpart of DeleteStoreWifiIPsNotIn.
+func (q *Queries) DeleteStoreWifiMacsNotIn(ctx context.Context, arg DeleteStoreWifiMacsNotInParams) error {
+	_, err := q.db.Exec(ctx, deleteStoreWifiMacsNotIn, arg.StoreID, arg.MacAddresses)
+	return err
+}
+
+const deleteStores = `-- name: DeleteStores :execrows
+DELETE FROM store
+WHERE id = ANY($1::bigint[])
+`
+
+// Hard-deletes stores Odoo no longer reports (see ADR-0005) — replaces the
+// former SoftDeleteStores. store_wifi_ip/store_wifi_mac cascade
+// automatically (ON DELETE CASCADE, migration 00006); employees.store_id is
+// nulled automatically (ON DELETE SET NULL, migration 00007).
+func (q *Queries) DeleteStores(ctx context.Context, storeIds []int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStores, storeIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const findStoresNotInOdoo = `-- name: FindStoresNotInOdoo :many
+SELECT id FROM store
+WHERE odoo_store_id IS NOT NULL
+  AND odoo_store_id != ALL($1::varchar[])
+`
+
+// Locally-created stores that have never been linked to Odoo
+// (odoo_store_id IS NULL) are deliberately excluded — only stores Odoo
+// once reported and has since stopped reporting count as deleted. No
+// wifi_whitelist_enabled filter (see ADR-0005) — that flag is unrelated to a
+// store's existence, so filtering on it would permanently orphan a
+// wifi-disabled store once it left Odoo, since it would never be selected
+// here as stale.
+func (q *Queries) FindStoresNotInOdoo(ctx context.Context, activeOdooStoreIds []string) ([]int64, error) {
+	rows, err := q.db.Query(ctx, findStoresNotInOdoo, activeOdooStoreIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getEmployeeByEmail = `-- name: GetEmployeeByEmail :one
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at FROM employees
+SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
 WHERE email = $1
 `
 
@@ -107,12 +315,13 @@ func (q *Queries) GetEmployeeByEmail(ctx context.Context, email string) (Employe
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StoreID,
 	)
 	return i, err
 }
 
 const getEmployeeByID = `-- name: GetEmployeeByID :one
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at FROM employees
+SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
 WHERE id = $1
 `
 
@@ -130,12 +339,13 @@ func (q *Queries) GetEmployeeByID(ctx context.Context, id int64) (Employee, erro
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StoreID,
 	)
 	return i, err
 }
 
 const getEmployeeByUsername = `-- name: GetEmployeeByUsername :one
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at FROM employees
+SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
 WHERE username = $1
 `
 
@@ -153,12 +363,140 @@ func (q *Queries) GetEmployeeByUsername(ctx context.Context, username string) (E
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StoreID,
 	)
 	return i, err
 }
 
+const getStoreByID = `-- name: GetStoreByID :one
+SELECT id, odoo_store_id, store_name, city, latitude, longitude, radius_meters, wifi_whitelist_enabled, created_at, updated_at FROM store
+WHERE id = $1
+`
+
+// No wifi_whitelist_enabled filter — see ADR-0001/ADR-0004, it's a normal
+// editable field, not a soft-delete tombstone, so a wifi-disabled store is
+// still a normal fetch here, not a 404.
+func (q *Queries) GetStoreByID(ctx context.Context, id int64) (Store, error) {
+	row := q.db.QueryRow(ctx, getStoreByID, id)
+	var i Store
+	err := row.Scan(
+		&i.ID,
+		&i.OdooStoreID,
+		&i.StoreName,
+		&i.City,
+		&i.Latitude,
+		&i.Longitude,
+		&i.RadiusMeters,
+		&i.WifiWhitelistEnabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getStoresByIDsForUpdate = `-- name: GetStoresByIDsForUpdate :many
+SELECT id, updated_at FROM store
+WHERE id = ANY($1::bigint[])
+FOR UPDATE
+`
+
+type GetStoresByIDsForUpdateRow struct {
+	ID        int64              `json:"id"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+// Pre-check pass for bulk PATCH /v1/stores (see ADR-0006): fetches every
+// submitted id's current (id, updated_at) inside the same transaction as the
+// bulk UPDATE that follows, so the service can compare against the caller's
+// submitted pairs before writing anything — any missing id or stale
+// updated_at aborts the whole request. FOR UPDATE locks these rows so a
+// concurrent mutation can't slip in between this check and the bulk UPDATE.
+func (q *Queries) GetStoresByIDsForUpdate(ctx context.Context, storeIds []int64) ([]GetStoresByIDsForUpdateRow, error) {
+	rows, err := q.db.Query(ctx, getStoresByIDsForUpdate, storeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetStoresByIDsForUpdateRow
+	for rows.Next() {
+		var i GetStoresByIDsForUpdateRow
+		if err := rows.Scan(&i.ID, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const insertStoreWifiIPs = `-- name: InsertStoreWifiIPs :exec
+INSERT INTO store_wifi_ip (store_id, ip_address)
+SELECT $1, unnest($2::inet[])
+ON CONFLICT (store_id, ip_address) DO NOTHING
+`
+
+type InsertStoreWifiIPsParams struct {
+	StoreID     int64        `json:"store_id"`
+	IpAddresses []netip.Addr `json:"ip_addresses"`
+}
+
+// Other half of the replace diff: inserts whatever's newly submitted.
+// ON CONFLICT DO NOTHING is what makes values already present in both the
+// old and new set stay untouched rather than being deleted and reinserted.
+func (q *Queries) InsertStoreWifiIPs(ctx context.Context, arg InsertStoreWifiIPsParams) error {
+	_, err := q.db.Exec(ctx, insertStoreWifiIPs, arg.StoreID, arg.IpAddresses)
+	return err
+}
+
+const insertStoreWifiMacs = `-- name: InsertStoreWifiMacs :exec
+INSERT INTO store_wifi_mac (store_id, mac_address)
+SELECT $1, unnest($2::macaddr[])
+ON CONFLICT (store_id, mac_address) DO NOTHING
+`
+
+type InsertStoreWifiMacsParams struct {
+	StoreID      int64              `json:"store_id"`
+	MacAddresses []net.HardwareAddr `json:"mac_addresses"`
+}
+
+// MAC-address counterpart of InsertStoreWifiIPs.
+func (q *Queries) InsertStoreWifiMacs(ctx context.Context, arg InsertStoreWifiMacsParams) error {
+	_, err := q.db.Exec(ctx, insertStoreWifiMacs, arg.StoreID, arg.MacAddresses)
+	return err
+}
+
+const listEmployeeIDsByIDs = `-- name: ListEmployeeIDsByIDs :many
+SELECT employee_id FROM employees
+WHERE id = ANY($1::bigint[])
+`
+
+// Translates the internal ids a SyncEmployees caller supplies into the
+// Odoo-facing employee_id values runSync actually sends to Odoo. An id with
+// no matching row is silently omitted from the result.
+func (q *Queries) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]string, error) {
+	rows, err := q.db.Query(ctx, listEmployeeIDsByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var employee_id string
+		if err := rows.Scan(&employee_id); err != nil {
+			return nil, err
+		}
+		items = append(items, employee_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEmployees = `-- name: ListEmployees :many
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at FROM employees
+SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
 ORDER BY id
 `
 
@@ -182,6 +520,123 @@ func (q *Queries) ListEmployees(ctx context.Context) ([]Employee, error) {
 			&i.IsActive,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.StoreID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStoreWifiIPsByStoreID = `-- name: ListStoreWifiIPsByStoreID :many
+SELECT ip_address FROM store_wifi_ip
+WHERE store_id = $1
+ORDER BY id
+`
+
+func (q *Queries) ListStoreWifiIPsByStoreID(ctx context.Context, storeID int64) ([]netip.Addr, error) {
+	rows, err := q.db.Query(ctx, listStoreWifiIPsByStoreID, storeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []netip.Addr
+	for rows.Next() {
+		var ip_address netip.Addr
+		if err := rows.Scan(&ip_address); err != nil {
+			return nil, err
+		}
+		items = append(items, ip_address)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStoreWifiMacsByStoreID = `-- name: ListStoreWifiMacsByStoreID :many
+SELECT mac_address FROM store_wifi_mac
+WHERE store_id = $1
+ORDER BY id
+`
+
+func (q *Queries) ListStoreWifiMacsByStoreID(ctx context.Context, storeID int64) ([]net.HardwareAddr, error) {
+	rows, err := q.db.Query(ctx, listStoreWifiMacsByStoreID, storeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []net.HardwareAddr
+	for rows.Next() {
+		var mac_address net.HardwareAddr
+		if err := rows.Scan(&mac_address); err != nil {
+			return nil, err
+		}
+		items = append(items, mac_address)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStores = `-- name: ListStores :many
+SELECT
+    s.id, s.odoo_store_id, s.store_name, s.city, s.latitude, s.longitude, s.radius_meters, s.wifi_whitelist_enabled, s.created_at, s.updated_at,
+    COALESCE(ip.ip_addresses, '{}')::inet[] AS ip_addresses,
+    COALESCE(mac.mac_addresses, '{}')::macaddr[] AS mac_addresses
+FROM store s
+LEFT JOIN LATERAL (
+    SELECT array_agg(ip_address ORDER BY id) AS ip_addresses
+    FROM store_wifi_ip
+    WHERE store_id = s.id
+) ip ON true
+LEFT JOIN LATERAL (
+    SELECT array_agg(mac_address ORDER BY id) AS mac_addresses
+    FROM store_wifi_mac
+    WHERE store_id = s.id
+) mac ON true
+ORDER BY s.city, s.store_name
+`
+
+type ListStoresRow struct {
+	Store        Store              `json:"store"`
+	IpAddresses  []netip.Addr       `json:"ip_addresses"`
+	MacAddresses []net.HardwareAddr `json:"mac_addresses"`
+}
+
+// Every store (wifi-enabled and wifi-disabled — the list screen's Activate
+// toggle needs to see and re-enable wifi-disabled stores), each with its
+// current IP/MAC whitelist aggregated in the same round trip rather than one
+// query per store. LATERAL subqueries (rather than a single LEFT JOIN +
+// array_agg) keep the two independent whitelists from cross-joining each
+// other.
+func (q *Queries) ListStores(ctx context.Context) ([]ListStoresRow, error) {
+	rows, err := q.db.Query(ctx, listStores)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStoresRow
+	for rows.Next() {
+		var i ListStoresRow
+		if err := rows.Scan(
+			&i.Store.ID,
+			&i.Store.OdooStoreID,
+			&i.Store.StoreName,
+			&i.Store.City,
+			&i.Store.Latitude,
+			&i.Store.Longitude,
+			&i.Store.RadiusMeters,
+			&i.Store.WifiWhitelistEnabled,
+			&i.Store.CreatedAt,
+			&i.Store.UpdatedAt,
+			&i.IpAddresses,
+			&i.MacAddresses,
 		); err != nil {
 			return nil, err
 		}
@@ -260,6 +715,40 @@ func (q *Queries) SetEmployeePassword(ctx context.Context, arg SetEmployeePasswo
 	return result.RowsAffected(), nil
 }
 
+const setStoreWifiWhitelistEnabled = `-- name: SetStoreWifiWhitelistEnabled :one
+UPDATE store
+SET wifi_whitelist_enabled = $1,
+    updated_at = now()
+WHERE id = $2
+  AND updated_at = $3
+RETURNING id, updated_at
+`
+
+type SetStoreWifiWhitelistEnabledParams struct {
+	WifiWhitelistEnabled bool               `json:"wifi_whitelist_enabled"`
+	ID                   int64              `json:"id"`
+	ExpectedUpdatedAt    pgtype.Timestamptz `json:"expected_updated_at"`
+}
+
+type SetStoreWifiWhitelistEnabledRow struct {
+	ID        int64              `json:"id"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+// PATCH /v1/stores/{id}/wifi-whitelist-enabled's single query — same
+// conditional-update-returning-0-rows-on-mismatch shape as
+// UpdateStoreGeofence, but scoped to just this one column since this
+// endpoint only ever does one thing (see ADR-0006). No returned row
+// (pgx.ErrNoRows) means either the store doesn't exist, or
+// expected_updated_at is stale; the caller disambiguates with a follow-up
+// GetStoreByID.
+func (q *Queries) SetStoreWifiWhitelistEnabled(ctx context.Context, arg SetStoreWifiWhitelistEnabledParams) (SetStoreWifiWhitelistEnabledRow, error) {
+	row := q.db.QueryRow(ctx, setStoreWifiWhitelistEnabled, arg.WifiWhitelistEnabled, arg.ID, arg.ExpectedUpdatedAt)
+	var i SetStoreWifiWhitelistEnabledRow
+	err := row.Scan(&i.ID, &i.UpdatedAt)
+	return i, err
+}
+
 const updateEmployee = `-- name: UpdateEmployee :one
 UPDATE employees
 SET employee_id = $2,
@@ -269,7 +758,7 @@ SET employee_id = $2,
     role = $6,
     updated_at = now()
 WHERE id = $1
-RETURNING id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at
+RETURNING id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id
 `
 
 type UpdateEmployeeParams struct {
@@ -302,6 +791,178 @@ func (q *Queries) UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) 
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.StoreID,
 	)
 	return i, err
+}
+
+const updateStoreGeofence = `-- name: UpdateStoreGeofence :one
+UPDATE store
+SET latitude = COALESCE($1, latitude),
+    longitude = COALESCE($2, longitude),
+    radius_meters = COALESCE($3, radius_meters),
+    updated_at = now()
+WHERE id = $4
+  AND updated_at = $5
+RETURNING id, odoo_store_id, store_name, city, latitude, longitude, radius_meters, wifi_whitelist_enabled, created_at, updated_at
+`
+
+type UpdateStoreGeofenceParams struct {
+	Latitude          pgtype.Numeric     `json:"latitude"`
+	Longitude         pgtype.Numeric     `json:"longitude"`
+	RadiusMeters      pgtype.Int4        `json:"radius_meters"`
+	ID                int64              `json:"id"`
+	ExpectedUpdatedAt pgtype.Timestamptz `json:"expected_updated_at"`
+}
+
+// Updates a store's geofence, and unconditionally bumps updated_at whenever
+// expected_updated_at still matches the current row — the
+// optimistic-concurrency check for the whole PATCH /v1/stores/{id} aggregate
+// (store row + wifi whitelist tables), not just the geofence. A caller that
+// only touches the wifi lists (ticket 03) or touches neither (ticket 06's
+// delete endpoint, to bump updated_at alone) still runs this with the
+// geofence narg columns NULL, still bumping updated_at.
+// latitude/longitude/radius_meters are nullable args: NULL means "leave this
+// column unchanged" (COALESCE keeps the existing value) rather than "clear
+// it" — the all-or-nothing geofence group is enforced by the caller, not
+// here. wifi_whitelist_enabled is not part of this query at all — see
+// ADR-0006, it's set exclusively via its own dedicated endpoints. No
+// returned row (pgx.ErrNoRows) means either the store doesn't exist, or
+// expected_updated_at is stale; the caller disambiguates with a follow-up
+// GetStoreByID.
+func (q *Queries) UpdateStoreGeofence(ctx context.Context, arg UpdateStoreGeofenceParams) (Store, error) {
+	row := q.db.QueryRow(ctx, updateStoreGeofence,
+		arg.Latitude,
+		arg.Longitude,
+		arg.RadiusMeters,
+		arg.ID,
+		arg.ExpectedUpdatedAt,
+	)
+	var i Store
+	err := row.Scan(
+		&i.ID,
+		&i.OdooStoreID,
+		&i.StoreName,
+		&i.City,
+		&i.Latitude,
+		&i.Longitude,
+		&i.RadiusMeters,
+		&i.WifiWhitelistEnabled,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const upsertEmployees = `-- name: UpsertEmployees :many
+INSERT INTO employees (employee_id, full_name, email, username, role)
+SELECT unnest($1::varchar[]), unnest($2::varchar[]), unnest($3::citext[]), unnest($4::varchar[]), unnest($5::varchar[])
+ON CONFLICT (employee_id) DO UPDATE
+SET full_name = EXCLUDED.full_name,
+    email = EXCLUDED.email,
+    username = EXCLUDED.username,
+    role = EXCLUDED.role,
+    updated_at = now()
+RETURNING id, employee_id, (xmax = 0) AS inserted
+`
+
+type UpsertEmployeesParams struct {
+	EmployeeIds []string `json:"employee_ids"`
+	FullNames   []string `json:"full_names"`
+	Emails      []string `json:"emails"`
+	Usernames   []string `json:"usernames"`
+	Roles       []string `json:"roles"`
+}
+
+type UpsertEmployeesRow struct {
+	ID         int64  `json:"id"`
+	EmployeeID string `json:"employee_id"`
+	Inserted   bool   `json:"inserted"`
+}
+
+// Bulk-upserts one batch of Odoo employees (at most 50, see
+// employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
+// trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
+// without a second query. employee_id is the shared key with Odoo (see
+// odoo.Employee), so it's the conflict target.
+func (q *Queries) UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams) ([]UpsertEmployeesRow, error) {
+	rows, err := q.db.Query(ctx, upsertEmployees,
+		arg.EmployeeIds,
+		arg.FullNames,
+		arg.Emails,
+		arg.Usernames,
+		arg.Roles,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UpsertEmployeesRow
+	for rows.Next() {
+		var i UpsertEmployeesRow
+		if err := rows.Scan(&i.ID, &i.EmployeeID, &i.Inserted); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const upsertStores = `-- name: UpsertStores :many
+INSERT INTO store (odoo_store_id, store_name, city)
+SELECT unnest($1::varchar[]), unnest($2::varchar[]), unnest($3::varchar[])
+ON CONFLICT (odoo_store_id) DO UPDATE
+SET store_name = EXCLUDED.store_name,
+    city = EXCLUDED.city,
+    updated_at = CASE
+        WHEN store.store_name IS DISTINCT FROM EXCLUDED.store_name
+          OR store.city IS DISTINCT FROM EXCLUDED.city
+        THEN now()
+        ELSE store.updated_at
+    END
+RETURNING id, odoo_store_id, (xmax = 0) AS inserted
+`
+
+type UpsertStoresParams struct {
+	OdooStoreIds []string `json:"odoo_store_ids"`
+	StoreNames   []string `json:"store_names"`
+	Cities       []string `json:"cities"`
+}
+
+type UpsertStoresRow struct {
+	ID          int64       `json:"id"`
+	OdooStoreID pgtype.Text `json:"odoo_store_id"`
+	Inserted    bool        `json:"inserted"`
+}
+
+// Bulk-upserts one page of Odoo stores in a single round trip. "(xmax = 0)"
+// is Postgres' standard trick for distinguishing an INSERT from an
+// ON CONFLICT UPDATE in the same statement: xmax is only set by an UPDATE,
+// so a fresh row's xmax is 0. The store-sync service uses it to report
+// inserted_stores vs updated_stores without a second query. updated_at only
+// advances when store_name/city actually changed — store.updated_at also
+// doubles as the admin-facing optimistic-lock version for the whole store
+// aggregate, so a sync run that finds no real change must not invalidate a
+// concurrently-in-flight admin edit's lock token.
+func (q *Queries) UpsertStores(ctx context.Context, arg UpsertStoresParams) ([]UpsertStoresRow, error) {
+	rows, err := q.db.Query(ctx, upsertStores, arg.OdooStoreIds, arg.StoreNames, arg.Cities)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UpsertStoresRow
+	for rows.Next() {
+		var i UpsertStoresRow
+		if err := rows.Scan(&i.ID, &i.OdooStoreID, &i.Inserted); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

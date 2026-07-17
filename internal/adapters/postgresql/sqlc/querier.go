@@ -6,16 +6,86 @@ package repo
 
 import (
 	"context"
+	"net"
+	"net/netip"
 )
 
 type Querier interface {
+	// Applies the bulk PATCH /v1/stores write once GetStoresByIDsForUpdate has
+	// confirmed every id exists and every updated_at matched — see ADR-0006.
+	// RETURNING fresh state for every affected store so the handler can build
+	// the success response without a follow-up fetch.
+	BulkSetStoreWifiWhitelistEnabled(ctx context.Context, arg BulkSetStoreWifiWhitelistEnabledParams) ([]BulkSetStoreWifiWhitelistEnabledRow, error)
 	CreateEmployee(ctx context.Context, arg CreateEmployeeParams) (Employee, error)
 	CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) (PasswordResetToken, error)
 	DeleteEmployee(ctx context.Context, id int64) (int64, error)
+	// Deletes specific store_wifi_ip rows by value, not the table's internal id
+	// (see ADR-0003 — a value unambiguously identifies the row within a store
+	// thanks to the UNIQUE (store_id, ip_address) constraint) — the surgical
+	// per-entry removal path for DELETE /v1/stores/{id}/wifi-whitelist, as
+	// opposed to DeleteStoreWifiIPsNotIn's whole-list replace. RETURNING the
+	// deleted values (rather than a row count) lets the caller report each
+	// submitted value's success/failure independently and best-effort: a
+	// submitted value not present in the whitelist simply doesn't come back in
+	// this set, without erroring or blocking the rest of the batch.
+	DeleteStoreWifiIPsByValue(ctx context.Context, arg DeleteStoreWifiIPsByValueParams) ([]netip.Addr, error)
+	// Half of the "replace this store's IP whitelist to match ip_addresses
+	// exactly" diff (paired with InsertStoreWifiIPs) — deletes whatever's
+	// currently there but no longer submitted. "!= ALL(...)" over an empty
+	// ip_addresses array is vacuously true for every row, so submitting []
+	// correctly clears the whole whitelist rather than being a no-op.
+	DeleteStoreWifiIPsNotIn(ctx context.Context, arg DeleteStoreWifiIPsNotInParams) error
+	// MAC-address counterpart of DeleteStoreWifiIPsByValue.
+	DeleteStoreWifiMacsByValue(ctx context.Context, arg DeleteStoreWifiMacsByValueParams) ([]net.HardwareAddr, error)
+	// MAC-address counterpart of DeleteStoreWifiIPsNotIn.
+	DeleteStoreWifiMacsNotIn(ctx context.Context, arg DeleteStoreWifiMacsNotInParams) error
+	// Hard-deletes stores Odoo no longer reports (see ADR-0005) — replaces the
+	// former SoftDeleteStores. store_wifi_ip/store_wifi_mac cascade
+	// automatically (ON DELETE CASCADE, migration 00006); employees.store_id is
+	// nulled automatically (ON DELETE SET NULL, migration 00007).
+	DeleteStores(ctx context.Context, storeIds []int64) (int64, error)
+	// Locally-created stores that have never been linked to Odoo
+	// (odoo_store_id IS NULL) are deliberately excluded — only stores Odoo
+	// once reported and has since stopped reporting count as deleted. No
+	// wifi_whitelist_enabled filter (see ADR-0005) — that flag is unrelated to a
+	// store's existence, so filtering on it would permanently orphan a
+	// wifi-disabled store once it left Odoo, since it would never be selected
+	// here as stale.
+	FindStoresNotInOdoo(ctx context.Context, activeOdooStoreIds []string) ([]int64, error)
 	GetEmployeeByEmail(ctx context.Context, email string) (Employee, error)
 	GetEmployeeByID(ctx context.Context, id int64) (Employee, error)
 	GetEmployeeByUsername(ctx context.Context, username string) (Employee, error)
+	// No wifi_whitelist_enabled filter — see ADR-0001/ADR-0004, it's a normal
+	// editable field, not a soft-delete tombstone, so a wifi-disabled store is
+	// still a normal fetch here, not a 404.
+	GetStoreByID(ctx context.Context, id int64) (Store, error)
+	// Pre-check pass for bulk PATCH /v1/stores (see ADR-0006): fetches every
+	// submitted id's current (id, updated_at) inside the same transaction as the
+	// bulk UPDATE that follows, so the service can compare against the caller's
+	// submitted pairs before writing anything — any missing id or stale
+	// updated_at aborts the whole request. FOR UPDATE locks these rows so a
+	// concurrent mutation can't slip in between this check and the bulk UPDATE.
+	GetStoresByIDsForUpdate(ctx context.Context, storeIds []int64) ([]GetStoresByIDsForUpdateRow, error)
+	// Other half of the replace diff: inserts whatever's newly submitted.
+	// ON CONFLICT DO NOTHING is what makes values already present in both the
+	// old and new set stay untouched rather than being deleted and reinserted.
+	InsertStoreWifiIPs(ctx context.Context, arg InsertStoreWifiIPsParams) error
+	// MAC-address counterpart of InsertStoreWifiIPs.
+	InsertStoreWifiMacs(ctx context.Context, arg InsertStoreWifiMacsParams) error
+	// Translates the internal ids a SyncEmployees caller supplies into the
+	// Odoo-facing employee_id values runSync actually sends to Odoo. An id with
+	// no matching row is silently omitted from the result.
+	ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]string, error)
 	ListEmployees(ctx context.Context) ([]Employee, error)
+	ListStoreWifiIPsByStoreID(ctx context.Context, storeID int64) ([]netip.Addr, error)
+	ListStoreWifiMacsByStoreID(ctx context.Context, storeID int64) ([]net.HardwareAddr, error)
+	// Every store (wifi-enabled and wifi-disabled — the list screen's Activate
+	// toggle needs to see and re-enable wifi-disabled stores), each with its
+	// current IP/MAC whitelist aggregated in the same round trip rather than one
+	// query per store. LATERAL subqueries (rather than a single LEFT JOIN +
+	// array_agg) keep the two independent whitelists from cross-joining each
+	// other.
+	ListStores(ctx context.Context) ([]ListStoresRow, error)
 	// Atomically claims a valid, unused token: the UPDATE's row lock ensures
 	// only one concurrent caller can match the WHERE clause and get a row back,
 	// so CompleteActivation can't be raced into redeeming the same token twice.
@@ -23,7 +93,47 @@ type Querier interface {
 	RedeemPasswordResetToken(ctx context.Context, tokenHash string) (PasswordResetToken, error)
 	SetEmployeeActive(ctx context.Context, arg SetEmployeeActiveParams) (int64, error)
 	SetEmployeePassword(ctx context.Context, arg SetEmployeePasswordParams) (int64, error)
+	// PATCH /v1/stores/{id}/wifi-whitelist-enabled's single query — same
+	// conditional-update-returning-0-rows-on-mismatch shape as
+	// UpdateStoreGeofence, but scoped to just this one column since this
+	// endpoint only ever does one thing (see ADR-0006). No returned row
+	// (pgx.ErrNoRows) means either the store doesn't exist, or
+	// expected_updated_at is stale; the caller disambiguates with a follow-up
+	// GetStoreByID.
+	SetStoreWifiWhitelistEnabled(ctx context.Context, arg SetStoreWifiWhitelistEnabledParams) (SetStoreWifiWhitelistEnabledRow, error)
 	UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) (Employee, error)
+	// Updates a store's geofence, and unconditionally bumps updated_at whenever
+	// expected_updated_at still matches the current row — the
+	// optimistic-concurrency check for the whole PATCH /v1/stores/{id} aggregate
+	// (store row + wifi whitelist tables), not just the geofence. A caller that
+	// only touches the wifi lists (ticket 03) or touches neither (ticket 06's
+	// delete endpoint, to bump updated_at alone) still runs this with the
+	// geofence narg columns NULL, still bumping updated_at.
+	// latitude/longitude/radius_meters are nullable args: NULL means "leave this
+	// column unchanged" (COALESCE keeps the existing value) rather than "clear
+	// it" — the all-or-nothing geofence group is enforced by the caller, not
+	// here. wifi_whitelist_enabled is not part of this query at all — see
+	// ADR-0006, it's set exclusively via its own dedicated endpoints. No
+	// returned row (pgx.ErrNoRows) means either the store doesn't exist, or
+	// expected_updated_at is stale; the caller disambiguates with a follow-up
+	// GetStoreByID.
+	UpdateStoreGeofence(ctx context.Context, arg UpdateStoreGeofenceParams) (Store, error)
+	// Bulk-upserts one batch of Odoo employees (at most 50, see
+	// employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
+	// trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
+	// without a second query. employee_id is the shared key with Odoo (see
+	// odoo.Employee), so it's the conflict target.
+	UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams) ([]UpsertEmployeesRow, error)
+	// Bulk-upserts one page of Odoo stores in a single round trip. "(xmax = 0)"
+	// is Postgres' standard trick for distinguishing an INSERT from an
+	// ON CONFLICT UPDATE in the same statement: xmax is only set by an UPDATE,
+	// so a fresh row's xmax is 0. The store-sync service uses it to report
+	// inserted_stores vs updated_stores without a second query. updated_at only
+	// advances when store_name/city actually changed — store.updated_at also
+	// doubles as the admin-facing optimistic-lock version for the whole store
+	// aggregate, so a sync run that finds no real change must not invalidate a
+	// concurrently-in-flight admin edit's lock token.
+	UpsertStores(ctx context.Context, arg UpsertStoresParams) ([]UpsertStoresRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

@@ -43,3 +43,4 @@ session-handoff.md
 init.sh
 docs/harness-report.html
 docs/harness-benchmark.json
+docs/agents/*.md

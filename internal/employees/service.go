@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/env"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/mailer"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -34,13 +36,29 @@ const (
 // per feat-007's explicit choice over a longer first-activation-specific TTL.
 const activationTokenTTL = 30 * time.Minute
 
+// employeeSyncBatchSize is how many ids runSync sends to
+// odoo.FetchEmployeesByEmployeeIDs per call — a SyncEmployees request isn't
+// bounded in how many ids it accepts, so it pages through them this many at
+// a time instead of sending them all in one round trip.
+const employeeSyncBatchSize = 50
+
+// employeeSyncTimeout bounds runSync's detached goroutine so a stalled Odoo
+// or database call can't leave s.syncing stuck true indefinitely — the
+// goroutine deliberately outlives the triggering request's context, but
+// still needs its own deadline.
+const employeeSyncTimeout = 5 * time.Minute
+
 type service struct {
 	repo   repo.Querier
 	mailer mailer.Client
+	odoo   odoo.Client
+
+	mu      sync.Mutex
+	syncing bool
 }
 
-func NewService(r repo.Querier, m mailer.Client) Service {
-	return &service{repo: r, mailer: m}
+func NewService(r repo.Querier, m mailer.Client, o odoo.Client) Service {
+	return &service{repo: r, mailer: m, odoo: o}
 }
 
 func (s *service) CreateEmployee(ctx context.Context, params createEmployeeParams) (repo.Employee, error) {
@@ -234,6 +252,136 @@ func (s *service) BulkSendPasswordResetLinks(ctx context.Context, ids []int64) [
 		results[i].Success = true
 	}
 	return results
+}
+
+// SyncEmployees looks up the Odoo employee_id for each given internal id,
+// then pulls those from Odoo and bulk-upserts them into employees, in a
+// detached goroutine so the caller gets a quick response (Step 3 of the sync
+// spec) instead of waiting on Odoo/DB latency. An id with no matching row is
+// silently dropped by ListEmployeeIDsByIDs rather than failing the request.
+// Only one sync runs at a time — a concurrent call is rejected with
+// ErrSyncInProgress rather than queued or run in parallel, guarded by mu
+// (the "2 admins click the button" special case).
+func (s *service) SyncEmployees(ctx context.Context, ids []int64) error {
+	if !s.tryLock() {
+		return ErrSyncInProgress
+	}
+
+	employeeIDs, err := s.repo.ListEmployeeIDsByIDs(ctx, ids)
+	if err != nil {
+		s.unlock()
+		return err
+	}
+
+	// Detached from ctx: the HTTP handler's request context is canceled the
+	// moment it returns, which would race with (and likely abort) this
+	// goroutine if it inherited that cancellation. Still bounded by
+	// employeeSyncTimeout so a stalled Odoo/DB call can't hold s.syncing
+	// true forever; runSync owns cancel and releases it when it returns.
+	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), employeeSyncTimeout)
+	go s.runSync(syncCtx, cancel, employeeIDs)
+
+	return nil
+}
+
+// SyncStatus reports whether a background sync started by SyncEmployees is
+// still running, so the frontend can poll it to keep its trigger button
+// disabled for the duration.
+func (s *service) SyncStatus(ctx context.Context) SyncStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return SyncStatus{Syncing: s.syncing}
+}
+
+// runSync does the actual Odoo fetch + bulk upsert (Steps 4-5), paging
+// through ids employeeSyncBatchSize at a time so a request isn't bounded by
+// how many ids Odoo accepts in one call. It logs the outcome since nothing
+// else observes this goroutine once SyncEmployees has already returned to
+// its caller. A batch's fetch or upsert error aborts the remaining batches
+// rather than skipping past them.
+func (s *service) runSync(ctx context.Context, cancel context.CancelFunc, ids []string) {
+	defer cancel()
+	defer s.unlock()
+
+	var notFound []string
+	var inserted, updated int
+
+	for start := 0; start < len(ids); start += employeeSyncBatchSize {
+		end := min(start+employeeSyncBatchSize, len(ids))
+		batch := ids[start:end]
+
+		found, err := s.odoo.FetchEmployeesByEmployeeIDs(ctx, batch)
+		if err != nil {
+			slog.Error("employees: sync fetch from odoo", "batch_size", len(batch), "error", err)
+			return
+		}
+
+		foundIDs := make(map[string]bool, len(found))
+		employeeIDs := make([]string, len(found))
+		fullNames := make([]string, len(found))
+		emails := make([]string, len(found))
+		usernames := make([]string, len(found))
+		roles := make([]string, len(found))
+		for i, e := range found {
+			foundIDs[e.EmployeeID] = true
+			employeeIDs[i] = e.EmployeeID
+			fullNames[i] = e.FullName
+			emails[i] = e.Email
+			usernames[i] = e.Username
+			roles[i] = e.Role
+		}
+
+		for _, id := range batch {
+			if !foundIDs[id] {
+				notFound = append(notFound, id)
+			}
+		}
+
+		if len(found) == 0 {
+			continue
+		}
+
+		rows, err := s.repo.UpsertEmployees(ctx, repo.UpsertEmployeesParams{
+			EmployeeIds: employeeIDs,
+			FullNames:   fullNames,
+			Emails:      emails,
+			Usernames:   usernames,
+			Roles:       roles,
+		})
+		if err != nil {
+			slog.Error("employees: sync upsert", "ids", employeeIDs, "error", err)
+			return
+		}
+
+		for _, row := range rows {
+			if row.Inserted {
+				inserted++
+			} else {
+				updated++
+			}
+		}
+	}
+
+	if len(notFound) > 0 {
+		slog.Warn("employees: sync ids not found in odoo", "ids", notFound)
+	}
+	slog.Info("employees: sync completed", "inserted", inserted, "updated", updated, "not_found", len(notFound))
+}
+
+func (s *service) tryLock() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.syncing {
+		return false
+	}
+	s.syncing = true
+	return true
+}
+
+func (s *service) unlock() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncing = false
 }
 
 // sendActivationEmail generates a password-reset/activation token and emails
