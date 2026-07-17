@@ -57,13 +57,18 @@ WHERE id = ANY(sqlc.arg(ids)::bigint[]);
 -- employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
 -- trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
 -- without a second query. odoo_employee_id is the shared key with Odoo (see
--- odoo.Employee), so it's the conflict target.
+-- odoo.Employee), so it's the conflict target. username has no Odoo source
+-- and is local-only (ADR-0008/ADR-0009): the '' placeholder only matters for
+-- the INSERT branch, which this bulk upsert's caller (runSync) never
+-- actually exercises — it's only ever called with odoo_employee_ids already
+-- present in employees, so every row here always takes the ON CONFLICT
+-- UPDATE branch, and username's NOT NULL constraint still requires *a*
+-- value in the INSERT's column list either way.
 INSERT INTO employees (odoo_employee_id, full_name, email, username)
-SELECT unnest(@odoo_employee_ids::bigint[]), unnest(@full_names::varchar[]), unnest(@emails::citext[]), unnest(@usernames::varchar[])
+SELECT unnest(@odoo_employee_ids::bigint[]), unnest(@full_names::varchar[]), unnest(@emails::citext[]), ''
 ON CONFLICT (odoo_employee_id) DO UPDATE
 SET full_name = EXCLUDED.full_name,
     email = EXCLUDED.email,
-    username = EXCLUDED.username,
     updated_at = now()
 RETURNING id, odoo_employee_id, (xmax = 0) AS inserted;
 
@@ -342,3 +347,45 @@ WHERE employee_id = sqlc.arg(employee_id)
 INSERT INTO employee_positions (employee_id, position_id)
 SELECT sqlc.arg(employee_id), unnest(sqlc.arg(position_ids)::bigint[])
 ON CONFLICT (employee_id, position_id) DO NOTHING;
+
+-- name: ListStoresByOdooStoreIDs :many
+-- Resolves a batch of Odoo store ids (matched against store's VARCHAR
+-- odoo_store_id join key — the same one SyncStores already uses) to this
+-- system's internal store.id, for employee sync to map each employee's
+-- Odoo store membership onto local store rows (see ADR-0009). An
+-- odoo_store_id with no matching row is simply absent from the result; the
+-- caller (runSync) logs and skips those rather than failing the sync.
+SELECT id, odoo_store_id FROM store
+WHERE odoo_store_id = ANY(sqlc.arg(odoo_store_ids)::varchar[]);
+
+-- name: ListStoreIDsByEmployeeID :many
+SELECT store_id FROM employee_stores
+WHERE employee_id = $1
+ORDER BY store_id;
+
+-- name: ListStoreIDsByEmployeeIDs :many
+-- Bulk counterpart of ListStoreIDsByEmployeeID for ListEmployees — same
+-- plain row-per-pair shape as ListPositionIDsByEmployeeIDs, grouped
+-- client-side by employee_id.
+SELECT employee_id, store_id FROM employee_stores
+WHERE employee_id = ANY(sqlc.arg(employee_ids)::bigint[])
+ORDER BY employee_id, store_id;
+
+-- name: DeleteEmployeeStoresNotIn :exec
+-- Half of the "replace this employee's store membership to match store_ids
+-- exactly" diff (paired with InsertEmployeeStores) — deletes whatever's
+-- currently assigned but no longer present in Odoo's resolved set. Unlike
+-- employee_positions' diff pair, only runSync ever calls this — store
+-- membership is Odoo-owned, never admin-writable (see ADR-0009).
+DELETE FROM employee_stores
+WHERE employee_id = sqlc.arg(employee_id)
+  AND store_id != ALL(sqlc.arg(store_ids)::bigint[]);
+
+-- name: InsertEmployeeStores :exec
+-- Other half of the replace diff: inserts whatever's newly resolved.
+-- ON CONFLICT DO NOTHING is what makes assignments already present in both
+-- the old and new set stay untouched rather than being deleted and
+-- reinserted.
+INSERT INTO employee_stores (employee_id, store_id)
+SELECT sqlc.arg(employee_id), unnest(sqlc.arg(store_ids)::bigint[])
+ON CONFLICT (employee_id, store_id) DO NOTHING;

@@ -32,6 +32,12 @@ type Querier interface {
 	// correctly clears the employee's entire position set rather than being a
 	// no-op (see ADR-0008).
 	DeleteEmployeePositionsNotIn(ctx context.Context, arg DeleteEmployeePositionsNotInParams) error
+	// Half of the "replace this employee's store membership to match store_ids
+	// exactly" diff (paired with InsertEmployeeStores) — deletes whatever's
+	// currently assigned but no longer present in Odoo's resolved set. Unlike
+	// employee_positions' diff pair, only runSync ever calls this — store
+	// membership is Odoo-owned, never admin-writable (see ADR-0009).
+	DeleteEmployeeStoresNotIn(ctx context.Context, arg DeleteEmployeeStoresNotInParams) error
 	DeletePosition(ctx context.Context, id int64) (int64, error)
 	// Deletes specific store_wifi_ip rows by value, not the table's internal id
 	// (see ADR-0003 — a value unambiguously identifies the row within a store
@@ -84,6 +90,11 @@ type Querier interface {
 	// the old and new set stay untouched rather than being deleted and
 	// reinserted.
 	InsertEmployeePositions(ctx context.Context, arg InsertEmployeePositionsParams) error
+	// Other half of the replace diff: inserts whatever's newly resolved.
+	// ON CONFLICT DO NOTHING is what makes assignments already present in both
+	// the old and new set stay untouched rather than being deleted and
+	// reinserted.
+	InsertEmployeeStores(ctx context.Context, arg InsertEmployeeStoresParams) error
 	// Other half of the replace diff: inserts whatever's newly submitted.
 	// ON CONFLICT DO NOTHING is what makes values already present in both the
 	// old and new set stay untouched rather than being deleted and reinserted.
@@ -102,6 +113,11 @@ type Querier interface {
 	// row-per-pair scan, same shape as the single-employee version).
 	ListPositionIDsByEmployeeIDs(ctx context.Context, employeeIds []int64) ([]EmployeePosition, error)
 	ListPositions(ctx context.Context) ([]Position, error)
+	ListStoreIDsByEmployeeID(ctx context.Context, employeeID int64) ([]int64, error)
+	// Bulk counterpart of ListStoreIDsByEmployeeID for ListEmployees — same
+	// plain row-per-pair shape as ListPositionIDsByEmployeeIDs, grouped
+	// client-side by employee_id.
+	ListStoreIDsByEmployeeIDs(ctx context.Context, employeeIds []int64) ([]EmployeeStore, error)
 	ListStoreWifiIPsByStoreID(ctx context.Context, storeID int64) ([]netip.Addr, error)
 	ListStoreWifiMacsByStoreID(ctx context.Context, storeID int64) ([]net.HardwareAddr, error)
 	// Every store (wifi-enabled and wifi-disabled — the list screen's Activate
@@ -111,6 +127,13 @@ type Querier interface {
 	// array_agg) keep the two independent whitelists from cross-joining each
 	// other.
 	ListStores(ctx context.Context) ([]ListStoresRow, error)
+	// Resolves a batch of Odoo store ids (matched against store's VARCHAR
+	// odoo_store_id join key — the same one SyncStores already uses) to this
+	// system's internal store.id, for employee sync to map each employee's
+	// Odoo store membership onto local store rows (see ADR-0009). An
+	// odoo_store_id with no matching row is simply absent from the result; the
+	// caller (runSync) logs and skips those rather than failing the sync.
+	ListStoresByOdooStoreIDs(ctx context.Context, odooStoreIds []string) ([]ListStoresByOdooStoreIDsRow, error)
 	// Atomically claims a valid, unused token: the UPDATE's row lock ensures
 	// only one concurrent caller can match the WHERE clause and get a row back,
 	// so CompleteActivation can't be raced into redeeming the same token twice.
@@ -148,7 +171,13 @@ type Querier interface {
 	// employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
 	// trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
 	// without a second query. odoo_employee_id is the shared key with Odoo (see
-	// odoo.Employee), so it's the conflict target.
+	// odoo.Employee), so it's the conflict target. username has no Odoo source
+	// and is local-only (ADR-0008/ADR-0009): the '' placeholder only matters for
+	// the INSERT branch, which this bulk upsert's caller (runSync) never
+	// actually exercises — it's only ever called with odoo_employee_ids already
+	// present in employees, so every row here always takes the ON CONFLICT
+	// UPDATE branch, and username's NOT NULL constraint still requires *a*
+	// value in the INSERT's column list either way.
 	UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams) ([]UpsertEmployeesRow, error)
 	// Bulk-upserts one page of Odoo stores in a single round trip. "(xmax = 0)"
 	// is Postgres' standard trick for distinguishing an INSERT from an

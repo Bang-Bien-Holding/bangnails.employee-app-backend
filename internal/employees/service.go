@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -157,7 +159,9 @@ func (s *service) CreateEmployee(ctx context.Context, params createEmployeeParam
 		if positionIDs == nil {
 			positionIDs = []int64{}
 		}
-		detail = EmployeeDetail{Employee: employee, PositionIDs: positionIDs}
+		// A brand-new employee has no store membership yet — only
+		// SyncEmployees ever populates employee_stores (ADR-0009).
+		detail = EmployeeDetail{Employee: employee, PositionIDs: positionIDs, StoreIDs: []int64{}}
 		return nil
 	})
 	if err != nil {
@@ -191,13 +195,26 @@ func (s *service) ListEmployees(ctx context.Context) ([]EmployeeDetail, error) {
 		positionIDs[p.EmployeeID] = append(positionIDs[p.EmployeeID], p.PositionID)
 	}
 
+	storesByEmployee, err := s.repo.ListStoreIDsByEmployeeIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	storeIDs := make(map[int64][]int64, len(employees))
+	for _, st := range storesByEmployee {
+		storeIDs[st.EmployeeID] = append(storeIDs[st.EmployeeID], st.StoreID)
+	}
+
 	details := make([]EmployeeDetail, len(employees))
 	for i, e := range employees {
-		ids := positionIDs[e.ID]
-		if ids == nil {
-			ids = []int64{}
+		positions := positionIDs[e.ID]
+		if positions == nil {
+			positions = []int64{}
 		}
-		details[i] = EmployeeDetail{Employee: e, PositionIDs: ids}
+		stores := storeIDs[e.ID]
+		if stores == nil {
+			stores = []int64{}
+		}
+		details[i] = EmployeeDetail{Employee: e, PositionIDs: positions, StoreIDs: stores}
 	}
 	return details, nil
 }
@@ -258,7 +275,16 @@ func (s *service) UpdateEmployee(ctx context.Context, id int64, params updateEmp
 		if positionIDs == nil {
 			positionIDs = []int64{}
 		}
-		detail = EmployeeDetail{Employee: employee, PositionIDs: positionIDs}
+		// Store membership is Odoo-owned and untouched by this update — just
+		// reflect its current state (see ADR-0009).
+		storeIDs, err := q.ListStoreIDsByEmployeeID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if storeIDs == nil {
+			storeIDs = []int64{}
+		}
+		detail = EmployeeDetail{Employee: employee, PositionIDs: positionIDs, StoreIDs: storeIDs}
 		return nil
 	})
 	if err != nil {
@@ -380,7 +406,15 @@ func (s *service) GetEmployeeByID(ctx context.Context, id int64) (EmployeeDetail
 		positionIDs = []int64{}
 	}
 
-	return EmployeeDetail{Employee: employee, PositionIDs: positionIDs}, nil
+	storeIDs, err := s.repo.ListStoreIDsByEmployeeID(ctx, id)
+	if err != nil {
+		return EmployeeDetail{}, err
+	}
+	if storeIDs == nil {
+		storeIDs = []int64{}
+	}
+
+	return EmployeeDetail{Employee: employee, PositionIDs: positionIDs, StoreIDs: storeIDs}, nil
 }
 
 // BulkSendPasswordResetLinks sends a password-set/reset link to each id,
@@ -478,6 +512,7 @@ func (s *service) runSync(ctx context.Context, cancel context.CancelFunc, ids []
 	defer s.unlock()
 
 	var notFound []int64
+	var skippedStoreIDs []int
 	var inserted, updated int
 
 	for start := 0; start < len(ids); start += employeeSyncBatchSize {
@@ -494,13 +529,11 @@ func (s *service) runSync(ctx context.Context, cancel context.CancelFunc, ids []
 		odooEmployeeIDs := make([]int64, len(found))
 		fullNames := make([]string, len(found))
 		emails := make([]string, len(found))
-		usernames := make([]string, len(found))
 		for i, e := range found {
 			foundIDs[e.OdooEmployeeID] = true
 			odooEmployeeIDs[i] = e.OdooEmployeeID
 			fullNames[i] = e.FullName
 			emails[i] = e.Email
-			usernames[i] = e.Username
 		}
 
 		for _, id := range batch {
@@ -517,26 +550,116 @@ func (s *service) runSync(ctx context.Context, cancel context.CancelFunc, ids []
 			OdooEmployeeIds: odooEmployeeIDs,
 			FullNames:       fullNames,
 			Emails:          emails,
-			Usernames:       usernames,
 		})
 		if err != nil {
 			slog.Error("employees: sync upsert", "ids", odooEmployeeIDs, "error", err)
 			return
 		}
 
+		internalIDs := make(map[int64]int64, len(rows))
 		for _, row := range rows {
+			internalIDs[row.OdooEmployeeID] = row.ID
 			if row.Inserted {
 				inserted++
 			} else {
 				updated++
 			}
 		}
+
+		skippedStoreIDs = append(skippedStoreIDs, s.syncEmployeeStores(ctx, found, internalIDs)...)
 	}
 
 	if len(notFound) > 0 {
 		slog.Warn("employees: sync ids not found in odoo", "ids", notFound)
 	}
+	if len(skippedStoreIDs) > 0 {
+		slog.Warn("employees: sync store ids not resolvable to a local store", "odoo_store_ids", skippedStoreIDs)
+	}
 	slog.Info("employees: sync completed", "inserted", inserted, "updated", updated, "not_found", len(notFound))
+}
+
+// syncEmployeeStores resolves each employee's Odoo store ids (x_pos_shop_ids,
+// ADR-0009) to this system's internal store.id via store.odoo_store_id —
+// the same join key SyncStores already uses — then diffs employee_stores
+// per employee: insert newly resolved, delete no-longer-present, leave
+// unchanged. internalIDs maps this batch's odoo_employee_id values to their
+// internal employee id (from the UpsertEmployees call that just ran).
+// Returns the Odoo store ids that didn't resolve to a known local store,
+// for the caller to log — one unresolvable store id is skipped for that one
+// assignment, never failing the rest of that employee's sync or any other
+// employee's (see ADR-0009).
+func (s *service) syncEmployeeStores(ctx context.Context, employees []odoo.Employee, internalIDs map[int64]int64) []int {
+	odooStoreIDSet := make(map[int]bool)
+	for _, e := range employees {
+		for _, id := range e.StoreIDs {
+			odooStoreIDSet[id] = true
+		}
+	}
+	if len(odooStoreIDSet) == 0 {
+		return nil
+	}
+
+	odooStoreIDs := make([]int, 0, len(odooStoreIDSet))
+	for id := range odooStoreIDSet {
+		odooStoreIDs = append(odooStoreIDs, id)
+	}
+	sort.Ints(odooStoreIDs) // deterministic query order — map iteration isn't
+
+	odooStoreIDStrs := make([]string, len(odooStoreIDs))
+	for i, id := range odooStoreIDs {
+		odooStoreIDStrs[i] = strconv.Itoa(id)
+	}
+
+	stores, err := s.repo.ListStoresByOdooStoreIDs(ctx, odooStoreIDStrs)
+	if err != nil {
+		slog.Error("employees: sync resolve store ids", "error", err)
+		return nil
+	}
+
+	resolved := make(map[int]int64, len(stores))
+	for _, st := range stores {
+		odooID, err := strconv.Atoi(st.OdooStoreID.String)
+		if err != nil {
+			continue
+		}
+		resolved[odooID] = st.ID
+	}
+
+	var skipped []int
+	for _, e := range employees {
+		internalID, ok := internalIDs[e.OdooEmployeeID]
+		if !ok {
+			continue
+		}
+
+		storeIDs := make([]int64, 0, len(e.StoreIDs))
+		for _, odooStoreID := range e.StoreIDs {
+			storeID, ok := resolved[odooStoreID]
+			if !ok {
+				skipped = append(skipped, odooStoreID)
+				continue
+			}
+			storeIDs = append(storeIDs, storeID)
+		}
+
+		if err := s.repo.DeleteEmployeeStoresNotIn(ctx, repo.DeleteEmployeeStoresNotInParams{
+			EmployeeID: internalID,
+			StoreIds:   storeIDs,
+		}); err != nil {
+			slog.Error("employees: sync delete stale store memberships", "employee_id", internalID, "error", err)
+			continue
+		}
+		if len(storeIDs) > 0 {
+			if err := s.repo.InsertEmployeeStores(ctx, repo.InsertEmployeeStoresParams{
+				EmployeeID: internalID,
+				StoreIds:   storeIDs,
+			}); err != nil {
+				slog.Error("employees: sync insert store memberships", "employee_id", internalID, "error", err)
+			}
+		}
+	}
+
+	return skipped
 }
 
 func (s *service) tryLock() bool {

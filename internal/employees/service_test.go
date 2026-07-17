@@ -14,6 +14,7 @@ import (
 	odoomocks "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo/mocks"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"go.uber.org/mock/gomock"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -532,6 +533,9 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 				mockRepo.EXPECT().
 					ListPositionIDsByEmployeeIDs(gomock.Any(), []int64{1, 2}).
 					Return([]repo.EmployeePosition{}, nil)
+				mockRepo.EXPECT().
+					ListStoreIDsByEmployeeIDs(gomock.Any(), []int64{1, 2}).
+					Return([]repo.EmployeeStore{}, nil)
 			},
 			expectedErr: nil,
 			checkResponse: func(t *testing.T, details []EmployeeDetail) {
@@ -549,6 +553,9 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 				mockRepo.EXPECT().
 					ListPositionIDsByEmployeeIDs(gomock.Any(), []int64{}).
 					Return([]repo.EmployeePosition{}, nil)
+				mockRepo.EXPECT().
+					ListStoreIDsByEmployeeIDs(gomock.Any(), []int64{}).
+					Return([]repo.EmployeeStore{}, nil)
 			},
 			expectedErr: nil,
 			checkResponse: func(t *testing.T, details []EmployeeDetail) {
@@ -585,6 +592,11 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 					Return([]repo.EmployeePosition{
 						{EmployeeID: 1, PositionID: 10},
 						{EmployeeID: 1, PositionID: 20},
+					}, nil)
+				mockRepo.EXPECT().
+					ListStoreIDsByEmployeeIDs(gomock.Any(), []int64{1, 2}).
+					Return([]repo.EmployeeStore{
+						{EmployeeID: 1, StoreID: 100},
 					}, nil)
 			},
 			expectedErr: nil,
@@ -655,6 +667,9 @@ func TestEmployeeService_GetEmployeeByID(t *testing.T) {
 				mockRepo.EXPECT().
 					ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).
 					Return([]int64{10, 20}, nil)
+				mockRepo.EXPECT().
+					ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).
+					Return([]int64{100}, nil)
 			},
 			expectedErr: nil,
 			checkResponse: func(t *testing.T, detail EmployeeDetail) {
@@ -705,6 +720,9 @@ func TestEmployeeService_GetEmployeeByID(t *testing.T) {
 					Return(repo.Employee{ID: 1, OdooEmployeeID: 30, FullName: "Nguyen Van A"}, nil)
 				mockRepo.EXPECT().
 					ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).
+					Return([]int64{}, nil)
+				mockRepo.EXPECT().
+					ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).
 					Return([]int64{}, nil)
 			},
 			expectedErr: nil,
@@ -813,6 +831,9 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 						PositionIds: nil,
 					}).
 					Return(nil)
+				mockRepo.EXPECT().
+					ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).
+					Return([]int64{}, nil)
 			},
 			expectedErr: nil,
 			checkResponse: func(t *testing.T, detail EmployeeDetail) {
@@ -928,6 +949,9 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 						PositionIds: []int64{10, 20},
 					}).
 					Return(nil)
+				mockRepo.EXPECT().
+					ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).
+					Return([]int64{}, nil)
 			},
 			expectedErr: nil,
 			checkResponse: func(t *testing.T, detail EmployeeDetail) {
@@ -983,6 +1007,9 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 						PositionIds: []int64{},
 					}).
 					Return(nil)
+				mockRepo.EXPECT().
+					ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).
+					Return([]int64{}, nil)
 			},
 			expectedErr: nil,
 			checkResponse: func(t *testing.T, detail EmployeeDetail) {
@@ -1039,6 +1066,9 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 						PositionIds: nil,
 					}).
 					Return(nil)
+				mockRepo.EXPECT().
+					ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).
+					Return([]int64{}, nil)
 			},
 			setupOdooMock: func(mockOdoo *odoomocks.MockClient) {
 				mockOdoo.EXPECT().
@@ -1173,6 +1203,9 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 				mockRepo.EXPECT().
 					DeleteEmployeePositionsNotIn(gomock.Any(), gomock.Any()).
 					Return(nil)
+				mockRepo.EXPECT().
+					ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).
+					Return([]int64{}, nil)
 				mockRepo.EXPECT().SetEmployeePassword(gomock.Any(), gomock.Any()).Times(0)
 			},
 			expectedErr: nil,
@@ -1195,6 +1228,9 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 				mockRepo.EXPECT().
 					DeleteEmployeePositionsNotIn(gomock.Any(), gomock.Any()).
 					Return(nil)
+				mockRepo.EXPECT().
+					ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).
+					Return([]int64{}, nil)
 				mockRepo.EXPECT().
 					SetEmployeePassword(gomock.Any(), gomock.Any()).
 					DoAndReturn(func(_ context.Context, arg repo.SetEmployeePasswordParams) (int64, error) {
@@ -1227,6 +1263,9 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 				mockRepo.EXPECT().
 					DeleteEmployeePositionsNotIn(gomock.Any(), gomock.Any()).
 					Return(nil)
+				mockRepo.EXPECT().
+					ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).
+					Return([]int64{}, nil)
 				mockRepo.EXPECT().
 					SetEmployeePassword(gomock.Any(), gomock.Any()).
 					Return(int64(0), dbErr)
@@ -1606,6 +1645,7 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(activeEmployee, nil)
 				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
+				mockRepo.EXPECT().ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
 				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 				mockMailer.EXPECT().Send(gomock.Any(), activeEmployee.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(nil)
 			},
@@ -1618,6 +1658,7 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(999)).Return(repo.Employee{}, pgx.ErrNoRows)
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(activeEmployee, nil)
 				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
+				mockRepo.EXPECT().ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
 				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 				mockMailer.EXPECT().Send(gomock.Any(), activeEmployee.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(nil)
 			},
@@ -1632,8 +1673,10 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(2)).Return(inactiveEmployee, nil)
 				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(2)).Return([]int64{}, nil)
+				mockRepo.EXPECT().ListStoreIDsByEmployeeID(gomock.Any(), int64(2)).Return([]int64{}, nil)
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(activeEmployee, nil)
 				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
+				mockRepo.EXPECT().ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
 				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 				mockMailer.EXPECT().Send(gomock.Any(), activeEmployee.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(nil)
 			},
@@ -1648,6 +1691,7 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(activeEmployee, nil)
 				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
+				mockRepo.EXPECT().ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
 				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 				mockMailer.EXPECT().Send(gomock.Any(), activeEmployee.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(dbErr)
 			},
@@ -1897,8 +1941,8 @@ func TestEmployeeService_SyncEmployees(t *testing.T) {
 				close(fetchStarted)
 				<-release
 				return []odoo.Employee{
-					{OdooEmployeeID: 101, FullName: "Nguyen Van A", Email: "van-a@example.com", Username: "nguyenvana"},
-					{OdooEmployeeID: 102, FullName: "Tran Thi B", Email: "tran-b@example.com", Username: "tranthib"},
+					{OdooEmployeeID: 101, FullName: "Nguyen Van A", Email: "van-a@example.com"},
+					{OdooEmployeeID: 102, FullName: "Tran Thi B", Email: "tran-b@example.com"},
 				}, nil
 			})
 
@@ -1908,7 +1952,6 @@ func TestEmployeeService_SyncEmployees(t *testing.T) {
 				OdooEmployeeIds: []int64{101, 102},
 				FullNames:       []string{"Nguyen Van A", "Tran Thi B"},
 				Emails:          []string{"van-a@example.com", "tran-b@example.com"},
-				Usernames:       []string{"nguyenvana", "tranthib"},
 			}).
 			DoAndReturn(func(context.Context, repo.UpsertEmployeesParams) ([]repo.UpsertEmployeesRow, error) {
 				defer close(upsertDone)
@@ -1944,6 +1987,66 @@ func TestEmployeeService_SyncEmployees(t *testing.T) {
 		case <-upsertDone:
 		case <-time.After(mailerWaitTimeout):
 			t.Fatal("timed out waiting for the background upsert to run")
+		}
+
+		waitForSyncStatus(t, svc, false)
+	})
+
+	t.Run("TC-SYNC-05: resolves and diffs employee store membership from Odoo's x_pos_shop_ids, skipping an unresolvable store id", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		mockRepo := mocks.NewMockQuerier(ctrl)
+		mockMailer := mailermocks.NewMockClient(ctrl)
+		mockOdoo := odoomocks.NewMockClient(ctrl)
+
+		mockRepo.EXPECT().
+			ListEmployeeIDsByIDs(gomock.Any(), []int64{1}).
+			Return([]int64{101}, nil)
+		mockOdoo.EXPECT().
+			FetchEmployeesByOdooEmployeeIDs(gomock.Any(), []int64{101}).
+			Return([]odoo.Employee{
+				{OdooEmployeeID: 101, FullName: "Nguyen Van A", Email: "van-a@example.com", StoreIDs: []int{10, 20, 999}},
+			}, nil)
+		mockRepo.EXPECT().
+			UpsertEmployees(gomock.Any(), repo.UpsertEmployeesParams{
+				OdooEmployeeIds: []int64{101},
+				FullNames:       []string{"Nguyen Van A"},
+				Emails:          []string{"van-a@example.com"},
+			}).
+			Return([]repo.UpsertEmployeesRow{{ID: 1, OdooEmployeeID: 101, Inserted: false}}, nil)
+		mockRepo.EXPECT().
+			ListStoresByOdooStoreIDs(gomock.Any(), []string{"10", "20", "999"}).
+			Return([]repo.ListStoresByOdooStoreIDsRow{
+				{ID: 501, OdooStoreID: pgtype.Text{String: "10", Valid: true}},
+				{ID: 502, OdooStoreID: pgtype.Text{String: "20", Valid: true}},
+				// 999 deliberately absent: not yet known locally.
+			}, nil)
+		deleteDone := make(chan struct{})
+		mockRepo.EXPECT().
+			DeleteEmployeeStoresNotIn(gomock.Any(), repo.DeleteEmployeeStoresNotInParams{
+				EmployeeID: 1,
+				StoreIds:   []int64{501, 502},
+			}).
+			Return(nil)
+		mockRepo.EXPECT().
+			InsertEmployeeStores(gomock.Any(), repo.InsertEmployeeStoresParams{
+				EmployeeID: 1,
+				StoreIds:   []int64{501, 502},
+			}).
+			DoAndReturn(func(context.Context, repo.InsertEmployeeStoresParams) error {
+				defer close(deleteDone)
+				return nil
+			})
+
+		svc := newTestService(mockRepo, mockMailer, mockOdoo)
+
+		if err := svc.SyncEmployees(ctx, []int64{1}); err != nil {
+			t.Fatalf("SyncEmployees() error = %v", err)
+		}
+
+		select {
+		case <-deleteDone:
+		case <-time.After(mailerWaitTimeout):
+			t.Fatal("timed out waiting for the background store-membership sync to run")
 		}
 
 		waitForSyncStatus(t, svc, false)

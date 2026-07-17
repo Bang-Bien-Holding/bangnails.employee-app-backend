@@ -142,12 +142,15 @@ type SyncStatus struct {
 }
 
 // EmployeeDetail is the full picture of one employee: the employee row plus
-// its current position assignments. PositionIDs is always non-nil (empty,
-// not null, for an employee with no positions yet) — see stores.StoreDetail
-// for the same convention with a store's wifi whitelist.
+// its current position assignments and store membership. Both PositionIDs
+// and StoreIDs are always non-nil (empty, not null, for an employee with
+// none yet) — see stores.StoreDetail for the same convention with a store's
+// wifi whitelist. Unlike PositionIDs (admin-writable), StoreIDs is
+// Odoo-owned — only SyncEmployees ever writes to it (see ADR-0009).
 type EmployeeDetail struct {
 	Employee    repo.Employee
 	PositionIDs []int64
+	StoreIDs    []int64
 }
 
 // employeeResponse mirrors repo.Employee (plus its position assignments)
@@ -164,6 +167,7 @@ type employeeResponse struct {
 	Username       string             `json:"username"`
 	IsActive       bool               `json:"is_active"`
 	PositionIDs    []int64            `json:"position_ids"`
+	StoreIDs       []int64            `json:"store_ids"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
@@ -177,6 +181,7 @@ func newEmployeeResponse(d EmployeeDetail) employeeResponse {
 		Username:       d.Employee.Username,
 		IsActive:       d.Employee.IsActive,
 		PositionIDs:    d.PositionIDs,
+		StoreIDs:       d.StoreIDs,
 		CreatedAt:      d.Employee.CreatedAt,
 		UpdatedAt:      d.Employee.UpdatedAt,
 	}

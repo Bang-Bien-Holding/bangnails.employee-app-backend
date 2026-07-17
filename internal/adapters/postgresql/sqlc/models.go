@@ -28,6 +28,11 @@ type EmployeePosition struct {
 	PositionID int64 `json:"position_id"`
 }
 
+type EmployeeStore struct {
+	EmployeeID int64 `json:"employee_id"`
+	StoreID    int64 `json:"store_id"`
+}
+
 type PasswordResetToken struct {
 	ID         int64              `json:"id"`
 	EmployeeID int64              `json:"employee_id"`
