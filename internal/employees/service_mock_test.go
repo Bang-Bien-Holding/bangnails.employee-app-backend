@@ -13,7 +13,6 @@ import (
 	context "context"
 	reflect "reflect"
 
-	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -84,10 +83,10 @@ func (mr *MockServiceMockRecorder) CompleteActivation(ctx, params any) *gomock.C
 }
 
 // CreateEmployee mocks base method.
-func (m *MockService) CreateEmployee(ctx context.Context, params createEmployeeParams) (repo.Employee, error) {
+func (m *MockService) CreateEmployee(ctx context.Context, params createEmployeeParams) (EmployeeDetail, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateEmployee", ctx, params)
-	ret0, _ := ret[0].(repo.Employee)
+	ret0, _ := ret[0].(EmployeeDetail)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -113,10 +112,10 @@ func (mr *MockServiceMockRecorder) DeleteEmployee(ctx, id any) *gomock.Call {
 }
 
 // GetEmployeeByID mocks base method.
-func (m *MockService) GetEmployeeByID(ctx context.Context, id int64) (repo.Employee, error) {
+func (m *MockService) GetEmployeeByID(ctx context.Context, id int64) (EmployeeDetail, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetEmployeeByID", ctx, id)
-	ret0, _ := ret[0].(repo.Employee)
+	ret0, _ := ret[0].(EmployeeDetail)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -128,10 +127,10 @@ func (mr *MockServiceMockRecorder) GetEmployeeByID(ctx, id any) *gomock.Call {
 }
 
 // ListEmployees mocks base method.
-func (m *MockService) ListEmployees(ctx context.Context) ([]repo.Employee, error) {
+func (m *MockService) ListEmployees(ctx context.Context) ([]EmployeeDetail, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "ListEmployees", ctx)
-	ret0, _ := ret[0].([]repo.Employee)
+	ret0, _ := ret[0].([]EmployeeDetail)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -199,10 +198,10 @@ func (mr *MockServiceMockRecorder) SyncStatus(ctx any) *gomock.Call {
 }
 
 // UpdateEmployee mocks base method.
-func (m *MockService) UpdateEmployee(ctx context.Context, id int64, params updateEmployeeParams) (repo.Employee, error) {
+func (m *MockService) UpdateEmployee(ctx context.Context, id int64, params updateEmployeeParams) (EmployeeDetail, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "UpdateEmployee", ctx, id, params)
-	ret0, _ := ret[0].(repo.Employee)
+	ret0, _ := ret[0].(EmployeeDetail)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

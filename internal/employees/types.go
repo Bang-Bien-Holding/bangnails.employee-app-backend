@@ -33,25 +33,37 @@ var (
 	// ErrSyncInProgress is returned by SyncEmployees when a previous call's
 	// background sync hasn't finished yet — only one runs at a time.
 	ErrSyncInProgress = errors.New("employee sync already in progress")
+	// ErrUnknownPositionID is returned by CreateEmployee/UpdateEmployee when
+	// positionIds references an id that isn't a real position — a clear
+	// client error, not a raw FK-violation 500 (see ADR-0008).
+	ErrUnknownPositionID = errors.New("unknown position id")
 )
 
+// createEmployeeParams.PositionIDs is optional and, when present, always
+// replaces the employee's whole position set via diff (see ADR-0008) — a nil
+// or empty slice both mean "no positions", matching every other field on
+// this always-full-replace body.
 type createEmployeeParams struct {
-	OdooEmployeeID int64  `json:"odooEmployeeId" validate:"required"`
-	FullName       string `json:"fullName" validate:"required"`
-	Email          string `json:"email" validate:"required,email"`
-	Username       string `json:"username" validate:"required"`
+	OdooEmployeeID int64   `json:"odooEmployeeId" validate:"required"`
+	FullName       string  `json:"fullName" validate:"required"`
+	Email          string  `json:"email" validate:"required,email"`
+	Username       string  `json:"username" validate:"required"`
+	PositionIDs    []int64 `json:"positionIds" validate:"omitempty,unique,dive,required"`
 }
 
 // updateEmployeeParams.Password is optional (a *string, unlike
 // setEmployeePasswordParams.Password) — PUT /employees/{id} updates the
 // other fields unconditionally, but a nil Password leaves the existing
 // password untouched rather than requiring every update to resupply it.
+// PositionIDs follows createEmployeeParams' always-full-replace convention —
+// see there.
 type updateEmployeeParams struct {
 	OdooEmployeeID int64   `json:"odooEmployeeId" validate:"required"`
 	FullName       string  `json:"fullName" validate:"required"`
 	Email          string  `json:"email" validate:"required,email"`
 	Username       string  `json:"username" validate:"required"`
 	Password       *string `json:"password,omitempty" validate:"omitempty,min=8"`
+	PositionIDs    []int64 `json:"positionIds" validate:"omitempty,unique,dive,required"`
 }
 
 // setEmployeePasswordParams is the body for PATCH /employees/{id}/password —
@@ -122,12 +134,21 @@ type SyncStatus struct {
 	Syncing bool `json:"syncing"`
 }
 
-// employeeResponse mirrors repo.Employee for HTTP responses, minus
-// Password — repo.Employee.Password is tagged json:"password" with no
-// omitempty (it's sqlc-generated, out of this package's control), so
-// json.Write-ing a repo.Employee directly would serialize the bcrypt hash
-// straight to the client. Handlers must convert via newEmployeeResponse
-// instead of writing repo.Employee directly.
+// EmployeeDetail is the full picture of one employee: the employee row plus
+// its current position assignments. PositionIDs is always non-nil (empty,
+// not null, for an employee with no positions yet) — see stores.StoreDetail
+// for the same convention with a store's wifi whitelist.
+type EmployeeDetail struct {
+	Employee    repo.Employee
+	PositionIDs []int64
+}
+
+// employeeResponse mirrors repo.Employee (plus its position assignments)
+// for HTTP responses, minus Password — repo.Employee.Password is tagged
+// json:"password" with no omitempty (it's sqlc-generated, out of this
+// package's control), so json.Write-ing a repo.Employee directly would
+// serialize the bcrypt hash straight to the client. Handlers must convert
+// via newEmployeeResponse instead of writing repo.Employee directly.
 type employeeResponse struct {
 	ID             int64              `json:"id"`
 	OdooEmployeeID int64              `json:"odoo_employee_id"`
@@ -135,36 +156,38 @@ type employeeResponse struct {
 	Email          string             `json:"email"`
 	Username       string             `json:"username"`
 	IsActive       bool               `json:"is_active"`
+	PositionIDs    []int64            `json:"position_ids"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
-func newEmployeeResponse(e repo.Employee) employeeResponse {
+func newEmployeeResponse(d EmployeeDetail) employeeResponse {
 	return employeeResponse{
-		ID:             e.ID,
-		OdooEmployeeID: e.OdooEmployeeID,
-		FullName:       e.FullName,
-		Email:          e.Email,
-		Username:       e.Username,
-		IsActive:       e.IsActive,
-		CreatedAt:      e.CreatedAt,
-		UpdatedAt:      e.UpdatedAt,
+		ID:             d.Employee.ID,
+		OdooEmployeeID: d.Employee.OdooEmployeeID,
+		FullName:       d.Employee.FullName,
+		Email:          d.Employee.Email,
+		Username:       d.Employee.Username,
+		IsActive:       d.Employee.IsActive,
+		PositionIDs:    d.PositionIDs,
+		CreatedAt:      d.Employee.CreatedAt,
+		UpdatedAt:      d.Employee.UpdatedAt,
 	}
 }
 
-func newEmployeeResponses(employees []repo.Employee) []employeeResponse {
-	responses := make([]employeeResponse, len(employees))
-	for i, e := range employees {
-		responses[i] = newEmployeeResponse(e)
+func newEmployeeResponses(details []EmployeeDetail) []employeeResponse {
+	responses := make([]employeeResponse, len(details))
+	for i, d := range details {
+		responses[i] = newEmployeeResponse(d)
 	}
 	return responses
 }
 
 type Service interface {
-	CreateEmployee(ctx context.Context, params createEmployeeParams) (repo.Employee, error)
-	ListEmployees(ctx context.Context) ([]repo.Employee, error)
-	GetEmployeeByID(ctx context.Context, id int64) (repo.Employee, error)
-	UpdateEmployee(ctx context.Context, id int64, params updateEmployeeParams) (repo.Employee, error)
+	CreateEmployee(ctx context.Context, params createEmployeeParams) (EmployeeDetail, error)
+	ListEmployees(ctx context.Context) ([]EmployeeDetail, error)
+	GetEmployeeByID(ctx context.Context, id int64) (EmployeeDetail, error)
+	UpdateEmployee(ctx context.Context, id int64, params updateEmployeeParams) (EmployeeDetail, error)
 	SetEmployeePassword(ctx context.Context, id int64, password string) error
 	SetEmployeeActive(ctx context.Context, id int64, isActive bool) error
 	DeleteEmployee(ctx context.Context, id int64) error

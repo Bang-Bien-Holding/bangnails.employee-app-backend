@@ -16,10 +16,22 @@ type Querier interface {
 	// RETURNING fresh state for every affected store so the handler can build
 	// the success response without a follow-up fetch.
 	BulkSetStoreWifiWhitelistEnabled(ctx context.Context, arg BulkSetStoreWifiWhitelistEnabledParams) ([]BulkSetStoreWifiWhitelistEnabledRow, error)
+	// Used to validate a submitted set of position ids in one round trip: if the
+	// count of matching rows is less than the count of distinct submitted ids,
+	// at least one id doesn't reference a real position (see ADR-0008 — this
+	// must be a clear client error, not a raw FK-violation 500).
+	CountPositionsByIDs(ctx context.Context, ids []int64) (int64, error)
 	CreateEmployee(ctx context.Context, arg CreateEmployeeParams) (Employee, error)
 	CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) (PasswordResetToken, error)
 	CreatePosition(ctx context.Context, name string) (Position, error)
 	DeleteEmployee(ctx context.Context, id int64) (int64, error)
+	// Half of the "replace this employee's position set to match position_ids
+	// exactly" diff (paired with InsertEmployeePositions) — deletes whatever's
+	// currently assigned but no longer submitted. "!= ALL(...)" over an empty
+	// position_ids array is vacuously true for every row, so submitting []
+	// correctly clears the employee's entire position set rather than being a
+	// no-op (see ADR-0008).
+	DeleteEmployeePositionsNotIn(ctx context.Context, arg DeleteEmployeePositionsNotInParams) error
 	DeletePosition(ctx context.Context, id int64) (int64, error)
 	// Deletes specific store_wifi_ip rows by value, not the table's internal id
 	// (see ADR-0003 — a value unambiguously identifies the row within a store
@@ -68,6 +80,11 @@ type Querier interface {
 	// concurrent mutation can't slip in between this check and the bulk UPDATE.
 	GetStoresByIDsForUpdate(ctx context.Context, storeIds []int64) ([]GetStoresByIDsForUpdateRow, error)
 	// Other half of the replace diff: inserts whatever's newly submitted.
+	// ON CONFLICT DO NOTHING is what makes assignments already present in both
+	// the old and new set stay untouched rather than being deleted and
+	// reinserted.
+	InsertEmployeePositions(ctx context.Context, arg InsertEmployeePositionsParams) error
+	// Other half of the replace diff: inserts whatever's newly submitted.
 	// ON CONFLICT DO NOTHING is what makes values already present in both the
 	// old and new set stay untouched rather than being deleted and reinserted.
 	InsertStoreWifiIPs(ctx context.Context, arg InsertStoreWifiIPsParams) error
@@ -78,6 +95,12 @@ type Querier interface {
 	// with no matching row is silently omitted from the result.
 	ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int64, error)
 	ListEmployees(ctx context.Context) ([]Employee, error)
+	ListPositionIDsByEmployeeID(ctx context.Context, employeeID int64) ([]int64, error)
+	// Bulk counterpart of ListPositionIDsByEmployeeID for ListEmployees — one
+	// round trip for every employee's position ids, grouped client-side by
+	// employee_id rather than aggregated here (keeps this query a plain
+	// row-per-pair scan, same shape as the single-employee version).
+	ListPositionIDsByEmployeeIDs(ctx context.Context, employeeIds []int64) ([]EmployeePosition, error)
 	ListPositions(ctx context.Context) ([]Position, error)
 	ListStoreWifiIPsByStoreID(ctx context.Context, storeID int64) ([]netip.Addr, error)
 	ListStoreWifiMacsByStoreID(ctx context.Context, storeID int64) ([]net.HardwareAddr, error)

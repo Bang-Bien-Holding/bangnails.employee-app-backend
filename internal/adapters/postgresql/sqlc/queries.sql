@@ -300,3 +300,45 @@ RETURNING *;
 -- name: DeletePosition :execrows
 DELETE FROM positions
 WHERE id = $1;
+
+-- name: CountPositionsByIDs :one
+-- Used to validate a submitted set of position ids in one round trip: if the
+-- count of matching rows is less than the count of distinct submitted ids,
+-- at least one id doesn't reference a real position (see ADR-0008 — this
+-- must be a clear client error, not a raw FK-violation 500).
+SELECT count(*) FROM positions
+WHERE id = ANY(sqlc.arg(ids)::bigint[]);
+
+-- name: ListPositionIDsByEmployeeID :many
+SELECT position_id FROM employee_positions
+WHERE employee_id = $1
+ORDER BY position_id;
+
+-- name: ListPositionIDsByEmployeeIDs :many
+-- Bulk counterpart of ListPositionIDsByEmployeeID for ListEmployees — one
+-- round trip for every employee's position ids, grouped client-side by
+-- employee_id rather than aggregated here (keeps this query a plain
+-- row-per-pair scan, same shape as the single-employee version).
+SELECT employee_id, position_id FROM employee_positions
+WHERE employee_id = ANY(sqlc.arg(employee_ids)::bigint[])
+ORDER BY employee_id, position_id;
+
+-- name: DeleteEmployeePositionsNotIn :exec
+-- Half of the "replace this employee's position set to match position_ids
+-- exactly" diff (paired with InsertEmployeePositions) — deletes whatever's
+-- currently assigned but no longer submitted. "!= ALL(...)" over an empty
+-- position_ids array is vacuously true for every row, so submitting []
+-- correctly clears the employee's entire position set rather than being a
+-- no-op (see ADR-0008).
+DELETE FROM employee_positions
+WHERE employee_id = sqlc.arg(employee_id)
+  AND position_id != ALL(sqlc.arg(position_ids)::bigint[]);
+
+-- name: InsertEmployeePositions :exec
+-- Other half of the replace diff: inserts whatever's newly submitted.
+-- ON CONFLICT DO NOTHING is what makes assignments already present in both
+-- the old and new set stay untouched rather than being deleted and
+-- reinserted.
+INSERT INTO employee_positions (employee_id, position_id)
+SELECT sqlc.arg(employee_id), unnest(sqlc.arg(position_ids)::bigint[])
+ON CONFLICT (employee_id, position_id) DO NOTHING;

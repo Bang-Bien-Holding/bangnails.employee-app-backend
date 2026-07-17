@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -51,7 +52,13 @@ const employeeSyncBatchSize = 50
 const employeeSyncTimeout = 5 * time.Minute
 
 type service struct {
-	repo   repo.Querier
+	// repo is a plain, non-transactional Querier for reads that don't need
+	// transaction scoping — GetEmployeeByID uses this rather than withTx.
+	repo repo.Querier
+	// withTx wraps fn in a transaction-scoped repo.Querier — a real
+	// pool-backed implementation is installed by NewService; tests replace
+	// it with a stub that calls fn against a mocked Querier directly.
+	withTx func(ctx context.Context, fn func(repo.Querier) error) error
 	mailer mailer.Client
 	odoo   odoo.Client
 
@@ -59,55 +66,174 @@ type service struct {
 	syncing bool
 }
 
-func NewService(r repo.Querier, m mailer.Client, o odoo.Client) Service {
-	return &service{repo: r, mailer: m, odoo: o}
+func NewService(pool *pgxpool.Pool, m mailer.Client, o odoo.Client) Service {
+	return &service{
+		repo: repo.New(pool),
+		withTx: func(ctx context.Context, fn func(repo.Querier) error) error {
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback(ctx)
+
+			if err := fn(repo.New(tx)); err != nil {
+				return err
+			}
+			return tx.Commit(ctx)
+		},
+		mailer: m,
+		odoo:   o,
+	}
 }
 
-func (s *service) CreateEmployee(ctx context.Context, params createEmployeeParams) (repo.Employee, error) {
-	employee, err := s.repo.CreateEmployee(ctx, repo.CreateEmployeeParams{
-		OdooEmployeeID: params.OdooEmployeeID,
-		FullName:       params.FullName,
-		Email:          params.Email,
-		Username:       params.Username,
+// validatePositionIDs rejects a submitted position-id set containing an id
+// that isn't a real position, via one round trip comparing CountPositionsByIDs
+// against the distinct submitted count (see ADR-0008). An empty/nil ids is
+// always valid (an employee with no positions), so it short-circuits before
+// the query.
+func validatePositionIDs(ctx context.Context, q repo.Querier, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	count, err := q.CountPositionsByIDs(ctx, ids)
+	if err != nil {
+		return err
+	}
+	if count != int64(len(ids)) {
+		return ErrUnknownPositionID
+	}
+	return nil
+}
+
+func (s *service) CreateEmployee(ctx context.Context, params createEmployeeParams) (EmployeeDetail, error) {
+	var detail EmployeeDetail
+	err := s.withTx(ctx, func(q repo.Querier) error {
+		if err := validatePositionIDs(ctx, q, params.PositionIDs); err != nil {
+			return err
+		}
+
+		employee, err := q.CreateEmployee(ctx, repo.CreateEmployeeParams{
+			OdooEmployeeID: params.OdooEmployeeID,
+			FullName:       params.FullName,
+			Email:          params.Email,
+			Username:       params.Username,
+		})
+		if err != nil {
+			return translateEmployeeUniqueViolation(err)
+		}
+
+		if len(params.PositionIDs) > 0 {
+			if err := q.InsertEmployeePositions(ctx, repo.InsertEmployeePositionsParams{
+				EmployeeID:  employee.ID,
+				PositionIds: params.PositionIDs,
+			}); err != nil {
+				return err
+			}
+		}
+
+		positionIDs := params.PositionIDs
+		if positionIDs == nil {
+			positionIDs = []int64{}
+		}
+		detail = EmployeeDetail{Employee: employee, PositionIDs: positionIDs}
+		return nil
 	})
 	if err != nil {
-		return repo.Employee{}, translateEmployeeUniqueViolation(err)
+		return EmployeeDetail{}, err
 	}
 
 	// Detached from ctx: the HTTP handler's request context is canceled the
 	// moment it returns, which would race with (and likely abort) this
 	// goroutine if it inherited that cancellation.
-	go s.sendActivationEmail(context.WithoutCancel(ctx), employee)
+	go s.sendActivationEmail(context.WithoutCancel(ctx), detail.Employee)
 
-	return employee, nil
+	return detail, nil
 }
 
-func (s *service) ListEmployees(ctx context.Context) ([]repo.Employee, error) {
-	return s.repo.ListEmployees(ctx)
+func (s *service) ListEmployees(ctx context.Context) ([]EmployeeDetail, error) {
+	employees, err := s.repo.ListEmployees(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]int64, len(employees))
+	for i, e := range employees {
+		ids[i] = e.ID
+	}
+	positionsByEmployee, err := s.repo.ListPositionIDsByEmployeeIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	positionIDs := make(map[int64][]int64, len(employees))
+	for _, p := range positionsByEmployee {
+		positionIDs[p.EmployeeID] = append(positionIDs[p.EmployeeID], p.PositionID)
+	}
+
+	details := make([]EmployeeDetail, len(employees))
+	for i, e := range employees {
+		ids := positionIDs[e.ID]
+		if ids == nil {
+			ids = []int64{}
+		}
+		details[i] = EmployeeDetail{Employee: e, PositionIDs: ids}
+	}
+	return details, nil
 }
 
-func (s *service) UpdateEmployee(ctx context.Context, id int64, params updateEmployeeParams) (repo.Employee, error) {
-	employee, err := s.repo.UpdateEmployee(ctx, repo.UpdateEmployeeParams{
-		ID:             id,
-		OdooEmployeeID: params.OdooEmployeeID,
-		FullName:       params.FullName,
-		Email:          params.Email,
-		Username:       params.Username,
+func (s *service) UpdateEmployee(ctx context.Context, id int64, params updateEmployeeParams) (EmployeeDetail, error) {
+	var detail EmployeeDetail
+	err := s.withTx(ctx, func(q repo.Querier) error {
+		if err := validatePositionIDs(ctx, q, params.PositionIDs); err != nil {
+			return err
+		}
+
+		employee, err := q.UpdateEmployee(ctx, repo.UpdateEmployeeParams{
+			ID:             id,
+			OdooEmployeeID: params.OdooEmployeeID,
+			FullName:       params.FullName,
+			Email:          params.Email,
+			Username:       params.Username,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrEmployeeNotFound
+			}
+			return translateEmployeeUniqueViolation(err)
+		}
+
+		if err := q.DeleteEmployeePositionsNotIn(ctx, repo.DeleteEmployeePositionsNotInParams{
+			EmployeeID:  id,
+			PositionIds: params.PositionIDs,
+		}); err != nil {
+			return err
+		}
+		if len(params.PositionIDs) > 0 {
+			if err := q.InsertEmployeePositions(ctx, repo.InsertEmployeePositionsParams{
+				EmployeeID:  id,
+				PositionIds: params.PositionIDs,
+			}); err != nil {
+				return err
+			}
+		}
+
+		positionIDs := params.PositionIDs
+		if positionIDs == nil {
+			positionIDs = []int64{}
+		}
+		detail = EmployeeDetail{Employee: employee, PositionIDs: positionIDs}
+		return nil
 	})
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return repo.Employee{}, ErrEmployeeNotFound
-		}
-		return repo.Employee{}, translateEmployeeUniqueViolation(err)
+		return EmployeeDetail{}, err
 	}
 
 	if params.Password != nil {
 		if err := s.SetEmployeePassword(ctx, id, *params.Password); err != nil {
-			return repo.Employee{}, err
+			return EmployeeDetail{}, err
 		}
 	}
 
-	return employee, nil
+	return detail, nil
 }
 
 // SetEmployeePassword lets an admin directly assign an employee's password,
@@ -199,15 +325,24 @@ func (s *service) CompleteActivation(ctx context.Context, params completeActivat
 	return err
 }
 
-func (s *service) GetEmployeeByID(ctx context.Context, id int64) (repo.Employee, error) {
+func (s *service) GetEmployeeByID(ctx context.Context, id int64) (EmployeeDetail, error) {
 	employee, err := s.repo.GetEmployeeByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return repo.Employee{}, ErrEmployeeNotFound
+			return EmployeeDetail{}, ErrEmployeeNotFound
 		}
-		return repo.Employee{}, err
+		return EmployeeDetail{}, err
 	}
-	return employee, nil
+
+	positionIDs, err := s.repo.ListPositionIDsByEmployeeID(ctx, id)
+	if err != nil {
+		return EmployeeDetail{}, err
+	}
+	if positionIDs == nil {
+		positionIDs = []int64{}
+	}
+
+	return EmployeeDetail{Employee: employee, PositionIDs: positionIDs}, nil
 }
 
 // BulkSendPasswordResetLinks sends a password-set/reset link to each id,
@@ -223,11 +358,12 @@ func (s *service) BulkSendPasswordResetLinks(ctx context.Context, ids []int64) [
 	for i, id := range ids {
 		results[i] = BulkActionResult{ID: id}
 
-		employee, err := s.GetEmployeeByID(ctx, id)
+		detail, err := s.GetEmployeeByID(ctx, id)
 		if err != nil {
 			results[i].Error = err.Error()
 			continue
 		}
+		employee := detail.Employee
 		if !employee.IsActive {
 			results[i].Error = ErrEmployeeNotActive.Error()
 			continue

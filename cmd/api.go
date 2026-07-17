@@ -62,7 +62,7 @@ func (app *application) mount() http.Handler {
 		// integration exists yet (see internal/odoo).
 		odooClient := odoo.NewFakeClient()
 
-		employeeService := employees.NewService(repo.New(app.db), app.mailer, odooClient)
+		employeeService := employees.NewService(app.db, app.mailer, odooClient)
 		employeeHandler := employees.NewHandler(employeeService)
 		r.Post("/employees", employeeHandler.CreateEmployee)
 		r.Get("/employees", employeeHandler.ListEmployees)

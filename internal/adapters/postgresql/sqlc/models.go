@@ -23,6 +23,11 @@ type Employee struct {
 	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
 }
 
+type EmployeePosition struct {
+	EmployeeID int64 `json:"employee_id"`
+	PositionID int64 `json:"position_id"`
+}
+
 type PasswordResetToken struct {
 	ID         int64              `json:"id"`
 	EmployeeID int64              `json:"employee_id"`

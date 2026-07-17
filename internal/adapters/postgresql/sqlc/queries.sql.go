@@ -56,6 +56,22 @@ func (q *Queries) BulkSetStoreWifiWhitelistEnabled(ctx context.Context, arg Bulk
 	return items, nil
 }
 
+const countPositionsByIDs = `-- name: CountPositionsByIDs :one
+SELECT count(*) FROM positions
+WHERE id = ANY($1::bigint[])
+`
+
+// Used to validate a submitted set of position ids in one round trip: if the
+// count of matching rows is less than the count of distinct submitted ids,
+// at least one id doesn't reference a real position (see ADR-0008 — this
+// must be a clear client error, not a raw FK-violation 500).
+func (q *Queries) CountPositionsByIDs(ctx context.Context, ids []int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countPositionsByIDs, ids)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createEmployee = `-- name: CreateEmployee :one
 INSERT INTO employees (odoo_employee_id, full_name, email, username)
 VALUES ($1, $2, $3, $4)
@@ -146,6 +162,28 @@ func (q *Queries) DeleteEmployee(ctx context.Context, id int64) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteEmployeePositionsNotIn = `-- name: DeleteEmployeePositionsNotIn :exec
+DELETE FROM employee_positions
+WHERE employee_id = $1
+  AND position_id != ALL($2::bigint[])
+`
+
+type DeleteEmployeePositionsNotInParams struct {
+	EmployeeID  int64   `json:"employee_id"`
+	PositionIds []int64 `json:"position_ids"`
+}
+
+// Half of the "replace this employee's position set to match position_ids
+// exactly" diff (paired with InsertEmployeePositions) — deletes whatever's
+// currently assigned but no longer submitted. "!= ALL(...)" over an empty
+// position_ids array is vacuously true for every row, so submitting []
+// correctly clears the employee's entire position set rather than being a
+// no-op (see ADR-0008).
+func (q *Queries) DeleteEmployeePositionsNotIn(ctx context.Context, arg DeleteEmployeePositionsNotInParams) error {
+	_, err := q.db.Exec(ctx, deleteEmployeePositionsNotIn, arg.EmployeeID, arg.PositionIds)
+	return err
 }
 
 const deletePosition = `-- name: DeletePosition :execrows
@@ -451,6 +489,26 @@ func (q *Queries) GetStoresByIDsForUpdate(ctx context.Context, storeIds []int64)
 	return items, nil
 }
 
+const insertEmployeePositions = `-- name: InsertEmployeePositions :exec
+INSERT INTO employee_positions (employee_id, position_id)
+SELECT $1, unnest($2::bigint[])
+ON CONFLICT (employee_id, position_id) DO NOTHING
+`
+
+type InsertEmployeePositionsParams struct {
+	EmployeeID  int64   `json:"employee_id"`
+	PositionIds []int64 `json:"position_ids"`
+}
+
+// Other half of the replace diff: inserts whatever's newly submitted.
+// ON CONFLICT DO NOTHING is what makes assignments already present in both
+// the old and new set stay untouched rather than being deleted and
+// reinserted.
+func (q *Queries) InsertEmployeePositions(ctx context.Context, arg InsertEmployeePositionsParams) error {
+	_, err := q.db.Exec(ctx, insertEmployeePositions, arg.EmployeeID, arg.PositionIds)
+	return err
+}
+
 const insertStoreWifiIPs = `-- name: InsertStoreWifiIPs :exec
 INSERT INTO store_wifi_ip (store_id, ip_address)
 SELECT $1, unnest($2::inet[])
@@ -540,6 +598,62 @@ func (q *Queries) ListEmployees(ctx context.Context) ([]Employee, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPositionIDsByEmployeeID = `-- name: ListPositionIDsByEmployeeID :many
+SELECT position_id FROM employee_positions
+WHERE employee_id = $1
+ORDER BY position_id
+`
+
+func (q *Queries) ListPositionIDsByEmployeeID(ctx context.Context, employeeID int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listPositionIDsByEmployeeID, employeeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var position_id int64
+		if err := rows.Scan(&position_id); err != nil {
+			return nil, err
+		}
+		items = append(items, position_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPositionIDsByEmployeeIDs = `-- name: ListPositionIDsByEmployeeIDs :many
+SELECT employee_id, position_id FROM employee_positions
+WHERE employee_id = ANY($1::bigint[])
+ORDER BY employee_id, position_id
+`
+
+// Bulk counterpart of ListPositionIDsByEmployeeID for ListEmployees — one
+// round trip for every employee's position ids, grouped client-side by
+// employee_id rather than aggregated here (keeps this query a plain
+// row-per-pair scan, same shape as the single-employee version).
+func (q *Queries) ListPositionIDsByEmployeeIDs(ctx context.Context, employeeIds []int64) ([]EmployeePosition, error) {
+	rows, err := q.db.Query(ctx, listPositionIDsByEmployeeIDs, employeeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EmployeePosition
+	for rows.Next() {
+		var i EmployeePosition
+		if err := rows.Scan(&i.EmployeeID, &i.PositionID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

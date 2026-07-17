@@ -23,22 +23,39 @@ import (
 // the mailer, so a stuck goroutine fails the test instead of hanging it.
 const mailerWaitTimeout = time.Second
 
+// newTestService builds a service whose withTx calls fn directly against q,
+// bypassing real transaction plumbing — Create/UpdateEmployee's position-diff
+// orchestration is exercised the same way regardless of what begins/commits
+// the transaction. GetEmployeeByID doesn't need a transaction, so it reads
+// through repo instead — set to the same mock so both styles of test can
+// share one ctrl/mockRepo.
+func newTestService(q repo.Querier, m mailer.Client, o odoo.Client) *service {
+	return &service{
+		repo: q,
+		withTx: func(ctx context.Context, fn func(repo.Querier) error) error {
+			return fn(q)
+		},
+		mailer: m,
+		odoo:   o,
+	}
+}
+
 func TestEmployeeService_CreateEmployee(t *testing.T) {
 	ctx := context.Background()
 
 	// Default valid parameters for testing
 	defaultParams := createEmployeeParams{
 		OdooEmployeeID: 30,
-		FullName:   "Nguyen Van A",
-		Email:      "van-a@example.com",
-		Username:   "nguyenvana",
+		FullName:       "Nguyen Van A",
+		Email:          "van-a@example.com",
+		Username:       "nguyenvana",
 	}
 
 	defaultRepoParams := repo.CreateEmployeeParams{
 		OdooEmployeeID: defaultParams.OdooEmployeeID,
-		FullName:   defaultParams.FullName,
-		Email:      defaultParams.Email,
-		Username:   defaultParams.Username,
+		FullName:       defaultParams.FullName,
+		Email:          defaultParams.Email,
+		Username:       defaultParams.Username,
 	}
 
 	// service.CreateEmployee only translates a *pgconn.PgError unique-violation
@@ -70,7 +87,7 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 		// test must wait on this before asserting mock expectations were met.
 		setupMailerMock func(mockMailer *mailermocks.MockClient) <-chan struct{}
 		expectedErr     error
-		checkResponse   func(t *testing.T, emp repo.Employee)
+		checkResponse   func(t *testing.T, detail EmployeeDetail)
 	}{
 		{
 			name:        "TC-POST-01: Create employee successfully",
@@ -79,11 +96,11 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 				mockRepo.EXPECT().
 					CreateEmployee(gomock.Any(), defaultRepoParams).
 					Return(repo.Employee{
-						ID:         1,
+						ID:             1,
 						OdooEmployeeID: defaultParams.OdooEmployeeID,
-						FullName:   defaultParams.FullName,
-						Email:      defaultParams.Email,
-						Username:   defaultParams.Username,
+						FullName:       defaultParams.FullName,
+						Email:          defaultParams.Email,
+						Username:       defaultParams.Username,
 					}, nil)
 				mockRepo.EXPECT().
 					CreatePasswordResetToken(gomock.Any(), gomock.Any()).
@@ -100,9 +117,12 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 				return done
 			},
 			expectedErr: nil,
-			checkResponse: func(t *testing.T, emp repo.Employee) {
-				if emp.ID == 0 {
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID == 0 {
 					t.Error("Expected created employee to have a non-zero ID, but got 0")
+				}
+				if detail.PositionIDs == nil || len(detail.PositionIDs) != 0 {
+					t.Errorf("expected empty non-nil PositionIDs, got %v", detail.PositionIDs)
 				}
 			},
 		},
@@ -115,8 +135,8 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 					Return(repo.Employee{}, dupEmailErr)
 			},
 			expectedErr: dupEmailErr,
-			checkResponse: func(t *testing.T, emp repo.Employee) {
-				if emp.ID != 0 {
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID != 0 {
 					t.Error("Expected zero-value employee response when an error occurs")
 				}
 			},
@@ -130,8 +150,8 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 					Return(repo.Employee{}, dupEmployeeIDErr)
 			},
 			expectedErr: dupEmployeeIDErr,
-			checkResponse: func(t *testing.T, emp repo.Employee) {
-				if emp.ID != 0 {
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID != 0 {
 					t.Error("Expected zero-value employee response when an error occurs")
 				}
 			},
@@ -145,8 +165,8 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 					Return(repo.Employee{}, dbErr)
 			},
 			expectedErr: dbErr,
-			checkResponse: func(t *testing.T, emp repo.Employee) {
-				if emp.ID != 0 {
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID != 0 {
 					t.Error("Expected zero-value employee response when an error occurs")
 				}
 			},
@@ -160,8 +180,8 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 					Return(repo.Employee{}, pgDupEmailErr)
 			},
 			expectedErr: ErrEmailAlreadyExists,
-			checkResponse: func(t *testing.T, emp repo.Employee) {
-				if emp.ID != 0 {
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID != 0 {
 					t.Error("Expected zero-value employee response when an error occurs")
 				}
 			},
@@ -175,8 +195,8 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 					Return(repo.Employee{}, pgDupEmployeeIDErr)
 			},
 			expectedErr: ErrOdooEmployeeIDAlreadyExists,
-			checkResponse: func(t *testing.T, emp repo.Employee) {
-				if emp.ID != 0 {
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID != 0 {
 					t.Error("Expected zero-value employee response when an error occurs")
 				}
 			},
@@ -188,11 +208,11 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 				mockRepo.EXPECT().
 					CreateEmployee(gomock.Any(), defaultRepoParams).
 					Return(repo.Employee{
-						ID:         1,
+						ID:             1,
 						OdooEmployeeID: defaultParams.OdooEmployeeID,
-						FullName:   defaultParams.FullName,
-						Email:      defaultParams.Email,
-						Username:   defaultParams.Username,
+						FullName:       defaultParams.FullName,
+						Email:          defaultParams.Email,
+						Username:       defaultParams.Username,
 					}, nil)
 				mockRepo.EXPECT().
 					CreatePasswordResetToken(gomock.Any(), gomock.Any()).
@@ -212,8 +232,8 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 			// email couldn't be sent — the account already exists in
 			// Postgres, so CreateEmployee still returns it with a nil error.
 			expectedErr: nil,
-			checkResponse: func(t *testing.T, emp repo.Employee) {
-				if emp.ID == 0 {
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID == 0 {
 					t.Error("Expected created employee to have a non-zero ID, but got 0")
 				}
 			},
@@ -225,11 +245,11 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 				mockRepo.EXPECT().
 					CreateEmployee(gomock.Any(), defaultRepoParams).
 					Return(repo.Employee{
-						ID:         1,
+						ID:             1,
 						OdooEmployeeID: defaultParams.OdooEmployeeID,
-						FullName:   defaultParams.FullName,
-						Email:      defaultParams.Email,
-						Username:   defaultParams.Username,
+						FullName:       defaultParams.FullName,
+						Email:          defaultParams.Email,
+						Username:       defaultParams.Username,
 					}, nil)
 				mockRepo.EXPECT().
 					CreatePasswordResetToken(gomock.Any(), gomock.Any()).
@@ -246,8 +266,8 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 				return done
 			},
 			expectedErr: nil,
-			checkResponse: func(t *testing.T, emp repo.Employee) {
-				if emp.ID == 0 {
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID == 0 {
 					t.Error("Expected created employee to have a non-zero ID, but got 0")
 				}
 			},
@@ -259,11 +279,11 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 				mockRepo.EXPECT().
 					CreateEmployee(gomock.Any(), defaultRepoParams).
 					Return(repo.Employee{
-						ID:         1,
+						ID:             1,
 						OdooEmployeeID: defaultParams.OdooEmployeeID,
-						FullName:   defaultParams.FullName,
-						Email:      defaultParams.Email,
-						Username:   defaultParams.Username,
+						FullName:       defaultParams.FullName,
+						Email:          defaultParams.Email,
+						Username:       defaultParams.Username,
 					}, nil)
 				mockRepo.EXPECT().
 					CreatePasswordResetToken(gomock.Any(), gomock.Any()).
@@ -280,9 +300,118 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 				return done
 			},
 			expectedErr: nil,
-			checkResponse: func(t *testing.T, emp repo.Employee) {
-				if emp.ID == 0 {
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID == 0 {
 					t.Error("Expected created employee to have a non-zero ID, but got 0")
+				}
+			},
+		},
+		{
+			name: "TC-POST-10: Create employee with positions assigns them",
+			inputParams: func() createEmployeeParams {
+				p := defaultParams
+				p.PositionIDs = []int64{10, 20}
+				return p
+			}(),
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					CountPositionsByIDs(gomock.Any(), []int64{10, 20}).
+					Return(int64(2), nil)
+				mockRepo.EXPECT().
+					CreateEmployee(gomock.Any(), defaultRepoParams).
+					Return(repo.Employee{
+						ID:             1,
+						OdooEmployeeID: defaultParams.OdooEmployeeID,
+						FullName:       defaultParams.FullName,
+						Email:          defaultParams.Email,
+						Username:       defaultParams.Username,
+					}, nil)
+				mockRepo.EXPECT().
+					InsertEmployeePositions(gomock.Any(), repo.InsertEmployeePositionsParams{
+						EmployeeID:  1,
+						PositionIds: []int64{10, 20},
+					}).
+					Return(nil)
+				mockRepo.EXPECT().
+					CreatePasswordResetToken(gomock.Any(), gomock.Any()).
+					Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
+			},
+			setupMailerMock: func(mockMailer *mailermocks.MockClient) <-chan struct{} {
+				done := make(chan struct{})
+				mockMailer.EXPECT().
+					Send(gomock.Any(), defaultParams.Email, mailer.AccountActivationTemplate, gomock.Any()).
+					DoAndReturn(func(context.Context, string, string, any) error {
+						defer close(done)
+						return nil
+					})
+				return done
+			},
+			expectedErr: nil,
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if len(detail.PositionIDs) != 2 {
+					t.Errorf("expected 2 position ids, got %v", detail.PositionIDs)
+				}
+			},
+		},
+		{
+			name: "TC-POST-11: Create employee with an unknown position id fails closed with ErrUnknownPositionID",
+			inputParams: func() createEmployeeParams {
+				p := defaultParams
+				p.PositionIDs = []int64{10, 999}
+				return p
+			}(),
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					CountPositionsByIDs(gomock.Any(), []int64{10, 999}).
+					Return(int64(1), nil)
+				// No CreateEmployee/InsertEmployeePositions expectation: the
+				// mock controller fails the test if either is called, proving
+				// validation runs before the employee row is written.
+			},
+			expectedErr: ErrUnknownPositionID,
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID != 0 {
+					t.Error("Expected zero-value employee response when an error occurs")
+				}
+			},
+		},
+		{
+			name: "TC-POST-12: Create employee with an explicit empty position set has empty (non-nil) PositionIDs",
+			inputParams: func() createEmployeeParams {
+				p := defaultParams
+				p.PositionIDs = []int64{}
+				return p
+			}(),
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				// No CountPositionsByIDs/InsertEmployeePositions expectation:
+				// an empty submitted set short-circuits both.
+				mockRepo.EXPECT().
+					CreateEmployee(gomock.Any(), defaultRepoParams).
+					Return(repo.Employee{
+						ID:             1,
+						OdooEmployeeID: defaultParams.OdooEmployeeID,
+						FullName:       defaultParams.FullName,
+						Email:          defaultParams.Email,
+						Username:       defaultParams.Username,
+					}, nil)
+				mockRepo.EXPECT().
+					CreatePasswordResetToken(gomock.Any(), gomock.Any()).
+					Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
+			},
+			setupMailerMock: func(mockMailer *mailermocks.MockClient) <-chan struct{} {
+				done := make(chan struct{})
+				mockMailer.EXPECT().
+					Send(gomock.Any(), defaultParams.Email, mailer.AccountActivationTemplate, gomock.Any()).
+					DoAndReturn(func(context.Context, string, string, any) error {
+						defer close(done)
+						return nil
+					})
+				return done
+			},
+			expectedErr: nil,
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.PositionIDs == nil || len(detail.PositionIDs) != 0 {
+					t.Errorf("expected empty non-nil PositionIDs, got %v", detail.PositionIDs)
 				}
 			},
 		},
@@ -301,10 +430,10 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 				mailerDone = tc.setupMailerMock(mockMailer)
 			}
 
-			svc := NewService(mockRepo, mockMailer, mockOdoo)
+			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 			// Execute
-			emp, err := svc.CreateEmployee(ctx, tc.inputParams)
+			detail, err := svc.CreateEmployee(ctx, tc.inputParams)
 
 			if mailerDone != nil {
 				select {
@@ -329,7 +458,7 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 			}
 
 			if tc.checkResponse != nil {
-				tc.checkResponse(t, emp)
+				tc.checkResponse(t, detail)
 			}
 		})
 	}
@@ -344,7 +473,7 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 		name          string
 		setupMock     func(mockRepo *mocks.MockQuerier)
 		expectedErr   error
-		checkResponse func(t *testing.T, employees []repo.Employee)
+		checkResponse func(t *testing.T, details []EmployeeDetail)
 	}{
 		{
 			name: "TC-LIST-01: List employees successfully",
@@ -355,11 +484,14 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 						{ID: 1, OdooEmployeeID: 30, FullName: "Nguyen Van A"},
 						{ID: 2, OdooEmployeeID: 31, FullName: "Tran Thi B"},
 					}, nil)
+				mockRepo.EXPECT().
+					ListPositionIDsByEmployeeIDs(gomock.Any(), []int64{1, 2}).
+					Return([]repo.EmployeePosition{}, nil)
 			},
 			expectedErr: nil,
-			checkResponse: func(t *testing.T, employees []repo.Employee) {
-				if len(employees) != 2 {
-					t.Fatalf("expected 2 employees, got %d", len(employees))
+			checkResponse: func(t *testing.T, details []EmployeeDetail) {
+				if len(details) != 2 {
+					t.Fatalf("expected 2 employees, got %d", len(details))
 				}
 			},
 		},
@@ -369,11 +501,14 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 				mockRepo.EXPECT().
 					ListEmployees(gomock.Any()).
 					Return([]repo.Employee{}, nil)
+				mockRepo.EXPECT().
+					ListPositionIDsByEmployeeIDs(gomock.Any(), []int64{}).
+					Return([]repo.EmployeePosition{}, nil)
 			},
 			expectedErr: nil,
-			checkResponse: func(t *testing.T, employees []repo.Employee) {
-				if len(employees) != 0 {
-					t.Fatalf("expected 0 employees, got %d", len(employees))
+			checkResponse: func(t *testing.T, details []EmployeeDetail) {
+				if len(details) != 0 {
+					t.Fatalf("expected 0 employees, got %d", len(details))
 				}
 			},
 		},
@@ -385,9 +520,38 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 					Return(nil, dbErr)
 			},
 			expectedErr: dbErr,
-			checkResponse: func(t *testing.T, employees []repo.Employee) {
-				if employees != nil {
-					t.Errorf("expected nil employees when an error occurs, got %v", employees)
+			checkResponse: func(t *testing.T, details []EmployeeDetail) {
+				if details != nil {
+					t.Errorf("expected nil details when an error occurs, got %v", details)
+				}
+			},
+		},
+		{
+			name: "TC-LIST-04: Includes each employee's own position ids, non-nil when empty",
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					ListEmployees(gomock.Any()).
+					Return([]repo.Employee{
+						{ID: 1, OdooEmployeeID: 30, FullName: "Nguyen Van A"},
+						{ID: 2, OdooEmployeeID: 31, FullName: "Tran Thi B"},
+					}, nil)
+				mockRepo.EXPECT().
+					ListPositionIDsByEmployeeIDs(gomock.Any(), []int64{1, 2}).
+					Return([]repo.EmployeePosition{
+						{EmployeeID: 1, PositionID: 10},
+						{EmployeeID: 1, PositionID: 20},
+					}, nil)
+			},
+			expectedErr: nil,
+			checkResponse: func(t *testing.T, details []EmployeeDetail) {
+				if len(details) != 2 {
+					t.Fatalf("expected 2 employees, got %d", len(details))
+				}
+				if len(details[0].PositionIDs) != 2 {
+					t.Errorf("expected employee 1 to have 2 position ids, got %v", details[0].PositionIDs)
+				}
+				if details[1].PositionIDs == nil || len(details[1].PositionIDs) != 0 {
+					t.Errorf("expected employee 2 to have empty non-nil PositionIDs, got %v", details[1].PositionIDs)
 				}
 			},
 		},
@@ -402,9 +566,9 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer, mockOdoo)
+			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
-			employees, err := svc.ListEmployees(ctx)
+			details, err := svc.ListEmployees(ctx)
 
 			if tc.expectedErr != nil {
 				if err == nil {
@@ -418,7 +582,7 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 			}
 
 			if tc.checkResponse != nil {
-				tc.checkResponse(t, employees)
+				tc.checkResponse(t, details)
 			}
 		})
 	}
@@ -434,7 +598,7 @@ func TestEmployeeService_GetEmployeeByID(t *testing.T) {
 		inputID       int64
 		setupMock     func(mockRepo *mocks.MockQuerier)
 		expectedErr   error
-		checkResponse func(t *testing.T, emp repo.Employee)
+		checkResponse func(t *testing.T, detail EmployeeDetail)
 	}{
 		{
 			name:    "TC-GET-01: Get employee by ID successfully",
@@ -443,11 +607,17 @@ func TestEmployeeService_GetEmployeeByID(t *testing.T) {
 				mockRepo.EXPECT().
 					GetEmployeeByID(gomock.Any(), int64(1)).
 					Return(repo.Employee{ID: 1, OdooEmployeeID: 30, FullName: "Nguyen Van A"}, nil)
+				mockRepo.EXPECT().
+					ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).
+					Return([]int64{10, 20}, nil)
 			},
 			expectedErr: nil,
-			checkResponse: func(t *testing.T, emp repo.Employee) {
-				if emp.ID != 1 {
-					t.Errorf("expected employee ID 1, got %d", emp.ID)
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID != 1 {
+					t.Errorf("expected employee ID 1, got %d", detail.Employee.ID)
+				}
+				if len(detail.PositionIDs) != 2 {
+					t.Errorf("expected 2 position ids, got %v", detail.PositionIDs)
 				}
 			},
 		},
@@ -460,8 +630,8 @@ func TestEmployeeService_GetEmployeeByID(t *testing.T) {
 					Return(repo.Employee{}, pgx.ErrNoRows)
 			},
 			expectedErr: ErrEmployeeNotFound,
-			checkResponse: func(t *testing.T, emp repo.Employee) {
-				if emp.ID != 0 {
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID != 0 {
 					t.Error("Expected zero-value employee response when an error occurs")
 				}
 			},
@@ -475,9 +645,27 @@ func TestEmployeeService_GetEmployeeByID(t *testing.T) {
 					Return(repo.Employee{}, dbErr)
 			},
 			expectedErr: dbErr,
-			checkResponse: func(t *testing.T, emp repo.Employee) {
-				if emp.ID != 0 {
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID != 0 {
 					t.Error("Expected zero-value employee response when an error occurs")
+				}
+			},
+		},
+		{
+			name:    "TC-GET-04: Get employee with no positions has empty (non-nil) PositionIDs",
+			inputID: 1,
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: 30, FullName: "Nguyen Van A"}, nil)
+				mockRepo.EXPECT().
+					ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).
+					Return([]int64{}, nil)
+			},
+			expectedErr: nil,
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.PositionIDs == nil || len(detail.PositionIDs) != 0 {
+					t.Errorf("expected empty non-nil PositionIDs, got %v", detail.PositionIDs)
 				}
 			},
 		},
@@ -492,9 +680,9 @@ func TestEmployeeService_GetEmployeeByID(t *testing.T) {
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer, mockOdoo)
+			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
-			emp, err := svc.GetEmployeeByID(ctx, tc.inputID)
+			detail, err := svc.GetEmployeeByID(ctx, tc.inputID)
 
 			if tc.expectedErr != nil {
 				if err == nil {
@@ -508,7 +696,7 @@ func TestEmployeeService_GetEmployeeByID(t *testing.T) {
 			}
 
 			if tc.checkResponse != nil {
-				tc.checkResponse(t, emp)
+				tc.checkResponse(t, detail)
 			}
 		})
 	}
@@ -519,16 +707,16 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 
 	inputParams := updateEmployeeParams{
 		OdooEmployeeID: 1,
-		FullName:   "Nguyen Van A",
-		Email:      "van-a@example.com",
-		Username:   "nguyenvana",
+		FullName:       "Nguyen Van A",
+		Email:          "van-a@example.com",
+		Username:       "nguyenvana",
 	}
 	repoParams := repo.UpdateEmployeeParams{
-		ID:         1,
+		ID:             1,
 		OdooEmployeeID: inputParams.OdooEmployeeID,
-		FullName:   inputParams.FullName,
-		Email:      inputParams.Email,
-		Username:   inputParams.Username,
+		FullName:       inputParams.FullName,
+		Email:          inputParams.Email,
+		Username:       inputParams.Username,
 	}
 
 	dupEmailErr := &pgconn.PgError{
@@ -550,12 +738,14 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 
 	tests := []struct {
 		name          string
+		params        updateEmployeeParams
 		setupMock     func(mockRepo *mocks.MockQuerier)
 		expectedErr   error
-		checkResponse func(t *testing.T, emp repo.Employee)
+		checkResponse func(t *testing.T, detail EmployeeDetail)
 	}{
 		{
-			name: "TC-PUT-01: Update employee successfully",
+			name:   "TC-PUT-01: Update employee successfully",
+			params: inputParams,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
@@ -565,16 +755,26 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 						Email:    inputParams.Email,
 						Username: inputParams.Username,
 					}, nil)
+				mockRepo.EXPECT().
+					DeleteEmployeePositionsNotIn(gomock.Any(), repo.DeleteEmployeePositionsNotInParams{
+						EmployeeID:  1,
+						PositionIds: nil,
+					}).
+					Return(nil)
 			},
 			expectedErr: nil,
-			checkResponse: func(t *testing.T, emp repo.Employee) {
-				if emp.FullName != inputParams.FullName {
-					t.Errorf("expected full name %q, got %q", inputParams.FullName, emp.FullName)
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.FullName != inputParams.FullName {
+					t.Errorf("expected full name %q, got %q", inputParams.FullName, detail.Employee.FullName)
+				}
+				if detail.PositionIDs == nil || len(detail.PositionIDs) != 0 {
+					t.Errorf("expected empty non-nil PositionIDs, got %v", detail.PositionIDs)
 				}
 			},
 		},
 		{
-			name: "TC-PUT-02: Translates a no-rows repo error to ErrEmployeeNotFound",
+			name:   "TC-PUT-02: Translates a no-rows repo error to ErrEmployeeNotFound",
+			params: inputParams,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
@@ -583,7 +783,8 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			expectedErr: ErrEmployeeNotFound,
 		},
 		{
-			name: "TC-PUT-03: Translates a Postgres unique-violation on email to ErrEmailAlreadyExists",
+			name:   "TC-PUT-03: Translates a Postgres unique-violation on email to ErrEmailAlreadyExists",
+			params: inputParams,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
@@ -592,7 +793,8 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			expectedErr: ErrEmailAlreadyExists,
 		},
 		{
-			name: "TC-PUT-04: Translates a Postgres unique-violation on username to ErrUsernameAlreadyExists",
+			name:   "TC-PUT-04: Translates a Postgres unique-violation on username to ErrUsernameAlreadyExists",
+			params: inputParams,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
@@ -601,7 +803,8 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			expectedErr: ErrUsernameAlreadyExists,
 		},
 		{
-			name: "TC-PUT-04b: Translates a Postgres unique-violation on employee_id to ErrOdooEmployeeIDAlreadyExists",
+			name:   "TC-PUT-04b: Translates a Postgres unique-violation on employee_id to ErrOdooEmployeeIDAlreadyExists",
+			params: inputParams,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
@@ -610,13 +813,102 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			expectedErr: ErrOdooEmployeeIDAlreadyExists,
 		},
 		{
-			name: "TC-PUT-05: Update employee fails on database error",
+			name:   "TC-PUT-05: Update employee fails on database error",
+			params: inputParams,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{}, dbErr)
 			},
 			expectedErr: dbErr,
+		},
+		{
+			name: "TC-PUT-06: Update employee replaces its position set via diff",
+			params: func() updateEmployeeParams {
+				p := inputParams
+				p.PositionIDs = []int64{10, 20}
+				return p
+			}(),
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					CountPositionsByIDs(gomock.Any(), []int64{10, 20}).
+					Return(int64(2), nil)
+				mockRepo.EXPECT().
+					UpdateEmployee(gomock.Any(), repoParams).
+					Return(repo.Employee{
+						ID:       1,
+						FullName: inputParams.FullName,
+						Email:    inputParams.Email,
+						Username: inputParams.Username,
+					}, nil)
+				mockRepo.EXPECT().
+					DeleteEmployeePositionsNotIn(gomock.Any(), repo.DeleteEmployeePositionsNotInParams{
+						EmployeeID:  1,
+						PositionIds: []int64{10, 20},
+					}).
+					Return(nil)
+				mockRepo.EXPECT().
+					InsertEmployeePositions(gomock.Any(), repo.InsertEmployeePositionsParams{
+						EmployeeID:  1,
+						PositionIds: []int64{10, 20},
+					}).
+					Return(nil)
+			},
+			expectedErr: nil,
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if len(detail.PositionIDs) != 2 {
+					t.Errorf("expected 2 position ids, got %v", detail.PositionIDs)
+				}
+			},
+		},
+		{
+			name: "TC-PUT-07: Update employee with an unknown position id fails closed with ErrUnknownPositionID",
+			params: func() updateEmployeeParams {
+				p := inputParams
+				p.PositionIDs = []int64{10, 999}
+				return p
+			}(),
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					CountPositionsByIDs(gomock.Any(), []int64{10, 999}).
+					Return(int64(1), nil)
+				// No UpdateEmployee/Delete/InsertEmployeePositions expectation:
+				// the mock controller fails the test if any is called, proving
+				// validation runs before any write.
+			},
+			expectedErr: ErrUnknownPositionID,
+		},
+		{
+			name: "TC-PUT-08: Update employee with an explicit empty position set clears assignments",
+			params: func() updateEmployeeParams {
+				p := inputParams
+				p.PositionIDs = []int64{}
+				return p
+			}(),
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				// No CountPositionsByIDs/InsertEmployeePositions expectation:
+				// an empty submitted set short-circuits both.
+				mockRepo.EXPECT().
+					UpdateEmployee(gomock.Any(), repoParams).
+					Return(repo.Employee{
+						ID:       1,
+						FullName: inputParams.FullName,
+						Email:    inputParams.Email,
+						Username: inputParams.Username,
+					}, nil)
+				mockRepo.EXPECT().
+					DeleteEmployeePositionsNotIn(gomock.Any(), repo.DeleteEmployeePositionsNotInParams{
+						EmployeeID:  1,
+						PositionIds: []int64{},
+					}).
+					Return(nil)
+			},
+			expectedErr: nil,
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.PositionIDs == nil || len(detail.PositionIDs) != 0 {
+					t.Errorf("expected empty non-nil PositionIDs, got %v", detail.PositionIDs)
+				}
+			},
 		},
 	}
 
@@ -629,9 +921,9 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer, mockOdoo)
+			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
-			emp, err := svc.UpdateEmployee(ctx, 1, inputParams)
+			detail, err := svc.UpdateEmployee(ctx, 1, tc.params)
 
 			if tc.expectedErr != nil {
 				if err == nil {
@@ -645,7 +937,7 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 			}
 
 			if tc.checkResponse != nil {
-				tc.checkResponse(t, emp)
+				tc.checkResponse(t, detail)
 			}
 		})
 	}
@@ -656,16 +948,16 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 
 	baseParams := updateEmployeeParams{
 		OdooEmployeeID: 1,
-		FullName:   "Nguyen Van A",
-		Email:      "van-a@example.com",
-		Username:   "nguyenvana",
+		FullName:       "Nguyen Van A",
+		Email:          "van-a@example.com",
+		Username:       "nguyenvana",
 	}
 	repoParams := repo.UpdateEmployeeParams{
-		ID:         1,
+		ID:             1,
 		OdooEmployeeID: baseParams.OdooEmployeeID,
-		FullName:   baseParams.FullName,
-		Email:      baseParams.Email,
-		Username:   baseParams.Username,
+		FullName:       baseParams.FullName,
+		Email:          baseParams.Email,
+		Username:       baseParams.Username,
 	}
 	dbErr := errors.New("connection refused")
 
@@ -676,7 +968,7 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 		expectedErr error
 	}{
 		{
-			name: "TC-PUT-06: Nil password leaves the password column untouched",
+			name: "TC-PUT-09: Nil password leaves the password column untouched",
 			params: func() updateEmployeeParams {
 				p := baseParams
 				p.Password = nil
@@ -686,12 +978,15 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{ID: 1}, nil)
+				mockRepo.EXPECT().
+					DeleteEmployeePositionsNotIn(gomock.Any(), gomock.Any()).
+					Return(nil)
 				mockRepo.EXPECT().SetEmployeePassword(gomock.Any(), gomock.Any()).Times(0)
 			},
 			expectedErr: nil,
 		},
 		{
-			name: "TC-PUT-07: Non-nil password bcrypt-hashes and sets it via SetEmployeePassword",
+			name: "TC-PUT-10: Non-nil password bcrypt-hashes and sets it via SetEmployeePassword",
 			params: func() updateEmployeeParams {
 				p := baseParams
 				pw := "supersecret"
@@ -702,6 +997,9 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{ID: 1}, nil)
+				mockRepo.EXPECT().
+					DeleteEmployeePositionsNotIn(gomock.Any(), gomock.Any()).
+					Return(nil)
 				mockRepo.EXPECT().
 					SetEmployeePassword(gomock.Any(), gomock.Any()).
 					DoAndReturn(func(_ context.Context, arg repo.SetEmployeePasswordParams) (int64, error) {
@@ -717,7 +1015,7 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
-			name: "TC-PUT-08: Propagates an error from SetEmployeePassword",
+			name: "TC-PUT-11: Propagates an error from SetEmployeePassword",
 			params: func() updateEmployeeParams {
 				p := baseParams
 				pw := "supersecret"
@@ -728,6 +1026,9 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 				mockRepo.EXPECT().
 					UpdateEmployee(gomock.Any(), repoParams).
 					Return(repo.Employee{ID: 1}, nil)
+				mockRepo.EXPECT().
+					DeleteEmployeePositionsNotIn(gomock.Any(), gomock.Any()).
+					Return(nil)
 				mockRepo.EXPECT().
 					SetEmployeePassword(gomock.Any(), gomock.Any()).
 					Return(int64(0), dbErr)
@@ -745,7 +1046,7 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer, mockOdoo)
+			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 			_, err := svc.UpdateEmployee(ctx, 1, tc.params)
 
@@ -841,7 +1142,7 @@ func TestEmployeeService_SetEmployeeActive(t *testing.T) {
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer, mockOdoo)
+			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 			err := svc.SetEmployeeActive(ctx, tc.inputID, tc.inputActive)
 
@@ -923,7 +1224,7 @@ func TestEmployeeService_SetEmployeePassword(t *testing.T) {
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer, mockOdoo)
+			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 			err := svc.SetEmployeePassword(ctx, tc.inputID, tc.inputPass)
 
@@ -993,7 +1294,7 @@ func TestEmployeeService_DeleteEmployee(t *testing.T) {
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer, mockOdoo)
+			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 			err := svc.DeleteEmployee(ctx, tc.inputID)
 
@@ -1071,7 +1372,7 @@ func TestEmployeeService_BulkDeleteEmployees(t *testing.T) {
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer, mockOdoo)
+			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 			results := svc.BulkDeleteEmployees(ctx, tc.inputIDs)
 
@@ -1106,6 +1407,7 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 			inputIDs: []int64{1},
 			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(activeEmployee, nil)
+				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
 				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 				mockMailer.EXPECT().Send(gomock.Any(), activeEmployee.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(nil)
 			},
@@ -1117,6 +1419,7 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(999)).Return(repo.Employee{}, pgx.ErrNoRows)
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(activeEmployee, nil)
+				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
 				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 				mockMailer.EXPECT().Send(gomock.Any(), activeEmployee.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(nil)
 			},
@@ -1130,7 +1433,9 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 			inputIDs: []int64{2, 1},
 			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(2)).Return(inactiveEmployee, nil)
+				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(2)).Return([]int64{}, nil)
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(activeEmployee, nil)
+				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
 				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 				mockMailer.EXPECT().Send(gomock.Any(), activeEmployee.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(nil)
 			},
@@ -1144,6 +1449,7 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 			inputIDs: []int64{1},
 			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(activeEmployee, nil)
+				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
 				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 				mockMailer.EXPECT().Send(gomock.Any(), activeEmployee.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(dbErr)
 			},
@@ -1160,7 +1466,7 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 
 			tc.setupMock(mockRepo, mockMailer)
 
-			svc := NewService(mockRepo, mockMailer, mockOdoo)
+			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 			results := svc.BulkSendPasswordResetLinks(ctx, tc.inputIDs)
 
@@ -1244,7 +1550,7 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo, mockMailer, mockOdoo)
+			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 			err := svc.CompleteActivation(ctx, tc.inputParams)
 
@@ -1273,15 +1579,15 @@ func TestEmployeeService_CreateEmployee_SendsActivationEmailAsynchronously(t *te
 
 	params := createEmployeeParams{
 		OdooEmployeeID: 31,
-		FullName:   "Tran Thi B",
-		Email:      "tran-b@example.com",
-		Username:   "tranthib",
+		FullName:       "Tran Thi B",
+		Email:          "tran-b@example.com",
+		Username:       "tranthib",
 	}
 	repoParams := repo.CreateEmployeeParams{
 		OdooEmployeeID: params.OdooEmployeeID,
-		FullName:   params.FullName,
-		Email:      params.Email,
-		Username:   params.Username,
+		FullName:       params.FullName,
+		Email:          params.Email,
+		Username:       params.Username,
 	}
 
 	ctrl := gomock.NewController(t)
@@ -1292,11 +1598,11 @@ func TestEmployeeService_CreateEmployee_SendsActivationEmailAsynchronously(t *te
 	mockRepo.EXPECT().
 		CreateEmployee(gomock.Any(), repoParams).
 		Return(repo.Employee{
-			ID:         2,
+			ID:             2,
 			OdooEmployeeID: params.OdooEmployeeID,
-			FullName:   params.FullName,
-			Email:      params.Email,
-			Username:   params.Username,
+			FullName:       params.FullName,
+			Email:          params.Email,
+			Username:       params.Username,
 		}, nil)
 	mockRepo.EXPECT().
 		CreatePasswordResetToken(gomock.Any(), gomock.Any()).
@@ -1314,14 +1620,14 @@ func TestEmployeeService_CreateEmployee_SendsActivationEmailAsynchronously(t *te
 			return nil
 		})
 
-	svc := NewService(mockRepo, mockMailer, mockOdoo)
+	svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 	returned := make(chan struct{})
-	var emp repo.Employee
+	var detail EmployeeDetail
 	var err error
 	go func() {
 		defer close(returned)
-		emp, err = svc.CreateEmployee(ctx, params)
+		detail, err = svc.CreateEmployee(ctx, params)
 	}()
 
 	select {
@@ -1332,7 +1638,7 @@ func TestEmployeeService_CreateEmployee_SendsActivationEmailAsynchronously(t *te
 	if err != nil {
 		t.Fatalf("Expected no error, but got: %v", err)
 	}
-	if emp.ID == 0 {
+	if detail.Employee.ID == 0 {
 		t.Error("Expected created employee to have a non-zero ID, but got 0")
 	}
 
@@ -1411,7 +1717,7 @@ func TestEmployeeService_SyncEmployees(t *testing.T) {
 				}, nil
 			})
 
-		svc := NewService(mockRepo, mockMailer, mockOdoo)
+		svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 		if svc.SyncStatus(ctx).Syncing {
 			t.Fatal("expected syncing=false before SyncEmployees is called")
@@ -1472,7 +1778,7 @@ func TestEmployeeService_SyncEmployees(t *testing.T) {
 				return nil, nil
 			})
 
-		svc := NewService(mockRepo, mockMailer, mockOdoo)
+		svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 		if err := svc.SyncEmployees(ctx, []int64{1}); err != nil {
 			t.Fatalf("first SyncEmployees() error = %v", err)
@@ -1523,7 +1829,7 @@ func TestEmployeeService_SyncEmployees(t *testing.T) {
 		// No UpsertEmployees expectation: calling it would fail the mock
 		// controller, asserting the upsert never runs after a fetch error.
 
-		svc := NewService(mockRepo, mockMailer, mockOdoo)
+		svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 		if err := svc.SyncEmployees(ctx, []int64{1}); err != nil {
 			t.Fatalf("SyncEmployees() error = %v", err)
@@ -1551,7 +1857,7 @@ func TestEmployeeService_SyncEmployees(t *testing.T) {
 		// fail the mock controller, asserting the sync never reaches Odoo
 		// after a lookup error.
 
-		svc := NewService(mockRepo, mockMailer, mockOdoo)
+		svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 		if err := svc.SyncEmployees(ctx, []int64{1}); err == nil {
 			t.Fatal("expected SyncEmployees() to return the lookup error, got nil")
