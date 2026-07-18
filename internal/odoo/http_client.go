@@ -49,20 +49,19 @@ func (cfg Config) validate() error {
 // employeeIDField is hr.employee's own plain-integer id (not the user_id
 // many2one to res.users) — confirmed against the live erp.bangnails.fr
 // MuK REST API docs.
-// storeModel is this integration's documented assumption for the co-model
-// behind hr.employee's x_pos_shop_ids many2many field — not itself
-// confirmed against the live erp.bangnails.fr instance, which is what the
-// E2E verification ticket is for.
+// storeModel is the co-model behind hr.employee's x_pos_shop_ids
+// many2many field — confirmed against the live erp.bangnails.fr instance
+// as "pos.shop". That model has no city field yet (planned for later on
+// the Odoo side), so it isn't queried here — see odoo.Store.
 const (
 	employeeModel         = "hr.employee"
 	employeeIDField       = "id"
 	employeeNameField     = "name"
 	employeeEmailField    = "email"
 	employeeStoreIDsField = "x_pos_shop_ids"
-	storeModel            = "x_pos_shop"
+	storeModel            = "pos.shop"
 	storeIDField          = "id"
 	storeNameField        = "name"
-	storeCityField        = "city"
 )
 
 // tokenEndpoint and tokenExpiryLeeway are the MuK REST OAuth2 password-grant
@@ -292,7 +291,7 @@ func (c *HTTPClient) doSearchRead(ctx context.Context, model string, domain []an
 // FetchStores fetches every store record from Odoo in one call — the store
 // count is small enough that pagination isn't needed.
 func (c *HTTPClient) FetchStores(ctx context.Context) ([]Store, error) {
-	records, err := c.searchRead(ctx, storeModel, []any{}, []string{storeIDField, storeNameField, storeCityField}, 0, 0)
+	records, err := c.searchRead(ctx, storeModel, []any{}, []string{storeIDField, storeNameField}, 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +305,6 @@ func (c *HTTPClient) FetchStores(ctx context.Context) ([]Store, error) {
 		stores = append(stores, Store{
 			ID:   id,
 			Name: recordString(r, storeNameField),
-			City: recordString(r, storeCityField),
 		})
 	}
 	return stores, nil

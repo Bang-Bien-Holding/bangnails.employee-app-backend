@@ -575,8 +575,8 @@ func TestStoreService_SyncStores(t *testing.T) {
 				close(fetchStarted)
 				<-release
 				return []odoo.Store{
-					{ID: 1, Name: "A", City: "Hanoi"},
-					{ID: 2, Name: "B", City: "Ho Chi Minh City"},
+					{ID: 1, Name: "A"},
+					{ID: 2, Name: "B"},
 				}, nil
 			},
 		)
@@ -585,7 +585,6 @@ func TestStoreService_SyncStores(t *testing.T) {
 		mockRepo.EXPECT().UpsertStores(gomock.Any(), repo.UpsertStoresParams{
 			OdooStoreIds: []string{"1", "2"},
 			StoreNames:   []string{"A", "B"},
-			Cities:       []string{"Hanoi", "Ho Chi Minh City"},
 		}).DoAndReturn(func(context.Context, repo.UpsertStoresParams) ([]repo.UpsertStoresRow, error) {
 			defer close(upsertDone)
 			return []repo.UpsertStoresRow{
@@ -633,13 +632,12 @@ func TestStoreService_SyncStores(t *testing.T) {
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
 		mockOdoo.EXPECT().FetchStores(gomock.Any()).Return([]odoo.Store{
-			{ID: 1, Name: "A", City: "Hanoi"},
+			{ID: 1, Name: "A"},
 		}, nil)
 
 		mockRepo.EXPECT().UpsertStores(gomock.Any(), repo.UpsertStoresParams{
 			OdooStoreIds: []string{"1"},
 			StoreNames:   []string{"A"},
-			Cities:       []string{"Hanoi"},
 		}).Return([]repo.UpsertStoresRow{
 			{ID: 10, OdooStoreID: pgtype.Text{String: "1", Valid: true}, Inserted: false},
 		}, nil)
@@ -677,7 +675,6 @@ func TestStoreService_SyncStores(t *testing.T) {
 		mockRepo.EXPECT().UpsertStores(gomock.Any(), repo.UpsertStoresParams{
 			OdooStoreIds: []string{},
 			StoreNames:   []string{},
-			Cities:       []string{},
 		}).Return([]repo.UpsertStoresRow{}, nil)
 
 		mockRepo.EXPECT().FindStoresNotInOdoo(gomock.Any(), []string{}).Return([]int64{5, 6, 7}, nil)
@@ -796,13 +793,12 @@ func TestStoreService_SyncStores(t *testing.T) {
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
 		mockOdoo.EXPECT().FetchStores(gomock.Any()).Return([]odoo.Store{
-			{ID: 1, Name: "A", City: "Hanoi"},
+			{ID: 1, Name: "A"},
 		}, nil)
 		done := make(chan struct{})
 		mockRepo.EXPECT().UpsertStores(gomock.Any(), repo.UpsertStoresParams{
 			OdooStoreIds: []string{"1"},
 			StoreNames:   []string{"A"},
-			Cities:       []string{"Hanoi"},
 		}).DoAndReturn(func(context.Context, repo.UpsertStoresParams) ([]repo.UpsertStoresRow, error) {
 			defer close(done)
 			return nil, errors.New("boom")

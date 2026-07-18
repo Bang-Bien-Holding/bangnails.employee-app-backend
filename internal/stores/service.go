@@ -522,11 +522,9 @@ func (s *service) runSync(ctx context.Context, cancel context.CancelFunc) {
 
 	odooStoreIDs := make([]string, len(odooStores))
 	storeNames := make([]string, len(odooStores))
-	cities := make([]string, len(odooStores))
 	for i, st := range odooStores {
 		odooStoreIDs[i] = strconv.Itoa(st.ID)
 		storeNames[i] = st.Name
-		cities[i] = st.City
 	}
 
 	var inserted, updated, deleted int
@@ -534,7 +532,6 @@ func (s *service) runSync(ctx context.Context, cancel context.CancelFunc) {
 		rows, err := q.UpsertStores(ctx, repo.UpsertStoresParams{
 			OdooStoreIds: odooStoreIDs,
 			StoreNames:   storeNames,
-			Cities:       cities,
 		})
 		if err != nil {
 			return err

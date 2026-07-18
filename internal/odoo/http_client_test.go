@@ -121,8 +121,8 @@ func TestHTTPClient_FetchStores_AuthenticatesAndQueries(t *testing.T) {
 				t.Errorf("expected an empty domain filter, got %q", domain)
 			}
 			writeJSON(w, []map[string]any{
-				{"id": float64(1), "name": "Store #1", "city": "Hanoi"},
-				{"id": float64(2), "name": "Store #2", "city": "Da Nang"},
+				{"id": float64(1), "name": "Store #1"},
+				{"id": float64(2), "name": "Store #2"},
 			})
 
 		default:
@@ -137,7 +137,7 @@ func TestHTTPClient_FetchStores_AuthenticatesAndQueries(t *testing.T) {
 	if len(stores) != 2 {
 		t.Fatalf("expected 2 stores, got %d", len(stores))
 	}
-	if stores[0] != (Store{ID: 1, Name: "Store #1", City: "Hanoi"}) {
+	if stores[0] != (Store{ID: 1, Name: "Store #1"}) {
 		t.Errorf("unexpected first store: %+v", stores[0])
 	}
 	if *tokenRequests != 1 {

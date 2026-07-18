@@ -4,11 +4,12 @@ package odoo
 
 import "context"
 
-// Store is one store record as Odoo reports it.
+// Store is one store record as Odoo reports it. There is no City field:
+// Odoo's pos.shop model doesn't have a city field yet (planned for later),
+// so store sync doesn't touch the local store.city column at all.
 type Store struct {
 	ID   int
 	Name string
-	City string
 }
 
 // Employee is one employee record as Odoo reports it, keyed by the same
