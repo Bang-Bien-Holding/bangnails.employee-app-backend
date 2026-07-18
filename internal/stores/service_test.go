@@ -18,6 +18,10 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
+// storeSyncWaitTimeout bounds how long a test waits for SyncStores'
+// background goroutine — mirrors employees' mailerWaitTimeout.
+const storeSyncWaitTimeout = time.Second
+
 // newTestService builds a service whose withTx calls fn directly against q,
 // bypassing real transaction plumbing — SyncStores' orchestration is
 // exercised the same way regardless of what begins/commits the transaction.
@@ -542,39 +546,85 @@ func equalStrings(got, want []string) bool {
 	return true
 }
 
+// waitForStoreSyncStatus polls SyncStatus until syncing matches want or
+// storeSyncWaitTimeout elapses — unlock() runs asynchronously, right after
+// runSync's mocked calls return, in the background goroutine. Mirrors
+// employees' waitForSyncStatus.
+func waitForStoreSyncStatus(t *testing.T, svc Service, want bool) {
+	t.Helper()
+	deadline := time.Now().Add(storeSyncWaitTimeout)
+	for time.Now().Before(deadline) {
+		if svc.SyncStatus(context.Background()).Syncing == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for syncing=%v", want)
+}
+
 func TestStoreService_SyncStores(t *testing.T) {
-	t.Run("fetches all stores in a single call and reports insert/update counts", func(t *testing.T) {
+	t.Run("returns quickly, fetches all stores in a single call, and upserts insert/update counts", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockOdoo := odoomocks.NewMockClient(ctrl)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
-		mockOdoo.EXPECT().FetchStores(gomock.Any()).Return([]odoo.Store{
-			{ID: 1, Name: "A", City: "Hanoi"},
-			{ID: 2, Name: "B", City: "Ho Chi Minh City"},
-		}, nil)
+		fetchStarted := make(chan struct{})
+		release := make(chan struct{})
+		mockOdoo.EXPECT().FetchStores(gomock.Any()).DoAndReturn(
+			func(ctx context.Context) ([]odoo.Store, error) {
+				close(fetchStarted)
+				<-release
+				return []odoo.Store{
+					{ID: 1, Name: "A", City: "Hanoi"},
+					{ID: 2, Name: "B", City: "Ho Chi Minh City"},
+				}, nil
+			},
+		)
 
+		upsertDone := make(chan struct{})
 		mockRepo.EXPECT().UpsertStores(gomock.Any(), repo.UpsertStoresParams{
 			OdooStoreIds: []string{"1", "2"},
 			StoreNames:   []string{"A", "B"},
 			Cities:       []string{"Hanoi", "Ho Chi Minh City"},
-		}).Return([]repo.UpsertStoresRow{
-			{ID: 10, OdooStoreID: pgtype.Text{String: "1", Valid: true}, Inserted: true},
-			{ID: 20, OdooStoreID: pgtype.Text{String: "2", Valid: true}, Inserted: false},
-		}, nil)
+		}).DoAndReturn(func(context.Context, repo.UpsertStoresParams) ([]repo.UpsertStoresRow, error) {
+			defer close(upsertDone)
+			return []repo.UpsertStoresRow{
+				{ID: 10, OdooStoreID: pgtype.Text{String: "1", Valid: true}, Inserted: true},
+				{ID: 20, OdooStoreID: pgtype.Text{String: "2", Valid: true}, Inserted: false},
+			}, nil
+		})
 
 		mockRepo.EXPECT().FindStoresNotInOdoo(gomock.Any(), []string{"1", "2"}).Return([]int64{}, nil)
 
 		svc := newTestService(mockRepo, mockOdoo)
 
-		summary, err := svc.SyncStores(t.Context())
-		if err != nil {
+		if svc.SyncStatus(t.Context()).Syncing {
+			t.Fatal("expected syncing=false before SyncStores is called")
+		}
+
+		if err := svc.SyncStores(t.Context()); err != nil {
 			t.Fatalf("SyncStores() error = %v", err)
 		}
 
-		want := SyncSummary{TotalStoresProcessed: 2, InsertedStores: 1, UpdatedStores: 1}
-		if summary != want {
-			t.Errorf("SyncStores() summary = %+v, want %+v", summary, want)
+		select {
+		case <-fetchStarted:
+		case <-time.After(storeSyncWaitTimeout):
+			t.Fatal("SyncStores did not return before Odoo was fetched; it appears to be blocking instead of running in the background")
 		}
+
+		if !svc.SyncStatus(t.Context()).Syncing {
+			t.Error("expected syncing=true while the background sync is in flight")
+		}
+
+		close(release)
+
+		select {
+		case <-upsertDone:
+		case <-time.After(storeSyncWaitTimeout):
+			t.Fatal("timed out waiting for the background upsert to run")
+		}
+
+		waitForStoreSyncStatus(t, svc, false)
 	})
 
 	t.Run("hard-deletes stores odoo no longer reports", func(t *testing.T) {
@@ -595,17 +645,26 @@ func TestStoreService_SyncStores(t *testing.T) {
 		}, nil)
 
 		mockRepo.EXPECT().FindStoresNotInOdoo(gomock.Any(), []string{"1"}).Return([]int64{5, 6}, nil)
-		mockRepo.EXPECT().DeleteStores(gomock.Any(), []int64{5, 6}).Return(int64(2), nil)
+		deleteDone := make(chan struct{})
+		mockRepo.EXPECT().DeleteStores(gomock.Any(), []int64{5, 6}).DoAndReturn(
+			func(context.Context, []int64) (int64, error) {
+				defer close(deleteDone)
+				return 2, nil
+			},
+		)
 
 		svc := newTestService(mockRepo, mockOdoo)
 
-		summary, err := svc.SyncStores(t.Context())
-		if err != nil {
+		if err := svc.SyncStores(t.Context()); err != nil {
 			t.Fatalf("SyncStores() error = %v", err)
 		}
-		if summary.DeletedStores != 2 {
-			t.Errorf("summary.DeletedStores = %d, want 2", summary.DeletedStores)
+
+		select {
+		case <-deleteDone:
+		case <-time.After(storeSyncWaitTimeout):
+			t.Fatal("timed out waiting for the background delete to run")
 		}
+		waitForStoreSyncStatus(t, svc, false)
 	})
 
 	t.Run("empty store list from odoo hard-deletes every previously known store", func(t *testing.T) {
@@ -622,20 +681,29 @@ func TestStoreService_SyncStores(t *testing.T) {
 		}).Return([]repo.UpsertStoresRow{}, nil)
 
 		mockRepo.EXPECT().FindStoresNotInOdoo(gomock.Any(), []string{}).Return([]int64{5, 6, 7}, nil)
-		mockRepo.EXPECT().DeleteStores(gomock.Any(), []int64{5, 6, 7}).Return(int64(3), nil)
+		deleteDone := make(chan struct{})
+		mockRepo.EXPECT().DeleteStores(gomock.Any(), []int64{5, 6, 7}).DoAndReturn(
+			func(context.Context, []int64) (int64, error) {
+				defer close(deleteDone)
+				return 3, nil
+			},
+		)
 
 		svc := newTestService(mockRepo, mockOdoo)
 
-		summary, err := svc.SyncStores(t.Context())
-		if err != nil {
+		if err := svc.SyncStores(t.Context()); err != nil {
 			t.Fatalf("SyncStores() error = %v", err)
 		}
-		if summary.DeletedStores != 3 {
-			t.Errorf("summary.DeletedStores = %d, want 3", summary.DeletedStores)
+
+		select {
+		case <-deleteDone:
+		case <-time.After(storeSyncWaitTimeout):
+			t.Fatal("timed out waiting for the background delete to run")
 		}
+		waitForStoreSyncStatus(t, svc, false)
 	})
 
-	t.Run("a second call while a sync is in flight is rejected with ErrSyncInProgress", func(t *testing.T) {
+	t.Run("a second call while a sync is in flight is rejected with ErrSyncInProgress, and the lock is released after completion", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockOdoo := odoomocks.NewMockClient(ctrl)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
@@ -654,121 +722,115 @@ func TestStoreService_SyncStores(t *testing.T) {
 
 		svc := newTestService(mockRepo, mockOdoo)
 
-		done := make(chan error, 1)
-		go func() {
-			_, err := svc.SyncStores(t.Context())
-			done <- err
-		}()
+		if err := svc.SyncStores(t.Context()); err != nil {
+			t.Fatalf("first SyncStores() error = %v", err)
+		}
 
-		<-started
+		select {
+		case <-started:
+		case <-time.After(storeSyncWaitTimeout):
+			t.Fatal("timed out waiting for the first sync to reach Odoo")
+		}
 
-		if _, err := svc.SyncStores(t.Context()); !errors.Is(err, ErrSyncInProgress) {
+		if err := svc.SyncStores(t.Context()); !errors.Is(err, ErrSyncInProgress) {
 			t.Errorf("second SyncStores() error = %v, want ErrSyncInProgress", err)
 		}
 
 		close(release)
-		if err := <-done; err != nil {
-			t.Fatalf("first SyncStores() error = %v", err)
-		}
+		waitForStoreSyncStatus(t, svc, false)
 
 		// The lock must be released once the in-flight call finishes.
 		mockOdoo.EXPECT().FetchStores(gomock.Any()).Return([]odoo.Store{}, nil)
 		mockRepo.EXPECT().UpsertStores(gomock.Any(), gomock.Any()).Return([]repo.UpsertStoresRow{}, nil)
-		mockRepo.EXPECT().FindStoresNotInOdoo(gomock.Any(), []string{}).Return([]int64{}, nil)
-		if _, err := svc.SyncStores(t.Context()); err != nil {
+		thirdCallDone := make(chan struct{})
+		mockRepo.EXPECT().FindStoresNotInOdoo(gomock.Any(), []string{}).DoAndReturn(
+			func(context.Context, []string) ([]int64, error) {
+				defer close(thirdCallDone)
+				return []int64{}, nil
+			},
+		)
+		if err := svc.SyncStores(t.Context()); err != nil {
 			t.Errorf("SyncStores() after lock release, error = %v, want nil", err)
 		}
+
+		select {
+		case <-thirdCallDone:
+		case <-time.After(storeSyncWaitTimeout):
+			t.Fatal("timed out waiting for the third sync to reach the repo")
+		}
+		waitForStoreSyncStatus(t, svc, false)
 	})
 
-	t.Run("the lock is released even when fetching from odoo fails", func(t *testing.T) {
+	t.Run("an odoo fetch error is logged and releases the lock without upserting", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockOdoo := odoomocks.NewMockClient(ctrl)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
-		boom := errors.New("boom")
-		gomock.InOrder(
-			mockOdoo.EXPECT().FetchStores(gomock.Any()).Return(nil, boom),
-			mockOdoo.EXPECT().FetchStores(gomock.Any()).Return([]odoo.Store{}, nil),
+		done := make(chan struct{})
+		mockOdoo.EXPECT().FetchStores(gomock.Any()).DoAndReturn(
+			func(context.Context) ([]odoo.Store, error) {
+				defer close(done)
+				return nil, errors.New("odoo: connection refused")
+			},
 		)
-		mockRepo.EXPECT().UpsertStores(gomock.Any(), gomock.Any()).Return([]repo.UpsertStoresRow{}, nil)
-		mockRepo.EXPECT().FindStoresNotInOdoo(gomock.Any(), []string{}).Return([]int64{}, nil)
+		// No UpsertStores expectation: calling it would fail the mock
+		// controller, asserting the upsert never runs after a fetch error.
 
 		svc := newTestService(mockRepo, mockOdoo)
 
-		if _, err := svc.SyncStores(t.Context()); !errors.Is(err, boom) {
-			t.Fatalf("SyncStores() error = %v, want %v", err, boom)
+		if err := svc.SyncStores(t.Context()); err != nil {
+			t.Fatalf("SyncStores() error = %v", err)
 		}
 
-		if _, err := svc.SyncStores(t.Context()); err != nil {
-			t.Errorf("SyncStores() after earlier failure, error = %v, want nil", err)
+		select {
+		case <-done:
+		case <-time.After(storeSyncWaitTimeout):
+			t.Fatal("timed out waiting for the background fetch to run")
 		}
+		waitForStoreSyncStatus(t, svc, false)
 	})
 
-	t.Run("the lock is released even when the store transaction fails", func(t *testing.T) {
+	t.Run("a transaction error is logged and releases the lock", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockOdoo := odoomocks.NewMockClient(ctrl)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
-		boom := errors.New("boom")
-		gomock.InOrder(
-			mockOdoo.EXPECT().FetchStores(gomock.Any()).Return([]odoo.Store{
-				{ID: 1, Name: "A", City: "Hanoi"},
-			}, nil),
-			mockOdoo.EXPECT().FetchStores(gomock.Any()).Return([]odoo.Store{}, nil),
-		)
+		mockOdoo.EXPECT().FetchStores(gomock.Any()).Return([]odoo.Store{
+			{ID: 1, Name: "A", City: "Hanoi"},
+		}, nil)
+		done := make(chan struct{})
 		mockRepo.EXPECT().UpsertStores(gomock.Any(), repo.UpsertStoresParams{
 			OdooStoreIds: []string{"1"},
 			StoreNames:   []string{"A"},
 			Cities:       []string{"Hanoi"},
-		}).Return(nil, boom)
-		mockRepo.EXPECT().UpsertStores(gomock.Any(), repo.UpsertStoresParams{
-			OdooStoreIds: []string{},
-			StoreNames:   []string{},
-			Cities:       []string{},
-		}).Return([]repo.UpsertStoresRow{}, nil)
-		// FindStoresNotInOdoo must NOT be called on the first (failed) call —
-		// only one expectation is set, satisfied by the second, successful
-		// retry, so gomock fails the test if the service calls it after the
-		// failed upsert too.
-		mockRepo.EXPECT().FindStoresNotInOdoo(gomock.Any(), []string{}).Return([]int64{}, nil)
+		}).DoAndReturn(func(context.Context, repo.UpsertStoresParams) ([]repo.UpsertStoresRow, error) {
+			defer close(done)
+			return nil, errors.New("boom")
+		})
+		// No FindStoresNotInOdoo/DeleteStores expectation: calling either
+		// would fail the mock controller, asserting neither runs after a
+		// failed upsert.
 
 		svc := newTestService(mockRepo, mockOdoo)
 
-		summary, err := svc.SyncStores(t.Context())
-		if !errors.Is(err, boom) {
-			t.Fatalf("SyncStores() error = %v, want %v", err, boom)
-		}
-		if summary != (SyncSummary{}) {
-			t.Errorf("SyncStores() summary = %+v, want zero value", summary)
+		if err := svc.SyncStores(t.Context()); err != nil {
+			t.Fatalf("SyncStores() error = %v", err)
 		}
 
-		if _, err := svc.SyncStores(t.Context()); err != nil {
-			t.Errorf("SyncStores() after earlier failure, error = %v, want nil", err)
+		select {
+		case <-done:
+		case <-time.After(storeSyncWaitTimeout):
+			t.Fatal("timed out waiting for the background upsert to run")
 		}
+		waitForStoreSyncStatus(t, svc, false)
 	})
+}
 
-	t.Run("a failure after a successful upsert still returns a zero-value summary", func(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		mockOdoo := odoomocks.NewMockClient(ctrl)
-		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
-
-		boom := errors.New("boom")
-		mockOdoo.EXPECT().FetchStores(gomock.Any()).Return([]odoo.Store{
-			{ID: 1, Name: "A", City: "Hanoi"},
-		}, nil)
-		mockRepo.EXPECT().UpsertStores(gomock.Any(), gomock.Any()).Return([]repo.UpsertStoresRow{
-			{ID: 10, OdooStoreID: pgtype.Text{String: "1", Valid: true}, Inserted: true},
-		}, nil)
-		mockRepo.EXPECT().FindStoresNotInOdoo(gomock.Any(), []string{"1"}).Return(nil, boom)
-
-		svc := newTestService(mockRepo, mockOdoo)
-
-		summary, err := svc.SyncStores(t.Context())
-		if !errors.Is(err, boom) {
-			t.Fatalf("SyncStores() error = %v, want %v", err, boom)
-		}
-		if summary != (SyncSummary{}) {
-			t.Errorf("SyncStores() summary = %+v, want zero value even though the upsert succeeded", summary)
+func TestStoreService_SyncStatus(t *testing.T) {
+	t.Run("reports syncing=false when no sync has ever run", func(t *testing.T) {
+		svc := newTestService(nil, nil)
+		if svc.SyncStatus(t.Context()).Syncing {
+			t.Error("SyncStatus().Syncing = true, want false")
 		}
 	})
 }

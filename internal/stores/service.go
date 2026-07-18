@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"strconv"
@@ -16,6 +17,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// storeSyncTimeout bounds SyncStores' detached goroutine so a stalled Odoo
+// or database call can't leave s.syncing stuck true indefinitely — mirrors
+// employees.employeeSyncTimeout.
+const storeSyncTimeout = 5 * time.Minute
 
 type service struct {
 	// repo is a plain, non-transactional Querier for reads that don't need
@@ -463,23 +469,55 @@ func parseAddresses[T any](values []string, parse func(string) (T, error)) ([]T,
 	return parsed, nil
 }
 
-// SyncStores runs the store-sync workflow: fetch every store from Odoo in a
-// single call (the store count is small enough that pagination isn't
-// needed), then in one transaction bulk-upsert them and hard-delete any
-// local store Odoo no longer reports (see ADR-0005) — store_wifi_ip/
-// store_wifi_mac cascade and employees.store_id is nulled automatically via
-// DB constraints, no application-level query needed for either. Only one
-// call runs at a time; a concurrent call is rejected with ErrSyncInProgress
-// rather than queued or run in parallel.
-func (s *service) SyncStores(ctx context.Context) (SyncSummary, error) {
+// SyncStores kicks off the store-sync workflow in a detached goroutine and
+// returns immediately (Step 3 of employees.SyncEmployees' pattern, applied
+// here) — the caller doesn't wait on Odoo/DB latency. Unlike SyncEmployees,
+// there's no per-request lookup to do first (Store Sync always covers every
+// store, never a caller-chosen subset), so there's no failure path between
+// acquiring the lock and starting the goroutine. Only one sync runs at a
+// time; a concurrent call is rejected with ErrSyncInProgress rather than
+// queued or run in parallel.
+func (s *service) SyncStores(ctx context.Context) error {
 	if !s.tryLock() {
-		return SyncSummary{}, ErrSyncInProgress
+		return ErrSyncInProgress
 	}
+
+	// Detached from ctx: the HTTP handler's request context is canceled the
+	// moment it returns, which would race with (and likely abort) this
+	// goroutine if it inherited that cancellation. Still bounded by
+	// storeSyncTimeout so a stalled Odoo/database call can't hold s.syncing
+	// true forever; runSync owns cancel and releases it when it returns.
+	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeSyncTimeout)
+	go s.runSync(syncCtx, cancel)
+
+	return nil
+}
+
+// SyncStatus reports whether a background sync started by SyncStores is
+// still running, so the frontend can poll it to keep its trigger button
+// disabled for the duration.
+func (s *service) SyncStatus(ctx context.Context) SyncStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return SyncStatus{Syncing: s.syncing}
+}
+
+// runSync does the actual work: fetch every store from Odoo in a single call
+// (the store count is small enough that pagination isn't needed), then in
+// one transaction bulk-upsert them and hard-delete any local store Odoo no
+// longer reports (see ADR-0005) — store_wifi_ip/store_wifi_mac cascade and
+// employees.store_id is nulled automatically via DB constraints, no
+// application-level query needed for either. It logs the outcome since
+// nothing else observes this goroutine once SyncStores has already returned
+// to its caller.
+func (s *service) runSync(ctx context.Context, cancel context.CancelFunc) {
+	defer cancel()
 	defer s.unlock()
 
 	odooStores, err := s.odoo.FetchStores(ctx)
 	if err != nil {
-		return SyncSummary{}, err
+		slog.Error("stores: sync fetch from odoo", "error", err)
+		return
 	}
 
 	odooStoreIDs := make([]string, len(odooStores))
@@ -491,7 +529,7 @@ func (s *service) SyncStores(ctx context.Context) (SyncSummary, error) {
 		cities[i] = st.City
 	}
 
-	var summary SyncSummary
+	var inserted, updated, deleted int
 	err = s.withTx(ctx, func(q repo.Querier) error {
 		rows, err := q.UpsertStores(ctx, repo.UpsertStoresParams{
 			OdooStoreIds: odooStoreIDs,
@@ -502,11 +540,10 @@ func (s *service) SyncStores(ctx context.Context) (SyncSummary, error) {
 			return err
 		}
 		for _, row := range rows {
-			summary.TotalStoresProcessed++
 			if row.Inserted {
-				summary.InsertedStores++
+				inserted++
 			} else {
-				summary.UpdatedStores++
+				updated++
 			}
 		}
 
@@ -518,18 +555,19 @@ func (s *service) SyncStores(ctx context.Context) (SyncSummary, error) {
 			return nil
 		}
 
-		deleted, err := q.DeleteStores(ctx, staleStoreIDs)
+		deletedCount, err := q.DeleteStores(ctx, staleStoreIDs)
 		if err != nil {
 			return err
 		}
-		summary.DeletedStores = int(deleted)
+		deleted = int(deletedCount)
 		return nil
 	})
 	if err != nil {
-		return SyncSummary{}, err
+		slog.Error("stores: sync upsert/delete", "error", err)
+		return
 	}
 
-	return summary, nil
+	slog.Info("stores: sync completed", "inserted", inserted, "updated", updated, "deleted", deleted)
 }
 
 func (s *service) tryLock() bool {

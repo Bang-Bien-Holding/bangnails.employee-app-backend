@@ -115,13 +115,26 @@ func (mr *MockServiceMockRecorder) SetStoreWifiWhitelistEnabled(ctx, id, params 
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetStoreWifiWhitelistEnabled", reflect.TypeOf((*MockService)(nil).SetStoreWifiWhitelistEnabled), ctx, id, params)
 }
 
+// SyncStatus mocks base method.
+func (m *MockService) SyncStatus(ctx context.Context) SyncStatus {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SyncStatus", ctx)
+	ret0, _ := ret[0].(SyncStatus)
+	return ret0
+}
+
+// SyncStatus indicates an expected call of SyncStatus.
+func (mr *MockServiceMockRecorder) SyncStatus(ctx any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SyncStatus", reflect.TypeOf((*MockService)(nil).SyncStatus), ctx)
+}
+
 // SyncStores mocks base method.
-func (m *MockService) SyncStores(ctx context.Context) (SyncSummary, error) {
+func (m *MockService) SyncStores(ctx context.Context) error {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "SyncStores", ctx)
-	ret0, _ := ret[0].(SyncSummary)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret0, _ := ret[0].(error)
+	return ret0
 }
 
 // SyncStores indicates an expected call of SyncStores.

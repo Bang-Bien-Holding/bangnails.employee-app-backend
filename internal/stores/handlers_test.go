@@ -34,49 +34,36 @@ func TestStoreHandler_SyncStores(t *testing.T) {
 		checkResponse func(t *testing.T, rec *httptest.ResponseRecorder)
 	}{
 		{
-			name: "successful sync returns 201 with the summary in meta",
+			name: "successfully starting a sync returns 202 accepted",
 			setupMock: func(mockSvc *MockService) {
-				mockSvc.EXPECT().SyncStores(gomock.Any()).Return(SyncSummary{
-					TotalStoresProcessed: 250,
-					InsertedStores:       20,
-					UpdatedStores:        220,
-					DeletedStores:        10,
-				}, nil)
+				mockSvc.EXPECT().SyncStores(gomock.Any()).Return(nil)
 			},
-			expectedCode: http.StatusCreated,
+			expectedCode: http.StatusAccepted,
 			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
-				var got struct {
-					Status  string      `json:"status"`
-					Message string      `json:"message"`
-					Meta    SyncSummary `json:"meta"`
-				}
+				var got syncStoresResponse
 				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 					t.Fatalf("failed to unmarshal response body: %v", err)
 				}
-				if got.Status != "success" {
-					t.Errorf("status = %q, want %q", got.Status, "success")
+				if got.Status != "accepted" {
+					t.Errorf("status = %q, want %q", got.Status, "accepted")
 				}
-				wantMessage := "Store synchronization completed successfully."
+				wantMessage := "Store sync started."
 				if got.Message != wantMessage {
 					t.Errorf("message = %q, want %q", got.Message, wantMessage)
-				}
-				want := SyncSummary{TotalStoresProcessed: 250, InsertedStores: 20, UpdatedStores: 220, DeletedStores: 10}
-				if got.Meta != want {
-					t.Errorf("meta = %+v, want %+v", got.Meta, want)
 				}
 			},
 		},
 		{
 			name: "a sync already in progress maps to 409",
 			setupMock: func(mockSvc *MockService) {
-				mockSvc.EXPECT().SyncStores(gomock.Any()).Return(SyncSummary{}, ErrSyncInProgress)
+				mockSvc.EXPECT().SyncStores(gomock.Any()).Return(ErrSyncInProgress)
 			},
 			expectedCode: http.StatusConflict,
 		},
 		{
 			name: "an unexpected service error maps to 500",
 			setupMock: func(mockSvc *MockService) {
-				mockSvc.EXPECT().SyncStores(gomock.Any()).Return(SyncSummary{}, errors.New("db exploded"))
+				mockSvc.EXPECT().SyncStores(gomock.Any()).Return(errors.New("db exploded"))
 			},
 			expectedCode: http.StatusInternalServerError,
 		},
@@ -100,6 +87,49 @@ func TestStoreHandler_SyncStores(t *testing.T) {
 			}
 			if tt.checkResponse != nil {
 				tt.checkResponse(t, rec)
+			}
+		})
+	}
+}
+
+func TestStoreHandler_SyncStatus(t *testing.T) {
+	tests := []struct {
+		name      string
+		syncing   bool
+		setupMock func(mockSvc *MockService, syncing bool)
+	}{
+		{
+			name:    "reports syncing=true while a sync is in flight",
+			syncing: true,
+		},
+		{
+			name:    "reports syncing=false when no sync is running",
+			syncing: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockService(ctrl)
+			mockSvc.EXPECT().SyncStatus(gomock.Any()).Return(SyncStatus{Syncing: tt.syncing})
+
+			h := NewHandler(mockSvc)
+
+			req := httptest.NewRequest(http.MethodGet, "/v1/stores/syncs", nil)
+			rec := httptest.NewRecorder()
+
+			h.SyncStatus(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Errorf("status code = %d, want %d", rec.Code, http.StatusOK)
+			}
+			var got SyncStatus
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatalf("failed to unmarshal response body: %v", err)
+			}
+			if got.Syncing != tt.syncing {
+				t.Errorf("syncing = %v, want %v", got.Syncing, tt.syncing)
 			}
 		})
 	}

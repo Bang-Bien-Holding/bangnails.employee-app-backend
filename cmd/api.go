@@ -88,6 +88,7 @@ func (app *application) mount() http.Handler {
 		storesService := stores.NewService(app.db, app.odoo)
 		storesHandler := stores.NewHandler(storesService)
 		r.Post("/stores/syncs", storesHandler.SyncStores)
+		r.Get("/stores/syncs", storesHandler.SyncStatus)
 		r.Get("/stores", storesHandler.ListStores)
 		r.Patch("/stores", storesHandler.BulkSetWifiWhitelistEnabled)
 		r.Get("/stores/{id}", storesHandler.GetStoreByID)
