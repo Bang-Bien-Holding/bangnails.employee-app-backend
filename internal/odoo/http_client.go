@@ -13,6 +13,36 @@ import (
 	"time"
 )
 
+// validate rejects a Config missing any of the connection details a real
+// Odoo call needs — an empty/malformed BaseURL or a missing credential would
+// otherwise only surface as a confusing failure on the first Odoo call made
+// (e.g. an employee's first CreateEmployee), long after startup.
+func (cfg Config) validate() error {
+	if strings.TrimSpace(cfg.BaseURL) == "" {
+		return fmt.Errorf("odoo: BaseURL is required")
+	}
+	u, err := url.Parse(cfg.BaseURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("odoo: BaseURL %q is not a valid absolute URL", cfg.BaseURL)
+	}
+	if cfg.ClientID == "" {
+		return fmt.Errorf("odoo: ClientID is required")
+	}
+	if cfg.ClientSecret == "" {
+		return fmt.Errorf("odoo: ClientSecret is required")
+	}
+	if cfg.Username == "" {
+		return fmt.Errorf("odoo: Username is required")
+	}
+	if cfg.Password == "" {
+		return fmt.Errorf("odoo: Password is required")
+	}
+	if cfg.Database == "" {
+		return fmt.Errorf("odoo: Database is required")
+	}
+	return nil
+}
+
 // Odoo model and field names this client queries, per the field mapping
 // this integration's ADRs already record: employee_id/id, full_name/
 // name, email/email (ADR-0008), store_id/x_pos_shop_ids (ADR-0009).
@@ -82,9 +112,17 @@ type HTTPClient struct {
 	mu          sync.Mutex
 	accessToken string
 	expiresAt   time.Time
+
+	// refreshMu serializes authenticate calls triggered by a cache miss in
+	// token, so concurrent callers share one password-grant request instead
+	// of each firing their own.
+	refreshMu sync.Mutex
 }
 
-func NewHTTPClient(cfg Config) *HTTPClient {
+func NewHTTPClient(cfg Config) (*HTTPClient, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 	return &HTTPClient{
 		baseURL:      strings.TrimSuffix(cfg.BaseURL, "/"),
 		clientID:     cfg.ClientID,
@@ -93,11 +131,14 @@ func NewHTTPClient(cfg Config) *HTTPClient {
 		password:     cfg.Password,
 		database:     cfg.Database,
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
-	}
+	}, nil
 }
 
 // token returns a cached access token, re-authenticating if none is cached
 // or the cached one is within tokenExpiryLeeway of its stated expiry.
+// refreshMu serializes the actual re-authentication: without it, concurrent
+// cache misses (e.g. several syncEmployeeStores batches) would each fire
+// their own password-grant request instead of sharing one.
 func (c *HTTPClient) token(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	token := c.accessToken
@@ -107,6 +148,20 @@ func (c *HTTPClient) token(ctx context.Context) (string, error) {
 	if valid {
 		return token, nil
 	}
+
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+
+	// Re-check: another caller may have already refreshed the token while
+	// this one was waiting on refreshMu.
+	c.mu.Lock()
+	token = c.accessToken
+	valid = token != "" && time.Now().Before(c.expiresAt.Add(-tokenExpiryLeeway))
+	c.mu.Unlock()
+	if valid {
+		return token, nil
+	}
+
 	return c.authenticate(ctx)
 }
 
@@ -192,7 +247,11 @@ func (c *HTTPClient) searchRead(ctx context.Context, model string, domain []any,
 	}
 
 	var records []map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&records); err != nil {
+	// UseNumber preserves large Odoo record ids exactly: the default
+	// float64 decoding silently rounds any id above 2^53.
+	decoder := json.NewDecoder(resp.Body)
+	decoder.UseNumber()
+	if err := decoder.Decode(&records); err != nil {
 		return nil, fmt.Errorf("odoo: search_read %s: decode response: %w", model, err)
 	}
 	return records, nil
@@ -303,17 +362,23 @@ func recordString(record map[string]any, field string) string {
 }
 
 // recordInt reads a plain numeric field (e.g. a store's or employee's own
-// "id").
+// "id"). Parsed via json.Number rather than a float64 cast, so an id beyond
+// float64's 2^53 exact-integer range doesn't get silently rounded.
 func recordInt(record map[string]any, field string) (int, error) {
-	v, ok := record[field].(float64)
+	n, ok := record[field].(json.Number)
 	if !ok {
 		return 0, fmt.Errorf("field %q: expected a number, got %T", field, record[field])
+	}
+	v, err := n.Int64()
+	if err != nil {
+		return 0, fmt.Errorf("field %q: not an exact integer: %w", field, err)
 	}
 	return int(v), nil
 }
 
 // recordIntList reads a many2many field, which Odoo represents as a flat
-// list of related record ids (unlike many2one's [id, name] tuple).
+// list of related record ids (unlike many2one's [id, name] tuple). Same
+// json.Number parsing as recordInt, for the same exactness reason.
 func recordIntList(record map[string]any, field string) ([]int, error) {
 	raw, ok := record[field].([]any)
 	if !ok {
@@ -321,9 +386,13 @@ func recordIntList(record map[string]any, field string) ([]int, error) {
 	}
 	ids := make([]int, len(raw))
 	for i, v := range raw {
-		id, ok := v.(float64)
+		n, ok := v.(json.Number)
 		if !ok {
 			return nil, fmt.Errorf("field %q: expected a numeric id at index %d, got %T", field, i, v)
+		}
+		id, err := n.Int64()
+		if err != nil {
+			return nil, fmt.Errorf("field %q: id at index %d is not an exact integer: %w", field, i, err)
 		}
 		ids[i] = int(id)
 	}

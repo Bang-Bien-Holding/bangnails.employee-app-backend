@@ -828,7 +828,7 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 				mockRepo.EXPECT().
 					DeleteEmployeePositionsNotIn(gomock.Any(), repo.DeleteEmployeePositionsNotInParams{
 						EmployeeID:  1,
-						PositionIds: nil,
+						PositionIds: []int64{},
 					}).
 					Return(nil)
 				mockRepo.EXPECT().
@@ -1063,7 +1063,7 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 				mockRepo.EXPECT().
 					DeleteEmployeePositionsNotIn(gomock.Any(), repo.DeleteEmployeePositionsNotInParams{
 						EmployeeID:  1,
-						PositionIds: nil,
+						PositionIds: []int64{},
 					}).
 					Return(nil)
 				mockRepo.EXPECT().
@@ -1263,9 +1263,10 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 				mockRepo.EXPECT().
 					DeleteEmployeePositionsNotIn(gomock.Any(), gomock.Any()).
 					Return(nil)
-				mockRepo.EXPECT().
-					ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).
-					Return([]int64{}, nil)
+				// SetEmployeePassword now runs inside the same transaction as
+				// the rest of the update, before ListStoreIDsByEmployeeID —
+				// its error aborts the transaction, so ListStoreIDsByEmployeeID
+				// is never reached.
 				mockRepo.EXPECT().
 					SetEmployeePassword(gomock.Any(), gomock.Any()).
 					Return(int64(0), dbErr)
@@ -1960,6 +1961,22 @@ func TestEmployeeService_SyncEmployees(t *testing.T) {
 					{ID: 2, OdooEmployeeID: 102, Inserted: false},
 				}, nil
 			})
+		// Neither found employee reports any Odoo store (StoreIDs unset),
+		// but the diff still runs per employee with an empty set — clearing
+		// any stale employee_stores rows rather than skipping the batch
+		// entirely.
+		mockRepo.EXPECT().
+			DeleteEmployeeStoresNotIn(gomock.Any(), repo.DeleteEmployeeStoresNotInParams{
+				EmployeeID: 1,
+				StoreIds:   []int64{},
+			}).
+			Return(nil)
+		mockRepo.EXPECT().
+			DeleteEmployeeStoresNotIn(gomock.Any(), repo.DeleteEmployeeStoresNotInParams{
+				EmployeeID: 2,
+				StoreIds:   []int64{},
+			}).
+			Return(nil)
 
 		svc := newTestService(mockRepo, mockMailer, mockOdoo)
 

@@ -236,9 +236,26 @@ func (s *service) UpdateEmployee(ctx context.Context, id int64, params updateEmp
 		}
 	}
 
+	// Hashed up front (bcrypt needs no DB access) so the write below — if a
+	// password was submitted — can happen inside the same transaction as
+	// the rest of the update, rather than as a separate call that could
+	// leave the employee row updated but the password unset if it failed.
+	var hashedPassword []byte
+	if params.Password != nil {
+		hashedPassword, err = bcrypt.GenerateFromPassword([]byte(*params.Password), bcrypt.DefaultCost)
+		if err != nil {
+			return EmployeeDetail{}, err
+		}
+	}
+
+	positionIDs := params.PositionIDs
+	if positionIDs == nil {
+		positionIDs = []int64{}
+	}
+
 	var detail EmployeeDetail
 	err = s.withTx(ctx, func(q repo.Querier) error {
-		if err := validatePositionIDs(ctx, q, params.PositionIDs); err != nil {
+		if err := validatePositionIDs(ctx, q, positionIDs); err != nil {
 			return err
 		}
 
@@ -258,23 +275,28 @@ func (s *service) UpdateEmployee(ctx context.Context, id int64, params updateEmp
 
 		if err := q.DeleteEmployeePositionsNotIn(ctx, repo.DeleteEmployeePositionsNotInParams{
 			EmployeeID:  id,
-			PositionIds: params.PositionIDs,
+			PositionIds: positionIDs,
 		}); err != nil {
 			return err
 		}
-		if len(params.PositionIDs) > 0 {
+		if len(positionIDs) > 0 {
 			if err := q.InsertEmployeePositions(ctx, repo.InsertEmployeePositionsParams{
 				EmployeeID:  id,
-				PositionIds: params.PositionIDs,
+				PositionIds: positionIDs,
 			}); err != nil {
 				return err
 			}
 		}
 
-		positionIDs := params.PositionIDs
-		if positionIDs == nil {
-			positionIDs = []int64{}
+		if hashedPassword != nil {
+			if _, err := q.SetEmployeePassword(ctx, repo.SetEmployeePasswordParams{
+				ID:       id,
+				Password: hashedPassword,
+			}); err != nil {
+				return err
+			}
 		}
+
 		// Store membership is Odoo-owned and untouched by this update — just
 		// reflect its current state (see ADR-0009).
 		storeIDs, err := q.ListStoreIDsByEmployeeID(ctx, id)
@@ -289,12 +311,6 @@ func (s *service) UpdateEmployee(ctx context.Context, id int64, params updateEmp
 	})
 	if err != nil {
 		return EmployeeDetail{}, err
-	}
-
-	if params.Password != nil {
-		if err := s.SetEmployeePassword(ctx, id, *params.Password); err != nil {
-			return EmployeeDetail{}, err
-		}
 	}
 
 	return detail, nil
@@ -595,9 +611,6 @@ func (s *service) syncEmployeeStores(ctx context.Context, employees []odoo.Emplo
 			odooStoreIDSet[id] = true
 		}
 	}
-	if len(odooStoreIDSet) == 0 {
-		return nil
-	}
 
 	odooStoreIDs := make([]int, 0, len(odooStoreIDSet))
 	for id := range odooStoreIDSet {
@@ -605,24 +618,31 @@ func (s *service) syncEmployeeStores(ctx context.Context, employees []odoo.Emplo
 	}
 	sort.Ints(odooStoreIDs) // deterministic query order — map iteration isn't
 
-	odooStoreIDStrs := make([]string, len(odooStoreIDs))
-	for i, id := range odooStoreIDs {
-		odooStoreIDStrs[i] = strconv.Itoa(id)
-	}
-
-	stores, err := s.repo.ListStoresByOdooStoreIDs(ctx, odooStoreIDStrs)
-	if err != nil {
-		slog.Error("employees: sync resolve store ids", "error", err)
-		return nil
-	}
-
-	resolved := make(map[int]int64, len(stores))
-	for _, st := range stores {
-		odooID, err := strconv.Atoi(st.OdooStoreID.String)
-		if err != nil {
-			continue
+	// resolved stays empty (rather than short-circuiting here) when no
+	// employee in this batch reports any Odoo store, so the loop below
+	// still runs DeleteEmployeeStoresNotIn with an empty set per employee —
+	// clearing stale employee_stores rows for staff Odoo has since removed
+	// from every store, instead of leaving them dangling.
+	resolved := make(map[int]int64, len(odooStoreIDs))
+	if len(odooStoreIDs) > 0 {
+		odooStoreIDStrs := make([]string, len(odooStoreIDs))
+		for i, id := range odooStoreIDs {
+			odooStoreIDStrs[i] = strconv.Itoa(id)
 		}
-		resolved[odooID] = st.ID
+
+		stores, err := s.repo.ListStoresByOdooStoreIDs(ctx, odooStoreIDStrs)
+		if err != nil {
+			slog.Error("employees: sync resolve store ids", "error", err)
+			return nil
+		}
+
+		for _, st := range stores {
+			odooID, err := strconv.Atoi(st.OdooStoreID.String)
+			if err != nil {
+				continue
+			}
+			resolved[odooID] = st.ID
+		}
 	}
 
 	var skipped []int
@@ -642,20 +662,31 @@ func (s *service) syncEmployeeStores(ctx context.Context, employees []odoo.Emplo
 			storeIDs = append(storeIDs, storeID)
 		}
 
-		if err := s.repo.DeleteEmployeeStoresNotIn(ctx, repo.DeleteEmployeeStoresNotInParams{
-			EmployeeID: internalID,
-			StoreIds:   storeIDs,
-		}); err != nil {
-			slog.Error("employees: sync delete stale store memberships", "employee_id", internalID, "error", err)
-			continue
-		}
-		if len(storeIDs) > 0 {
-			if err := s.repo.InsertEmployeeStores(ctx, repo.InsertEmployeeStoresParams{
+		// Delete and insert run inside one transaction per employee, so a
+		// failing insert rolls back the delete too rather than leaving this
+		// employee with neither their old nor new store memberships. One
+		// employee's failure is logged and skipped — it doesn't abort the
+		// rest of the batch.
+		err := s.withTx(ctx, func(q repo.Querier) error {
+			if err := q.DeleteEmployeeStoresNotIn(ctx, repo.DeleteEmployeeStoresNotInParams{
 				EmployeeID: internalID,
 				StoreIds:   storeIDs,
 			}); err != nil {
-				slog.Error("employees: sync insert store memberships", "employee_id", internalID, "error", err)
+				return err
 			}
+			if len(storeIDs) > 0 {
+				if err := q.InsertEmployeeStores(ctx, repo.InsertEmployeeStoresParams{
+					EmployeeID: internalID,
+					StoreIds:   storeIDs,
+				}); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			slog.Error("employees: sync store membership", "employee_id", internalID, "error", err)
+			continue
 		}
 	}
 

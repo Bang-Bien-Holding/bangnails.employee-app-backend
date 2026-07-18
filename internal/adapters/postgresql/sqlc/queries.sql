@@ -53,24 +53,24 @@ SELECT odoo_employee_id FROM employees
 WHERE id = ANY(sqlc.arg(ids)::bigint[]);
 
 -- name: UpsertEmployees :many
--- Bulk-upserts one batch of Odoo employees (at most 50, see
--- employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
--- trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
--- without a second query. odoo_employee_id is the shared key with Odoo (see
--- odoo.Employee), so it's the conflict target. username has no Odoo source
--- and is local-only (ADR-0008/ADR-0009): the '' placeholder only matters for
--- the INSERT branch, which this bulk upsert's caller (runSync) never
--- actually exercises — it's only ever called with odoo_employee_ids already
--- present in employees, so every row here always takes the ON CONFLICT
--- UPDATE branch, and username's NOT NULL constraint still requires *a*
--- value in the INSERT's column list either way.
-INSERT INTO employees (odoo_employee_id, full_name, email, username)
-SELECT unnest(@odoo_employee_ids::bigint[]), unnest(@full_names::varchar[]), unnest(@emails::citext[]), ''
-ON CONFLICT (odoo_employee_id) DO UPDATE
-SET full_name = EXCLUDED.full_name,
-    email = EXCLUDED.email,
+-- Bulk-updates one batch of Odoo employees (at most 50, see
+-- employees.syncEmployeesParams) in a single round trip. Update-only, by
+-- design (see ADR-0008/ADR-0009): an odoo_employee_id with no matching row
+-- — not yet admin-created, or deleted since this batch was fetched from
+-- Odoo — is silently ignored rather than inserted, so sync can never
+-- (re)create an employee row (which would otherwise need a placeholder,
+-- Odoo-blind username). Only CreateEmployee ever inserts a row.
+UPDATE employees
+SET full_name = data.full_name,
+    email = data.email,
     updated_at = now()
-RETURNING id, odoo_employee_id, (xmax = 0) AS inserted;
+FROM (
+    SELECT unnest(@odoo_employee_ids::bigint[]) AS odoo_employee_id,
+           unnest(@full_names::varchar[]) AS full_name,
+           unnest(@emails::citext[]) AS email
+) AS data
+WHERE employees.odoo_employee_id = data.odoo_employee_id
+RETURNING employees.id, employees.odoo_employee_id, false AS inserted;
 
 -- name: CreatePasswordResetToken :one
 INSERT INTO password_reset_tokens (employee_id, token_hash, expires_at)

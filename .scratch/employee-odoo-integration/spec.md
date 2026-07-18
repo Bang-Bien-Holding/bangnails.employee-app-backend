@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 
 # Employee/Odoo integration: real client, id rename, Position, multi-store
 

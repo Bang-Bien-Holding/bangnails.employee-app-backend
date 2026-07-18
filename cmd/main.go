@@ -53,7 +53,7 @@ func main() {
 	}
 
 	// Odoo
-	odooClient := odoo.NewHTTPClient(odoo.Config{
+	odooClient, err := odoo.NewHTTPClient(odoo.Config{
 		BaseURL:      env.GetString("ODOO_BASE_URL", ""),
 		ClientID:     env.GetString("ODOO_CLIENT_ID", ""),
 		ClientSecret: env.GetString("ODOO_CLIENT_SECRET", ""),
@@ -61,6 +61,9 @@ func main() {
 		Password:     env.GetString("ODOO_PASSWORD", ""),
 		Database:     env.GetString("ODOO_DATABASE", ""),
 	})
+	if err != nil {
+		panic(err)
+	}
 
 	api := application{
 		config: cfg,

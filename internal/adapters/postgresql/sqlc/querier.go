@@ -167,17 +167,13 @@ type Querier interface {
 	// expected_updated_at is stale; the caller disambiguates with a follow-up
 	// GetStoreByID.
 	UpdateStoreGeofence(ctx context.Context, arg UpdateStoreGeofenceParams) (Store, error)
-	// Bulk-upserts one batch of Odoo employees (at most 50, see
-	// employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
-	// trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
-	// without a second query. odoo_employee_id is the shared key with Odoo (see
-	// odoo.Employee), so it's the conflict target. username has no Odoo source
-	// and is local-only (ADR-0008/ADR-0009): the '' placeholder only matters for
-	// the INSERT branch, which this bulk upsert's caller (runSync) never
-	// actually exercises — it's only ever called with odoo_employee_ids already
-	// present in employees, so every row here always takes the ON CONFLICT
-	// UPDATE branch, and username's NOT NULL constraint still requires *a*
-	// value in the INSERT's column list either way.
+	// Bulk-updates one batch of Odoo employees (at most 50, see
+	// employees.syncEmployeesParams) in a single round trip. Update-only, by
+	// design (see ADR-0008/ADR-0009): an odoo_employee_id with no matching row
+	// — not yet admin-created, or deleted since this batch was fetched from
+	// Odoo — is silently ignored rather than inserted, so sync can never
+	// (re)create an employee row (which would otherwise need a placeholder,
+	// Odoo-blind username). Only CreateEmployee ever inserts a row.
 	UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams) ([]UpsertEmployeesRow, error)
 	// Bulk-upserts one page of Odoo stores in a single round trip. "(xmax = 0)"
 	// is Postgres' standard trick for distinguishing an INSERT from an

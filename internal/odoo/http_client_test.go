@@ -22,7 +22,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*HTTPClient, *int32)
 	}))
 	t.Cleanup(server.Close)
 
-	client := NewHTTPClient(Config{
+	client, err := NewHTTPClient(Config{
 		BaseURL:      server.URL,
 		ClientID:     "test-client-id",
 		ClientSecret: "test-client-secret",
@@ -30,7 +30,51 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*HTTPClient, *int32)
 		Password:     "service-password",
 		Database:     "test-db",
 	})
+	if err != nil {
+		t.Fatalf("NewHTTPClient() error = %v", err)
+	}
 	return client, &tokenRequests
+}
+
+// TestNewHTTPClient_ValidatesConfig verifies startup fails fast on a
+// malformed/missing Odoo config, rather than constructing an unusable
+// client whose first real call fails with a confusing error.
+func TestNewHTTPClient_ValidatesConfig(t *testing.T) {
+	validConfig := Config{
+		BaseURL:      "https://erp.bangnails.fr",
+		ClientID:     "client-id",
+		ClientSecret: "client-secret",
+		Username:     "service-account",
+		Password:     "service-password",
+		Database:     "db",
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(cfg Config) Config
+		wantErr bool
+	}{
+		{"valid config", func(cfg Config) Config { return cfg }, false},
+		{"empty BaseURL", func(cfg Config) Config { cfg.BaseURL = ""; return cfg }, true},
+		{"malformed BaseURL", func(cfg Config) Config { cfg.BaseURL = "not-a-url"; return cfg }, true},
+		{"empty ClientID", func(cfg Config) Config { cfg.ClientID = ""; return cfg }, true},
+		{"empty ClientSecret", func(cfg Config) Config { cfg.ClientSecret = ""; return cfg }, true},
+		{"empty Username", func(cfg Config) Config { cfg.Username = ""; return cfg }, true},
+		{"empty Password", func(cfg Config) Config { cfg.Password = ""; return cfg }, true},
+		{"empty Database", func(cfg Config) Config { cfg.Database = ""; return cfg }, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := NewHTTPClient(tc.mutate(validConfig))
+			if tc.wantErr && err == nil {
+				t.Error("expected an error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("expected no error, got: %v", err)
+			}
+		})
+	}
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
@@ -51,7 +95,8 @@ func TestHTTPClient_FetchStores_AuthenticatesAndQueries(t *testing.T) {
 				t.Errorf("expected Basic auth test-client-id:test-client-secret, got %q/%q (ok=%v)", user, pass, ok)
 			}
 			if err := r.ParseForm(); err != nil {
-				t.Fatalf("failed to parse token request form: %v", err)
+				t.Errorf("failed to parse token request form: %v", err)
+				return
 			}
 			if r.PostForm.Get("grant_type") != "password" {
 				t.Errorf("expected grant_type=password, got %q", r.PostForm.Get("grant_type"))
@@ -220,6 +265,40 @@ func TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_ParsesID(t *testing.T) {
 	}
 	if len(employees[1].StoreIDs) != 0 {
 		t.Errorf("expected second employee to have no store ids, got %v", employees[1].StoreIDs)
+	}
+}
+
+// TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_LargeID verifies an id
+// beyond float64's 2^53 exact-integer range (9007199254740993, i.e.
+// 2^53+1) round-trips exactly rather than being silently rounded by a
+// float64 decode.
+func TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_LargeID(t *testing.T) {
+	const largeID = int64(9007199254740993)
+
+	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case tokenEndpoint:
+			writeJSON(w, tokenResponse{AccessToken: "tok1", ExpiresIn: 3600})
+		case searchReadEndpoint:
+			w.Header().Set("Content-Type", "application/json")
+			// Written as raw JSON text (not a Go float64 literal, which
+			// would already have rounded by the time it got here) so the
+			// client is the only thing that ever parses this number.
+			fmt.Fprintf(w, `[{"id":%d,"name":"Nguyen Van A","email":"van-a@example.com","x_pos_shop_ids":[]}]`, largeID)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	})
+
+	employees, err := client.FetchEmployeesByOdooEmployeeIDs(context.Background(), []int64{largeID})
+	if err != nil {
+		t.Fatalf("FetchEmployeesByOdooEmployeeIDs() error = %v", err)
+	}
+	if len(employees) != 1 {
+		t.Fatalf("expected 1 employee, got %d", len(employees))
+	}
+	if employees[0].OdooEmployeeID != largeID {
+		t.Errorf("expected OdooEmployeeID %d, got %d", largeID, employees[0].OdooEmployeeID)
 	}
 }
 

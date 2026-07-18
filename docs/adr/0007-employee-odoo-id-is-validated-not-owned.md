@@ -6,7 +6,7 @@ status: accepted
 
 `employee_id` (renamed/retyped to `odoo_employee_id BIGINT`, the join key to Odoo's `hr.employee`) was previously caller-supplied and never checked against Odoo at all — an employee could be created with an id Odoo has never heard of, reconciled only if an admin later ran `SyncEmployees` (see `.scratch/employee-id-model/spec.md`). Meanwhile `Store` is fully Odoo-owned from creation onward: Odoo is the source of truth for its existence, name, and city, one-way.
 
-Employee doesn't get the full `Store` treatment. Unlike `Store`, an Employee row is created directly by an admin (name, email, username, position, store assignment are all admin input), not synced in from Odoo wholesale — Odoo only needs to vouch that the id itself is real.
+Employee doesn't get the full `Store` treatment. Unlike `Store`, an Employee row is created directly by an admin (name, email, username, position are all admin input), not synced in from Odoo wholesale — Odoo only needs to vouch that the id itself is real.
 
 ## Decision
 

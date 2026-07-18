@@ -1169,13 +1169,17 @@ func (q *Queries) UpdateStoreGeofence(ctx context.Context, arg UpdateStoreGeofen
 }
 
 const upsertEmployees = `-- name: UpsertEmployees :many
-INSERT INTO employees (odoo_employee_id, full_name, email, username)
-SELECT unnest($1::bigint[]), unnest($2::varchar[]), unnest($3::citext[]), ''
-ON CONFLICT (odoo_employee_id) DO UPDATE
-SET full_name = EXCLUDED.full_name,
-    email = EXCLUDED.email,
+UPDATE employees
+SET full_name = data.full_name,
+    email = data.email,
     updated_at = now()
-RETURNING id, odoo_employee_id, (xmax = 0) AS inserted
+FROM (
+    SELECT unnest($1::bigint[]) AS odoo_employee_id,
+           unnest($2::varchar[]) AS full_name,
+           unnest($3::citext[]) AS email
+) AS data
+WHERE employees.odoo_employee_id = data.odoo_employee_id
+RETURNING employees.id, employees.odoo_employee_id, false AS inserted
 `
 
 type UpsertEmployeesParams struct {
@@ -1190,17 +1194,13 @@ type UpsertEmployeesRow struct {
 	Inserted       bool  `json:"inserted"`
 }
 
-// Bulk-upserts one batch of Odoo employees (at most 50, see
-// employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
-// trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
-// without a second query. odoo_employee_id is the shared key with Odoo (see
-// odoo.Employee), so it's the conflict target. username has no Odoo source
-// and is local-only (ADR-0008/ADR-0009): the ” placeholder only matters for
-// the INSERT branch, which this bulk upsert's caller (runSync) never
-// actually exercises — it's only ever called with odoo_employee_ids already
-// present in employees, so every row here always takes the ON CONFLICT
-// UPDATE branch, and username's NOT NULL constraint still requires *a*
-// value in the INSERT's column list either way.
+// Bulk-updates one batch of Odoo employees (at most 50, see
+// employees.syncEmployeesParams) in a single round trip. Update-only, by
+// design (see ADR-0008/ADR-0009): an odoo_employee_id with no matching row
+// — not yet admin-created, or deleted since this batch was fetched from
+// Odoo — is silently ignored rather than inserted, so sync can never
+// (re)create an employee row (which would otherwise need a placeholder,
+// Odoo-blind username). Only CreateEmployee ever inserts a row.
 func (q *Queries) UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams) ([]UpsertEmployeesRow, error) {
 	rows, err := q.db.Query(ctx, upsertEmployees, arg.OdooEmployeeIds, arg.FullNames, arg.Emails)
 	if err != nil {

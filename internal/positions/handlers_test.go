@@ -73,6 +73,30 @@ func TestPositionHandler_CreatePosition(t *testing.T) {
 			},
 			expectedCode: http.StatusInternalServerError,
 		},
+		{
+			name:        "Whitespace-only name returns 400 after trim",
+			bodyPayload: createPositionParams{Name: "   "},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called: trimming empties the name
+				// before validation runs.
+			},
+			expectedCode: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				if !bytes.Contains(rec.Body.Bytes(), []byte("validation")) {
+					t.Errorf("expected response to mention validation, got %q", rec.Body.String())
+				}
+			},
+		},
+		{
+			name:        "Leading/trailing whitespace is trimmed before reaching the service",
+			bodyPayload: createPositionParams{Name: "  Technician  "},
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					CreatePosition(gomock.Any(), createPositionParams{Name: "Technician"}).
+					Return(repo.Position{ID: 1, Name: "Technician"}, nil)
+			},
+			expectedCode: http.StatusCreated,
+		},
 	}
 
 	for _, tc := range tests {
@@ -206,6 +230,27 @@ func TestPositionHandler_UpdatePosition(t *testing.T) {
 					Return(repo.Position{}, ErrPositionNameAlreadyExists)
 			},
 			expectedCode: http.StatusConflict,
+		},
+		{
+			name:        "Whitespace-only name returns 400 after trim",
+			idParam:     "1",
+			bodyPayload: updatePositionParams{Name: "   "},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called: trimming empties the name
+				// before validation runs.
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:        "Leading/trailing whitespace is trimmed before reaching the service",
+			idParam:     "1",
+			bodyPayload: updatePositionParams{Name: "  Senior Technician  "},
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					UpdatePosition(gomock.Any(), int64(1), updatePositionParams{Name: "Senior Technician"}).
+					Return(repo.Position{ID: 1, Name: "Senior Technician"}, nil)
+			},
+			expectedCode: http.StatusOK,
 		},
 	}
 

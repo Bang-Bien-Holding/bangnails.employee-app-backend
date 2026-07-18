@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/json"
 	"github.com/go-chi/chi/v5"
@@ -26,6 +27,7 @@ func (h *Handler) CreatePosition(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	params.Name = strings.TrimSpace(params.Name)
 
 	if err := validate.Struct(params); err != nil {
 		http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
@@ -67,6 +69,7 @@ func (h *Handler) UpdatePosition(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	params.Name = strings.TrimSpace(params.Name)
 
 	if err := validate.Struct(params); err != nil {
 		http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
