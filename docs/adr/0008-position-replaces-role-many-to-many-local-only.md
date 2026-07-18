@@ -6,7 +6,7 @@ status: accepted
 
 `employees.role` was a free-text `VARCHAR(50)`, required, with no enum/allow-list anywhere in the stack (DB, sqlc, or API validation). Introducing Odoo employee sync surfaced a real requirement it couldn't express: an employee can hold more than one position at once, which a single string column (or a single-valued FK) can't represent.
 
-Odoo's `hr.employee` field mapping for this integration (`employee_id`/`user_id`, `full_name`/`name`, `email`/`email`, `store_id`/`x_pos_shop_ids`) has no job-title equivalent — Position isn't something Odoo has an opinion about here.
+Odoo's `hr.employee` field mapping for this integration (`employee_id`/`id`, `full_name`/`name`, `email`/`email`, `store_id`/`x_pos_shop_ids`) has no job-title equivalent — Position isn't something Odoo has an opinion about here.
 
 ## Decision
 

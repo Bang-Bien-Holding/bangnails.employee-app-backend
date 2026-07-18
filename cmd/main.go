@@ -59,6 +59,7 @@ func main() {
 		ClientSecret: env.GetString("ODOO_CLIENT_SECRET", ""),
 		Username:     env.GetString("ODOO_USERNAME", ""),
 		Password:     env.GetString("ODOO_PASSWORD", ""),
+		Database:     env.GetString("ODOO_DATABASE", ""),
 	})
 
 	api := application{

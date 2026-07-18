@@ -28,6 +28,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) (*HTTPClient, *int32)
 		ClientSecret: "test-client-secret",
 		Username:     "service-account",
 		Password:     "service-password",
+		Database:     "test-db",
 	})
 	return client, &tokenRequests
 }
@@ -60,9 +61,15 @@ func TestHTTPClient_FetchStores_AuthenticatesAndQueries(t *testing.T) {
 			}
 			writeJSON(w, tokenResponse{AccessToken: "tok1", ExpiresIn: 3600})
 
-		case "/api/" + storeModel:
+		case searchReadEndpoint:
 			if got := r.Header.Get("Authorization"); got != "Bearer tok1" {
 				t.Errorf("expected Authorization: Bearer tok1, got %q", got)
+			}
+			if got := r.Header.Get("DATABASE"); got != "test-db" {
+				t.Errorf("expected DATABASE: test-db, got %q", got)
+			}
+			if got := r.URL.Query().Get("model"); got != storeModel {
+				t.Errorf("expected model %q, got %q", storeModel, got)
 			}
 			domain := r.URL.Query().Get("domain")
 			if domain != "[]" {
@@ -101,7 +108,7 @@ func TestHTTPClient_CachesToken(t *testing.T) {
 		switch r.URL.Path {
 		case tokenEndpoint:
 			writeJSON(w, tokenResponse{AccessToken: "tok1", ExpiresIn: 3600})
-		case "/api/" + storeModel:
+		case searchReadEndpoint:
 			atomic.AddInt32(&calls, 1)
 			writeJSON(w, []map[string]any{})
 		default:
@@ -136,7 +143,7 @@ func TestHTTPClient_ReAuthenticatesOn401(t *testing.T) {
 		case tokenEndpoint:
 			n := atomic.AddInt32(&issuedTokens, 1)
 			writeJSON(w, tokenResponse{AccessToken: fmt.Sprintf("tok%d", n), ExpiresIn: 3600})
-		case "/api/" + storeModel:
+		case searchReadEndpoint:
 			auth := r.Header.Get("Authorization")
 			if auth == "Bearer tok1" {
 				w.WriteHeader(http.StatusUnauthorized)
@@ -163,19 +170,22 @@ func TestHTTPClient_ReAuthenticatesOn401(t *testing.T) {
 	}
 }
 
-// TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_ParsesMany2One verifies
-// the domain filter sent for the lookup, that a many2one field (Odoo's
-// [id, display_name] tuple shape) is correctly unpacked to just the id, and
-// that the many2many x_pos_shop_ids field (a flat list of ids, per
-// ADR-0009) is requested and parsed into StoreIDs.
-func TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_ParsesMany2One(t *testing.T) {
+// TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_ParsesID verifies the
+// domain filter sent for the lookup (hr.employee's own plain-integer "id",
+// not the user_id many2one to res.users), and that the many2many
+// x_pos_shop_ids field (a flat list of ids, per ADR-0009) is requested and
+// parsed into StoreIDs.
+func TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_ParsesID(t *testing.T) {
 	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case tokenEndpoint:
 			writeJSON(w, tokenResponse{AccessToken: "tok1", ExpiresIn: 3600})
-		case "/api/" + employeeModel:
+		case searchReadEndpoint:
+			if got := r.URL.Query().Get("model"); got != employeeModel {
+				t.Errorf("expected model %q, got %q", employeeModel, got)
+			}
 			domain := r.URL.Query().Get("domain")
-			want := `[["user_id","in",[101,102]]]`
+			want := `[["id","in",[101,102]]]`
 			if domain != want {
 				t.Errorf("expected domain %q, got %q", want, domain)
 			}
@@ -184,8 +194,8 @@ func TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_ParsesMany2One(t *testing.T)
 				t.Errorf("expected fields to include x_pos_shop_ids, got %q", fields)
 			}
 			writeJSON(w, []map[string]any{
-				{"user_id": []any{101, "Nguyen Van A"}, "name": "Nguyen Van A", "email": "van-a@example.com", "x_pos_shop_ids": []any{10, 20}},
-				{"user_id": []any{102, "Tran Thi B"}, "name": "Tran Thi B", "email": "tran-b@example.com", "x_pos_shop_ids": []any{}},
+				{"id": float64(101), "name": "Nguyen Van A", "email": "van-a@example.com", "x_pos_shop_ids": []any{10, 20}},
+				{"id": float64(102), "name": "Tran Thi B", "email": "tran-b@example.com", "x_pos_shop_ids": []any{}},
 			})
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -262,7 +272,7 @@ func TestHTTPClient_SearchReadFailure_ReturnsError(t *testing.T) {
 		switch r.URL.Path {
 		case tokenEndpoint:
 			writeJSON(w, tokenResponse{AccessToken: "tok1", ExpiresIn: 3600})
-		case "/api/" + storeModel:
+		case searchReadEndpoint:
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte("internal error"))
 		default:

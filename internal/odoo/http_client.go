@@ -14,15 +14,18 @@ import (
 )
 
 // Odoo model and field names this client queries, per the field mapping
-// this integration's ADRs already record: employee_id/user_id, full_name/
+// this integration's ADRs already record: employee_id/id, full_name/
 // name, email/email (ADR-0008), store_id/x_pos_shop_ids (ADR-0009).
+// employeeIDField is hr.employee's own plain-integer id (not the user_id
+// many2one to res.users) — confirmed against the live erp.bangnails.fr
+// MuK REST API docs.
 // storeModel is this integration's documented assumption for the co-model
 // behind hr.employee's x_pos_shop_ids many2many field — not itself
 // confirmed against the live erp.bangnails.fr instance, which is what the
 // E2E verification ticket is for.
 const (
 	employeeModel         = "hr.employee"
-	employeeIDField       = "user_id"
+	employeeIDField       = "id"
 	employeeNameField     = "name"
 	employeeEmailField    = "email"
 	employeeStoreIDsField = "x_pos_shop_ids"
@@ -35,21 +38,28 @@ const (
 // tokenEndpoint and tokenExpiryLeeway are the MuK REST OAuth2 password-grant
 // token endpoint and how far ahead of its stated expiry HTTPClient
 // refreshes it, so a request doesn't race a token that's about to expire
-// mid-flight.
+// mid-flight. searchReadEndpoint is the data-query endpoint; unlike the
+// earlier (incorrect) assumption of one path per model, the model is a
+// query parameter on this single shared endpoint. Both paths are confirmed
+// against the live erp.bangnails.fr instance's Swagger docs.
 const (
-	tokenEndpoint     = "/api/auth/token"
-	tokenExpiryLeeway = 30 * time.Second
+	tokenEndpoint      = "/api/v2/authentication/oauth2/token"
+	searchReadEndpoint = "/api/v2/search_read"
+	tokenExpiryLeeway  = 30 * time.Second
 )
 
 // Config holds the connection details for a real Odoo instance — all
 // sourced from environment variables at startup, following this repo's
-// existing secrets convention (see internal/mailer.Config).
+// existing secrets convention (see internal/mailer.Config). Database is
+// required by this instance's REST API via a DATABASE header on every data
+// query (multi-database Odoo setups need it to route the request).
 type Config struct {
 	BaseURL      string
 	ClientID     string
 	ClientSecret string
 	Username     string
 	Password     string
+	Database     string
 }
 
 // HTTPClient is the real Odoo integration, replacing FakeClient entirely.
@@ -66,6 +76,7 @@ type HTTPClient struct {
 	clientSecret string
 	username     string
 	password     string
+	database     string
 	httpClient   *http.Client
 
 	mu          sync.Mutex
@@ -80,6 +91,7 @@ func NewHTTPClient(cfg Config) *HTTPClient {
 		clientSecret: cfg.ClientSecret,
 		username:     cfg.Username,
 		password:     cfg.Password,
+		database:     cfg.Database,
 		httpClient:   &http.Client{Timeout: 30 * time.Second},
 	}
 }
@@ -197,6 +209,7 @@ func (c *HTTPClient) doSearchRead(ctx context.Context, model string, domain []an
 	}
 
 	q := url.Values{}
+	q.Set("model", model)
 	q.Set("domain", string(domainJSON))
 	q.Set("fields", string(fieldsJSON))
 	if limit > 0 {
@@ -206,12 +219,13 @@ func (c *HTTPClient) doSearchRead(ctx context.Context, model string, domain []an
 		q.Set("offset", strconv.Itoa(offset))
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/"+model+"?"+q.Encode(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+searchReadEndpoint+"?"+q.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("DATABASE", c.database)
 
 	return c.httpClient.Do(req)
 }
@@ -240,7 +254,7 @@ func (c *HTTPClient) FetchStores(ctx context.Context) ([]Store, error) {
 }
 
 // FetchEmployeesByOdooEmployeeIDs looks up hr.employee records whose
-// user_id (this integration's odoo_employee_id join key — see ADR-0008) is
+// id (this integration's odoo_employee_id join key — see ADR-0008) is
 // in odooEmployeeIDs. An empty input returns immediately without a network
 // call — there is nothing to look up. An id Odoo doesn't recognize is
 // simply absent from the result, matching the Client interface's contract.
@@ -262,7 +276,7 @@ func (c *HTTPClient) FetchEmployeesByOdooEmployeeIDs(ctx context.Context, odooEm
 
 	employees := make([]Employee, 0, len(records))
 	for _, r := range records {
-		id, err := recordMany2OneID(r, employeeIDField)
+		id, err := recordInt(r, employeeIDField)
 		if err != nil {
 			return nil, fmt.Errorf("odoo: employee record: %w", err)
 		}
@@ -271,7 +285,7 @@ func (c *HTTPClient) FetchEmployeesByOdooEmployeeIDs(ctx context.Context, odooEm
 			return nil, fmt.Errorf("odoo: employee record: %w", err)
 		}
 		employees = append(employees, Employee{
-			OdooEmployeeID: id,
+			OdooEmployeeID: int64(id),
 			FullName:       recordString(r, employeeNameField),
 			Email:          recordString(r, employeeEmailField),
 			StoreIDs:       storeIDs,
@@ -288,27 +302,14 @@ func recordString(record map[string]any, field string) string {
 	return v
 }
 
-// recordInt reads a plain numeric field (e.g. a store's own "id").
+// recordInt reads a plain numeric field (e.g. a store's or employee's own
+// "id").
 func recordInt(record map[string]any, field string) (int, error) {
 	v, ok := record[field].(float64)
 	if !ok {
 		return 0, fmt.Errorf("field %q: expected a number, got %T", field, record[field])
 	}
 	return int(v), nil
-}
-
-// recordMany2OneID reads a many2one field, which Odoo represents as a
-// [id, display_name] tuple.
-func recordMany2OneID(record map[string]any, field string) (int64, error) {
-	tuple, ok := record[field].([]any)
-	if !ok || len(tuple) == 0 {
-		return 0, fmt.Errorf("field %q: expected a [id, name] tuple, got %T", field, record[field])
-	}
-	id, ok := tuple[0].(float64)
-	if !ok {
-		return 0, fmt.Errorf("field %q: expected a numeric id, got %T", field, tuple[0])
-	}
-	return int64(id), nil
 }
 
 // recordIntList reads a many2many field, which Odoo represents as a flat
