@@ -7,6 +7,7 @@ require (
 	github.com/go-chi/cors v1.2.2
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/joho/godotenv v1.5.1
 	go.uber.org/mock v0.6.0
 	golang.org/x/crypto v0.52.0
 )
