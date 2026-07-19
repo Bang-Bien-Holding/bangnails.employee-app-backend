@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 
 # Store sync: async trigger + status poll, mirroring Employee Sync
 
