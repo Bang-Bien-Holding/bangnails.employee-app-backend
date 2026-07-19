@@ -12,7 +12,7 @@
 - [ ] Missing `updated_at` returns `400`.
 - [ ] The submitted `updated_at` is checked against the store's current `updated_at` inside the same transaction as the update. A mismatch updates nothing and returns `409 Conflict`.
 - [ ] Every successful PATCH bumps `store.updated_at` to `now()`, even when only the geofence changed (this same bump-on-any-change behavior is what ticket 03 will also rely on for wifi-list-only edits).
-- [ ] A store id that doesn't exist (or is soft-deleted) returns `404`, consistent with ticket 01.
+- [ ] A store id that doesn't exist returns `404`, consistent with ticket 01. A wifi-disabled store is not treated as not-found.
 - [ ] The response body on success is the same shape as `GET /v1/stores/{id}` (ticket 01), reflecting the new geofence and bumped `updated_at`.
 - [ ] Service seam: tests against a mocked `repo.Querier` cover a successful geofence update, the `updated_at` mismatch → conflict sentinel error with zero side effects, and not-found mapping.
 - [ ] Handler seam: tests against a mocked `Service` cover `200` success, `400` for a partial geofence group / out-of-range radius / missing `updated_at`, `404`, and `409`.

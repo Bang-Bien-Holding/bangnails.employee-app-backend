@@ -45,13 +45,11 @@ func (e *BulkWifiWhitelistConflictError) Unwrap() error {
 	return ErrStoreConflict
 }
 
-// SyncSummary reports the outcome of one SyncStores run.
-type SyncSummary struct {
-	TotalStoresProcessed int `json:"total_stores_processed"`
-	InsertedStores       int `json:"inserted_stores"`
-	UpdatedStores        int `json:"updated_stores"`
-	DeletedStores        int `json:"deleted_stores"`
-	Failed               int `json:"failed"`
+// SyncStatus reports whether a background sync started by SyncStores is
+// still running, so the frontend can poll it to keep its trigger button
+// disabled for the duration — mirrors employees.SyncStatus.
+type SyncStatus struct {
+	Syncing bool `json:"syncing"`
 }
 
 // StoreDetail is the full picture of one store: the store row plus its
@@ -186,7 +184,8 @@ type StoreWifiToggleResult struct {
 }
 
 type Service interface {
-	SyncStores(ctx context.Context) (SyncSummary, error)
+	SyncStores(ctx context.Context) error
+	SyncStatus(ctx context.Context) SyncStatus
 	GetStoreByID(ctx context.Context, id int64) (StoreDetail, error)
 	UpdateStore(ctx context.Context, id int64, params patchStoreParams) (StoreDetail, error)
 	ListStores(ctx context.Context) ([]StoreDetail, error)

@@ -2,6 +2,7 @@ package stores
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -21,27 +22,34 @@ func NewHandler(service Service) *Handler {
 }
 
 type syncStoresResponse struct {
-	Status  string      `json:"status"`
-	Message string      `json:"message"`
-	Meta    SyncSummary `json:"meta"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
 }
 
+// SyncStores kicks off a background pull of every store from Odoo and
+// returns immediately — it does not wait for the sync to finish. The
+// frontend polls SyncStatus to know when it's done.
 func (h *Handler) SyncStores(w http.ResponseWriter, r *http.Request) {
-	summary, err := h.service.SyncStores(r.Context())
-	if err != nil {
-		status := http.StatusInternalServerError
+	if err := h.service.SyncStores(r.Context()); err != nil {
 		if errors.Is(err, ErrSyncInProgress) {
-			status = http.StatusConflict
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
 		}
-		http.Error(w, err.Error(), status)
+		slog.Error("stores: sync stores", "error", err)
+		http.Error(w, "failed to start store sync", http.StatusInternalServerError)
 		return
 	}
 
-	json.Write(w, http.StatusCreated, syncStoresResponse{
-		Status:  "success",
-		Message: "Store synchronization completed successfully.",
-		Meta:    summary,
+	json.Write(w, http.StatusAccepted, syncStoresResponse{
+		Status:  "accepted",
+		Message: "Store sync started.",
 	})
+}
+
+// SyncStatus reports whether a SyncStores job is still running, for the
+// frontend to poll while its trigger button is disabled.
+func (h *Handler) SyncStatus(w http.ResponseWriter, r *http.Request) {
+	json.Write(w, http.StatusOK, h.service.SyncStatus(r.Context()))
 }
 
 func (h *Handler) GetStoreByID(w http.ResponseWriter, r *http.Request) {

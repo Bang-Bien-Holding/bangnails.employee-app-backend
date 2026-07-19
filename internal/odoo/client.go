@@ -4,34 +4,38 @@ package odoo
 
 import "context"
 
-// Store is one store record as Odoo reports it.
+// Store is one store record as Odoo reports it. There is no City field:
+// Odoo's pos.shop model doesn't have a city field yet (planned for later),
+// so store sync doesn't touch the local store.city column at all.
 type Store struct {
 	ID   int
 	Name string
-	City string
 }
 
 // Employee is one employee record as Odoo reports it, keyed by the same
-// employee_id business identifier used in our own employees table — Odoo
-// never sees our internal bigserial id.
+// odoo_employee_id business identifier used in our own employees table —
+// Odoo never sees our internal bigserial id. Username has no Odoo
+// equivalent — it's local-only (ADR-0008) — so it isn't part of this type.
+// StoreIDs is Odoo's own store ids (x_pos_shop_ids, ADR-0009), resolved to
+// this system's internal store.id by the caller (employees.service.runSync)
+// via store.odoo_store_id, the same join key store sync already uses.
 type Employee struct {
-	EmployeeID string
-	FullName   string
-	Email      string
-	Username   string
-	Role       string
+	OdooEmployeeID int64
+	FullName       string
+	Email          string
+	StoreIDs       []int
 }
 
 // Client fetches store and employee data from Odoo. The store count is
 // small enough that FetchStores returns the full list in one call — no
-// pagination. FetchEmployeesByEmployeeIDs has no such guarantee, so its
+// pagination. FetchEmployeesByOdooEmployeeIDs has no such guarantee, so its
 // caller (employees.service.runSync) pages through its ids in fixed-size
 // batches rather than sending them all in one call.
 type Client interface {
 	FetchStores(ctx context.Context) ([]Store, error)
-	// FetchEmployeesByEmployeeIDs looks up employees by employee_id. An id
-	// Odoo doesn't recognize is simply omitted from the result rather than
-	// erroring — the caller distinguishes "not found" from "found" by
-	// checking which requested ids came back.
-	FetchEmployeesByEmployeeIDs(ctx context.Context, employeeIDs []string) ([]Employee, error)
+	// FetchEmployeesByOdooEmployeeIDs looks up employees by
+	// odoo_employee_id. An id Odoo doesn't recognize is simply omitted from
+	// the result rather than erroring — the caller distinguishes "not
+	// found" from "found" by checking which requested ids came back.
+	FetchEmployeesByOdooEmployeeIDs(ctx context.Context, odooEmployeeIDs []int64) ([]Employee, error)
 }

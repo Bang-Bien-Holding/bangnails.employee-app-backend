@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strconv"
 	"sync"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -25,11 +28,13 @@ import (
 const uniqueViolationCode = "23505"
 
 // Constraint names come from internal/adapters/postgresql/migrations/00001_create_employees.sql
-// (Postgres' default naming: <table>_<column>_key).
+// (Postgres' default naming: <table>_<column>_key); employees_odoo_employee_id_key
+// was renamed in migration 00009 alongside the employee_id -> odoo_employee_id
+// column rename.
 const (
-	employeesEmailKeyConstraint      = "employees_email_key"
-	employeesEmployeeIDKeyConstraint = "employees_employee_id_key"
-	employeesUsernameKeyConstraint   = "employees_username_key"
+	employeesEmailKeyConstraint          = "employees_email_key"
+	employeesOdooEmployeeIDKeyConstraint = "employees_odoo_employee_id_key"
+	employeesUsernameKeyConstraint       = "employees_username_key"
 )
 
 // activationTokenTTL matches the existing password-reset scope (30 minutes),
@@ -49,7 +54,13 @@ const employeeSyncBatchSize = 50
 const employeeSyncTimeout = 5 * time.Minute
 
 type service struct {
-	repo   repo.Querier
+	// repo is a plain, non-transactional Querier for reads that don't need
+	// transaction scoping — GetEmployeeByID uses this rather than withTx.
+	repo repo.Querier
+	// withTx wraps fn in a transaction-scoped repo.Querier — a real
+	// pool-backed implementation is installed by NewService; tests replace
+	// it with a stub that calls fn against a mocked Querier directly.
+	withTx func(ctx context.Context, fn func(repo.Querier) error) error
 	mailer mailer.Client
 	odoo   odoo.Client
 
@@ -57,57 +68,252 @@ type service struct {
 	syncing bool
 }
 
-func NewService(r repo.Querier, m mailer.Client, o odoo.Client) Service {
-	return &service{repo: r, mailer: m, odoo: o}
+func NewService(pool *pgxpool.Pool, m mailer.Client, o odoo.Client) Service {
+	return &service{
+		repo: repo.New(pool),
+		withTx: func(ctx context.Context, fn func(repo.Querier) error) error {
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback(ctx)
+
+			if err := fn(repo.New(tx)); err != nil {
+				return err
+			}
+			return tx.Commit(ctx)
+		},
+		mailer: m,
+		odoo:   o,
+	}
 }
 
-func (s *service) CreateEmployee(ctx context.Context, params createEmployeeParams) (repo.Employee, error) {
-	employee, err := s.repo.CreateEmployee(ctx, repo.CreateEmployeeParams{
-		EmployeeID: params.EmployeeID,
-		FullName:   params.FullName,
-		Email:      params.Email,
-		Username:   params.Username,
-		Role:       params.Role,
+// validatePositionIDs rejects a submitted position-id set containing an id
+// that isn't a real position, via one round trip comparing CountPositionsByIDs
+// against the distinct submitted count (see ADR-0008). An empty/nil ids is
+// always valid (an employee with no positions), so it short-circuits before
+// the query.
+func validatePositionIDs(ctx context.Context, q repo.Querier, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	count, err := q.CountPositionsByIDs(ctx, ids)
+	if err != nil {
+		return err
+	}
+	if count != int64(len(ids)) {
+		return ErrUnknownPositionID
+	}
+	return nil
+}
+
+// validateOdooEmployeeID confirms odooEmployeeID exists in Odoo
+// (existence-only — the returned FullName/Email are never used to
+// overwrite what the caller submitted). Fails closed on ADR-0007's terms:
+// no match, or the Odoo call itself failing, both reject with the same
+// sentinel error.
+func (s *service) validateOdooEmployeeID(ctx context.Context, odooEmployeeID int64) error {
+	found, err := s.odoo.FetchEmployeesByOdooEmployeeIDs(ctx, []int64{odooEmployeeID})
+	if err != nil {
+		return ErrOdooEmployeeIDNotFound
+	}
+	for _, e := range found {
+		if e.OdooEmployeeID == odooEmployeeID {
+			return nil
+		}
+	}
+	return ErrOdooEmployeeIDNotFound
+}
+
+func (s *service) CreateEmployee(ctx context.Context, params createEmployeeParams) (EmployeeDetail, error) {
+	if err := s.validateOdooEmployeeID(ctx, params.OdooEmployeeID); err != nil {
+		return EmployeeDetail{}, err
+	}
+
+	var detail EmployeeDetail
+	err := s.withTx(ctx, func(q repo.Querier) error {
+		if err := validatePositionIDs(ctx, q, params.PositionIDs); err != nil {
+			return err
+		}
+
+		employee, err := q.CreateEmployee(ctx, repo.CreateEmployeeParams{
+			OdooEmployeeID: params.OdooEmployeeID,
+			FullName:       params.FullName,
+			Email:          params.Email,
+			Username:       params.Username,
+		})
+		if err != nil {
+			return translateEmployeeUniqueViolation(err)
+		}
+
+		if len(params.PositionIDs) > 0 {
+			if err := q.InsertEmployeePositions(ctx, repo.InsertEmployeePositionsParams{
+				EmployeeID:  employee.ID,
+				PositionIds: params.PositionIDs,
+			}); err != nil {
+				return err
+			}
+		}
+
+		positionIDs := params.PositionIDs
+		if positionIDs == nil {
+			positionIDs = []int64{}
+		}
+		// A brand-new employee has no store membership yet — only
+		// SyncEmployees ever populates employee_stores (ADR-0009).
+		detail = EmployeeDetail{Employee: employee, PositionIDs: positionIDs, StoreIDs: []int64{}}
+		return nil
 	})
 	if err != nil {
-		return repo.Employee{}, translateEmployeeUniqueViolation(err)
+		return EmployeeDetail{}, err
 	}
 
 	// Detached from ctx: the HTTP handler's request context is canceled the
 	// moment it returns, which would race with (and likely abort) this
 	// goroutine if it inherited that cancellation.
-	go s.sendActivationEmail(context.WithoutCancel(ctx), employee)
+	go s.sendActivationEmail(context.WithoutCancel(ctx), detail.Employee)
 
-	return employee, nil
+	return detail, nil
 }
 
-func (s *service) ListEmployees(ctx context.Context) ([]repo.Employee, error) {
-	return s.repo.ListEmployees(ctx)
+func (s *service) ListEmployees(ctx context.Context) ([]EmployeeDetail, error) {
+	employees, err := s.repo.ListEmployees(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	ids := make([]int64, len(employees))
+	for i, e := range employees {
+		ids[i] = e.ID
+	}
+	positionsByEmployee, err := s.repo.ListPositionIDsByEmployeeIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	positionIDs := make(map[int64][]int64, len(employees))
+	for _, p := range positionsByEmployee {
+		positionIDs[p.EmployeeID] = append(positionIDs[p.EmployeeID], p.PositionID)
+	}
+
+	storesByEmployee, err := s.repo.ListStoreIDsByEmployeeIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	storeIDs := make(map[int64][]int64, len(employees))
+	for _, st := range storesByEmployee {
+		storeIDs[st.EmployeeID] = append(storeIDs[st.EmployeeID], st.StoreID)
+	}
+
+	details := make([]EmployeeDetail, len(employees))
+	for i, e := range employees {
+		positions := positionIDs[e.ID]
+		if positions == nil {
+			positions = []int64{}
+		}
+		stores := storeIDs[e.ID]
+		if stores == nil {
+			stores = []int64{}
+		}
+		details[i] = EmployeeDetail{Employee: e, PositionIDs: positions, StoreIDs: stores}
+	}
+	return details, nil
 }
 
-func (s *service) UpdateEmployee(ctx context.Context, id int64, params updateEmployeeParams) (repo.Employee, error) {
-	employee, err := s.repo.UpdateEmployee(ctx, repo.UpdateEmployeeParams{
-		ID:         id,
-		EmployeeID: params.EmployeeID,
-		FullName:   params.FullName,
-		Email:      params.Email,
-		Username:   params.Username,
-		Role:       params.Role,
-	})
+func (s *service) UpdateEmployee(ctx context.Context, id int64, params updateEmployeeParams) (EmployeeDetail, error) {
+	current, err := s.repo.GetEmployeeByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return repo.Employee{}, ErrEmployeeNotFound
+			return EmployeeDetail{}, ErrEmployeeNotFound
 		}
-		return repo.Employee{}, translateEmployeeUniqueViolation(err)
+		return EmployeeDetail{}, err
+	}
+	// Only re-validate when odooEmployeeId is actually changing — a routine
+	// edit (name, positions, ...) that leaves it untouched must not be
+	// slowed down or blocked by an unrelated Odoo outage (ADR-0007).
+	if params.OdooEmployeeID != current.OdooEmployeeID {
+		if err := s.validateOdooEmployeeID(ctx, params.OdooEmployeeID); err != nil {
+			return EmployeeDetail{}, err
+		}
 	}
 
+	// Hashed up front (bcrypt needs no DB access) so the write below — if a
+	// password was submitted — can happen inside the same transaction as
+	// the rest of the update, rather than as a separate call that could
+	// leave the employee row updated but the password unset if it failed.
+	var hashedPassword []byte
 	if params.Password != nil {
-		if err := s.SetEmployeePassword(ctx, id, *params.Password); err != nil {
-			return repo.Employee{}, err
+		hashedPassword, err = bcrypt.GenerateFromPassword([]byte(*params.Password), bcrypt.DefaultCost)
+		if err != nil {
+			return EmployeeDetail{}, err
 		}
 	}
 
-	return employee, nil
+	positionIDs := params.PositionIDs
+	if positionIDs == nil {
+		positionIDs = []int64{}
+	}
+
+	var detail EmployeeDetail
+	err = s.withTx(ctx, func(q repo.Querier) error {
+		if err := validatePositionIDs(ctx, q, positionIDs); err != nil {
+			return err
+		}
+
+		employee, err := q.UpdateEmployee(ctx, repo.UpdateEmployeeParams{
+			ID:             id,
+			OdooEmployeeID: params.OdooEmployeeID,
+			FullName:       params.FullName,
+			Email:          params.Email,
+			Username:       params.Username,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrEmployeeNotFound
+			}
+			return translateEmployeeUniqueViolation(err)
+		}
+
+		if err := q.DeleteEmployeePositionsNotIn(ctx, repo.DeleteEmployeePositionsNotInParams{
+			EmployeeID:  id,
+			PositionIds: positionIDs,
+		}); err != nil {
+			return err
+		}
+		if len(positionIDs) > 0 {
+			if err := q.InsertEmployeePositions(ctx, repo.InsertEmployeePositionsParams{
+				EmployeeID:  id,
+				PositionIds: positionIDs,
+			}); err != nil {
+				return err
+			}
+		}
+
+		if hashedPassword != nil {
+			if _, err := q.SetEmployeePassword(ctx, repo.SetEmployeePasswordParams{
+				ID:       id,
+				Password: hashedPassword,
+			}); err != nil {
+				return err
+			}
+		}
+
+		// Store membership is Odoo-owned and untouched by this update — just
+		// reflect its current state (see ADR-0009).
+		storeIDs, err := q.ListStoreIDsByEmployeeID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if storeIDs == nil {
+			storeIDs = []int64{}
+		}
+		detail = EmployeeDetail{Employee: employee, PositionIDs: positionIDs, StoreIDs: storeIDs}
+		return nil
+	})
+	if err != nil {
+		return EmployeeDetail{}, err
+	}
+
+	return detail, nil
 }
 
 // SetEmployeePassword lets an admin directly assign an employee's password,
@@ -199,15 +405,32 @@ func (s *service) CompleteActivation(ctx context.Context, params completeActivat
 	return err
 }
 
-func (s *service) GetEmployeeByID(ctx context.Context, id int64) (repo.Employee, error) {
+func (s *service) GetEmployeeByID(ctx context.Context, id int64) (EmployeeDetail, error) {
 	employee, err := s.repo.GetEmployeeByID(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return repo.Employee{}, ErrEmployeeNotFound
+			return EmployeeDetail{}, ErrEmployeeNotFound
 		}
-		return repo.Employee{}, err
+		return EmployeeDetail{}, err
 	}
-	return employee, nil
+
+	positionIDs, err := s.repo.ListPositionIDsByEmployeeID(ctx, id)
+	if err != nil {
+		return EmployeeDetail{}, err
+	}
+	if positionIDs == nil {
+		positionIDs = []int64{}
+	}
+
+	storeIDs, err := s.repo.ListStoreIDsByEmployeeID(ctx, id)
+	if err != nil {
+		return EmployeeDetail{}, err
+	}
+	if storeIDs == nil {
+		storeIDs = []int64{}
+	}
+
+	return EmployeeDetail{Employee: employee, PositionIDs: positionIDs, StoreIDs: storeIDs}, nil
 }
 
 // BulkSendPasswordResetLinks sends a password-set/reset link to each id,
@@ -223,11 +446,12 @@ func (s *service) BulkSendPasswordResetLinks(ctx context.Context, ids []int64) [
 	for i, id := range ids {
 		results[i] = BulkActionResult{ID: id}
 
-		employee, err := s.GetEmployeeByID(ctx, id)
+		detail, err := s.GetEmployeeByID(ctx, id)
 		if err != nil {
 			results[i].Error = err.Error()
 			continue
 		}
+		employee := detail.Employee
 		if !employee.IsActive {
 			results[i].Error = ErrEmployeeNotActive.Error()
 			continue
@@ -254,8 +478,8 @@ func (s *service) BulkSendPasswordResetLinks(ctx context.Context, ids []int64) [
 	return results
 }
 
-// SyncEmployees looks up the Odoo employee_id for each given internal id,
-// then pulls those from Odoo and bulk-upserts them into employees, in a
+// SyncEmployees looks up the Odoo odoo_employee_id for each given internal
+// id, then pulls those from Odoo and bulk-upserts them into employees, in a
 // detached goroutine so the caller gets a quick response (Step 3 of the sync
 // spec) instead of waiting on Odoo/DB latency. An id with no matching row is
 // silently dropped by ListEmployeeIDsByIDs rather than failing the request.
@@ -267,7 +491,7 @@ func (s *service) SyncEmployees(ctx context.Context, ids []int64) error {
 		return ErrSyncInProgress
 	}
 
-	employeeIDs, err := s.repo.ListEmployeeIDsByIDs(ctx, ids)
+	odooEmployeeIDs, err := s.repo.ListEmployeeIDsByIDs(ctx, ids)
 	if err != nil {
 		s.unlock()
 		return err
@@ -279,7 +503,7 @@ func (s *service) SyncEmployees(ctx context.Context, ids []int64) error {
 	// employeeSyncTimeout so a stalled Odoo/DB call can't hold s.syncing
 	// true forever; runSync owns cancel and releases it when it returns.
 	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), employeeSyncTimeout)
-	go s.runSync(syncCtx, cancel, employeeIDs)
+	go s.runSync(syncCtx, cancel, odooEmployeeIDs)
 
 	return nil
 }
@@ -299,36 +523,33 @@ func (s *service) SyncStatus(ctx context.Context) SyncStatus {
 // else observes this goroutine once SyncEmployees has already returned to
 // its caller. A batch's fetch or upsert error aborts the remaining batches
 // rather than skipping past them.
-func (s *service) runSync(ctx context.Context, cancel context.CancelFunc, ids []string) {
+func (s *service) runSync(ctx context.Context, cancel context.CancelFunc, ids []int64) {
 	defer cancel()
 	defer s.unlock()
 
-	var notFound []string
+	var notFound []int64
+	var skippedStoreIDs []int
 	var inserted, updated int
 
 	for start := 0; start < len(ids); start += employeeSyncBatchSize {
 		end := min(start+employeeSyncBatchSize, len(ids))
 		batch := ids[start:end]
 
-		found, err := s.odoo.FetchEmployeesByEmployeeIDs(ctx, batch)
+		found, err := s.odoo.FetchEmployeesByOdooEmployeeIDs(ctx, batch)
 		if err != nil {
 			slog.Error("employees: sync fetch from odoo", "batch_size", len(batch), "error", err)
 			return
 		}
 
-		foundIDs := make(map[string]bool, len(found))
-		employeeIDs := make([]string, len(found))
+		foundIDs := make(map[int64]bool, len(found))
+		odooEmployeeIDs := make([]int64, len(found))
 		fullNames := make([]string, len(found))
 		emails := make([]string, len(found))
-		usernames := make([]string, len(found))
-		roles := make([]string, len(found))
 		for i, e := range found {
-			foundIDs[e.EmployeeID] = true
-			employeeIDs[i] = e.EmployeeID
+			foundIDs[e.OdooEmployeeID] = true
+			odooEmployeeIDs[i] = e.OdooEmployeeID
 			fullNames[i] = e.FullName
 			emails[i] = e.Email
-			usernames[i] = e.Username
-			roles[i] = e.Role
 		}
 
 		for _, id := range batch {
@@ -342,30 +563,134 @@ func (s *service) runSync(ctx context.Context, cancel context.CancelFunc, ids []
 		}
 
 		rows, err := s.repo.UpsertEmployees(ctx, repo.UpsertEmployeesParams{
-			EmployeeIds: employeeIDs,
-			FullNames:   fullNames,
-			Emails:      emails,
-			Usernames:   usernames,
-			Roles:       roles,
+			OdooEmployeeIds: odooEmployeeIDs,
+			FullNames:       fullNames,
+			Emails:          emails,
 		})
 		if err != nil {
-			slog.Error("employees: sync upsert", "ids", employeeIDs, "error", err)
+			slog.Error("employees: sync upsert", "ids", odooEmployeeIDs, "error", err)
 			return
 		}
 
+		internalIDs := make(map[int64]int64, len(rows))
 		for _, row := range rows {
+			internalIDs[row.OdooEmployeeID] = row.ID
 			if row.Inserted {
 				inserted++
 			} else {
 				updated++
 			}
 		}
+
+		skippedStoreIDs = append(skippedStoreIDs, s.syncEmployeeStores(ctx, found, internalIDs)...)
 	}
 
 	if len(notFound) > 0 {
 		slog.Warn("employees: sync ids not found in odoo", "ids", notFound)
 	}
+	if len(skippedStoreIDs) > 0 {
+		slog.Warn("employees: sync store ids not resolvable to a local store", "odoo_store_ids", skippedStoreIDs)
+	}
 	slog.Info("employees: sync completed", "inserted", inserted, "updated", updated, "not_found", len(notFound))
+}
+
+// syncEmployeeStores resolves each employee's Odoo store ids (x_pos_shop_ids,
+// ADR-0009) to this system's internal store.id via store.odoo_store_id —
+// the same join key SyncStores already uses — then diffs employee_stores
+// per employee: insert newly resolved, delete no-longer-present, leave
+// unchanged. internalIDs maps this batch's odoo_employee_id values to their
+// internal employee id (from the UpsertEmployees call that just ran).
+// Returns the Odoo store ids that didn't resolve to a known local store,
+// for the caller to log — one unresolvable store id is skipped for that one
+// assignment, never failing the rest of that employee's sync or any other
+// employee's (see ADR-0009).
+func (s *service) syncEmployeeStores(ctx context.Context, employees []odoo.Employee, internalIDs map[int64]int64) []int {
+	odooStoreIDSet := make(map[int]bool)
+	for _, e := range employees {
+		for _, id := range e.StoreIDs {
+			odooStoreIDSet[id] = true
+		}
+	}
+
+	odooStoreIDs := make([]int, 0, len(odooStoreIDSet))
+	for id := range odooStoreIDSet {
+		odooStoreIDs = append(odooStoreIDs, id)
+	}
+	sort.Ints(odooStoreIDs) // deterministic query order — map iteration isn't
+
+	// resolved stays empty (rather than short-circuiting here) when no
+	// employee in this batch reports any Odoo store, so the loop below
+	// still runs DeleteEmployeeStoresNotIn with an empty set per employee —
+	// clearing stale employee_stores rows for staff Odoo has since removed
+	// from every store, instead of leaving them dangling.
+	resolved := make(map[int]int64, len(odooStoreIDs))
+	if len(odooStoreIDs) > 0 {
+		odooStoreIDStrs := make([]string, len(odooStoreIDs))
+		for i, id := range odooStoreIDs {
+			odooStoreIDStrs[i] = strconv.Itoa(id)
+		}
+
+		stores, err := s.repo.ListStoresByOdooStoreIDs(ctx, odooStoreIDStrs)
+		if err != nil {
+			slog.Error("employees: sync resolve store ids", "error", err)
+			return nil
+		}
+
+		for _, st := range stores {
+			odooID, err := strconv.Atoi(st.OdooStoreID.String)
+			if err != nil {
+				continue
+			}
+			resolved[odooID] = st.ID
+		}
+	}
+
+	var skipped []int
+	for _, e := range employees {
+		internalID, ok := internalIDs[e.OdooEmployeeID]
+		if !ok {
+			continue
+		}
+
+		storeIDs := make([]int64, 0, len(e.StoreIDs))
+		for _, odooStoreID := range e.StoreIDs {
+			storeID, ok := resolved[odooStoreID]
+			if !ok {
+				skipped = append(skipped, odooStoreID)
+				continue
+			}
+			storeIDs = append(storeIDs, storeID)
+		}
+
+		// Delete and insert run inside one transaction per employee, so a
+		// failing insert rolls back the delete too rather than leaving this
+		// employee with neither their old nor new store memberships. One
+		// employee's failure is logged and skipped — it doesn't abort the
+		// rest of the batch.
+		err := s.withTx(ctx, func(q repo.Querier) error {
+			if err := q.DeleteEmployeeStoresNotIn(ctx, repo.DeleteEmployeeStoresNotInParams{
+				EmployeeID: internalID,
+				StoreIds:   storeIDs,
+			}); err != nil {
+				return err
+			}
+			if len(storeIDs) > 0 {
+				if err := q.InsertEmployeeStores(ctx, repo.InsertEmployeeStoresParams{
+					EmployeeID: internalID,
+					StoreIds:   storeIDs,
+				}); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			slog.Error("employees: sync store membership", "employee_id", internalID, "error", err)
+			continue
+		}
+	}
+
+	return skipped
 }
 
 func (s *service) tryLock() bool {
@@ -466,8 +791,8 @@ func translateEmployeeUniqueViolation(err error) error {
 	switch pgErr.ConstraintName {
 	case employeesEmailKeyConstraint:
 		return ErrEmailAlreadyExists
-	case employeesEmployeeIDKeyConstraint:
-		return ErrEmployeeIDAlreadyExists
+	case employeesOdooEmployeeIDKeyConstraint:
+		return ErrOdooEmployeeIDAlreadyExists
 	case employeesUsernameKeyConstraint:
 		return ErrUsernameAlreadyExists
 	default:

@@ -56,41 +56,53 @@ func (q *Queries) BulkSetStoreWifiWhitelistEnabled(ctx context.Context, arg Bulk
 	return items, nil
 }
 
+const countPositionsByIDs = `-- name: CountPositionsByIDs :one
+SELECT count(*) FROM positions
+WHERE id = ANY($1::bigint[])
+`
+
+// Used to validate a submitted set of position ids in one round trip: if the
+// count of matching rows is less than the count of distinct submitted ids,
+// at least one id doesn't reference a real position (see ADR-0008 — this
+// must be a clear client error, not a raw FK-violation 500).
+func (q *Queries) CountPositionsByIDs(ctx context.Context, ids []int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countPositionsByIDs, ids)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createEmployee = `-- name: CreateEmployee :one
-INSERT INTO employees (employee_id, full_name, email, username, role)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id
+INSERT INTO employees (odoo_employee_id, full_name, email, username)
+VALUES ($1, $2, $3, $4)
+RETURNING id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at
 `
 
 type CreateEmployeeParams struct {
-	EmployeeID string `json:"employee_id"`
-	FullName   string `json:"full_name"`
-	Email      string `json:"email"`
-	Username   string `json:"username"`
-	Role       string `json:"role"`
+	OdooEmployeeID int64  `json:"odoo_employee_id"`
+	FullName       string `json:"full_name"`
+	Email          string `json:"email"`
+	Username       string `json:"username"`
 }
 
 func (q *Queries) CreateEmployee(ctx context.Context, arg CreateEmployeeParams) (Employee, error) {
 	row := q.db.QueryRow(ctx, createEmployee,
-		arg.EmployeeID,
+		arg.OdooEmployeeID,
 		arg.FullName,
 		arg.Email,
 		arg.Username,
-		arg.Role,
 	)
 	var i Employee
 	err := row.Scan(
 		&i.ID,
-		&i.EmployeeID,
+		&i.OdooEmployeeID,
 		&i.FullName,
 		&i.Email,
 		&i.Username,
 		&i.Password,
-		&i.Role,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StoreID,
 	)
 	return i, err
 }
@@ -121,6 +133,24 @@ func (q *Queries) CreatePasswordResetToken(ctx context.Context, arg CreatePasswo
 	return i, err
 }
 
+const createPosition = `-- name: CreatePosition :one
+INSERT INTO positions (name)
+VALUES ($1)
+RETURNING id, name, created_at, updated_at
+`
+
+func (q *Queries) CreatePosition(ctx context.Context, name string) (Position, error) {
+	row := q.db.QueryRow(ctx, createPosition, name)
+	var i Position
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const deleteEmployee = `-- name: DeleteEmployee :execrows
 DELETE FROM employees
 WHERE id = $1
@@ -128,6 +158,62 @@ WHERE id = $1
 
 func (q *Queries) DeleteEmployee(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteEmployee, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteEmployeePositionsNotIn = `-- name: DeleteEmployeePositionsNotIn :exec
+DELETE FROM employee_positions
+WHERE employee_id = $1
+  AND position_id != ALL($2::bigint[])
+`
+
+type DeleteEmployeePositionsNotInParams struct {
+	EmployeeID  int64   `json:"employee_id"`
+	PositionIds []int64 `json:"position_ids"`
+}
+
+// Half of the "replace this employee's position set to match position_ids
+// exactly" diff (paired with InsertEmployeePositions) — deletes whatever's
+// currently assigned but no longer submitted. "!= ALL(...)" over an empty
+// position_ids array is vacuously true for every row, so submitting []
+// correctly clears the employee's entire position set rather than being a
+// no-op (see ADR-0008).
+func (q *Queries) DeleteEmployeePositionsNotIn(ctx context.Context, arg DeleteEmployeePositionsNotInParams) error {
+	_, err := q.db.Exec(ctx, deleteEmployeePositionsNotIn, arg.EmployeeID, arg.PositionIds)
+	return err
+}
+
+const deleteEmployeeStoresNotIn = `-- name: DeleteEmployeeStoresNotIn :exec
+DELETE FROM employee_stores
+WHERE employee_id = $1
+  AND store_id != ALL($2::bigint[])
+`
+
+type DeleteEmployeeStoresNotInParams struct {
+	EmployeeID int64   `json:"employee_id"`
+	StoreIds   []int64 `json:"store_ids"`
+}
+
+// Half of the "replace this employee's store membership to match store_ids
+// exactly" diff (paired with InsertEmployeeStores) — deletes whatever's
+// currently assigned but no longer present in Odoo's resolved set. Unlike
+// employee_positions' diff pair, only runSync ever calls this — store
+// membership is Odoo-owned, never admin-writable (see ADR-0009).
+func (q *Queries) DeleteEmployeeStoresNotIn(ctx context.Context, arg DeleteEmployeeStoresNotInParams) error {
+	_, err := q.db.Exec(ctx, deleteEmployeeStoresNotIn, arg.EmployeeID, arg.StoreIds)
+	return err
+}
+
+const deletePosition = `-- name: DeletePosition :execrows
+DELETE FROM positions
+WHERE id = $1
+`
+
+func (q *Queries) DeletePosition(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePosition, id)
 	if err != nil {
 		return 0, err
 	}
@@ -253,8 +339,7 @@ WHERE id = ANY($1::bigint[])
 
 // Hard-deletes stores Odoo no longer reports (see ADR-0005) — replaces the
 // former SoftDeleteStores. store_wifi_ip/store_wifi_mac cascade
-// automatically (ON DELETE CASCADE, migration 00006); employees.store_id is
-// nulled automatically (ON DELETE SET NULL, migration 00007).
+// automatically (ON DELETE CASCADE, migration 00006).
 func (q *Queries) DeleteStores(ctx context.Context, storeIds []int64) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteStores, storeIds)
 	if err != nil {
@@ -297,7 +382,7 @@ func (q *Queries) FindStoresNotInOdoo(ctx context.Context, activeOdooStoreIds []
 }
 
 const getEmployeeByEmail = `-- name: GetEmployeeByEmail :one
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
+SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at FROM employees
 WHERE email = $1
 `
 
@@ -306,22 +391,20 @@ func (q *Queries) GetEmployeeByEmail(ctx context.Context, email string) (Employe
 	var i Employee
 	err := row.Scan(
 		&i.ID,
-		&i.EmployeeID,
+		&i.OdooEmployeeID,
 		&i.FullName,
 		&i.Email,
 		&i.Username,
 		&i.Password,
-		&i.Role,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StoreID,
 	)
 	return i, err
 }
 
 const getEmployeeByID = `-- name: GetEmployeeByID :one
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
+SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at FROM employees
 WHERE id = $1
 `
 
@@ -330,22 +413,20 @@ func (q *Queries) GetEmployeeByID(ctx context.Context, id int64) (Employee, erro
 	var i Employee
 	err := row.Scan(
 		&i.ID,
-		&i.EmployeeID,
+		&i.OdooEmployeeID,
 		&i.FullName,
 		&i.Email,
 		&i.Username,
 		&i.Password,
-		&i.Role,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StoreID,
 	)
 	return i, err
 }
 
 const getEmployeeByUsername = `-- name: GetEmployeeByUsername :one
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
+SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at FROM employees
 WHERE username = $1
 `
 
@@ -354,16 +435,14 @@ func (q *Queries) GetEmployeeByUsername(ctx context.Context, username string) (E
 	var i Employee
 	err := row.Scan(
 		&i.ID,
-		&i.EmployeeID,
+		&i.OdooEmployeeID,
 		&i.FullName,
 		&i.Email,
 		&i.Username,
 		&i.Password,
-		&i.Role,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StoreID,
 	)
 	return i, err
 }
@@ -431,6 +510,46 @@ func (q *Queries) GetStoresByIDsForUpdate(ctx context.Context, storeIds []int64)
 	return items, nil
 }
 
+const insertEmployeePositions = `-- name: InsertEmployeePositions :exec
+INSERT INTO employee_positions (employee_id, position_id)
+SELECT $1, unnest($2::bigint[])
+ON CONFLICT (employee_id, position_id) DO NOTHING
+`
+
+type InsertEmployeePositionsParams struct {
+	EmployeeID  int64   `json:"employee_id"`
+	PositionIds []int64 `json:"position_ids"`
+}
+
+// Other half of the replace diff: inserts whatever's newly submitted.
+// ON CONFLICT DO NOTHING is what makes assignments already present in both
+// the old and new set stay untouched rather than being deleted and
+// reinserted.
+func (q *Queries) InsertEmployeePositions(ctx context.Context, arg InsertEmployeePositionsParams) error {
+	_, err := q.db.Exec(ctx, insertEmployeePositions, arg.EmployeeID, arg.PositionIds)
+	return err
+}
+
+const insertEmployeeStores = `-- name: InsertEmployeeStores :exec
+INSERT INTO employee_stores (employee_id, store_id)
+SELECT $1, unnest($2::bigint[])
+ON CONFLICT (employee_id, store_id) DO NOTHING
+`
+
+type InsertEmployeeStoresParams struct {
+	EmployeeID int64   `json:"employee_id"`
+	StoreIds   []int64 `json:"store_ids"`
+}
+
+// Other half of the replace diff: inserts whatever's newly resolved.
+// ON CONFLICT DO NOTHING is what makes assignments already present in both
+// the old and new set stay untouched rather than being deleted and
+// reinserted.
+func (q *Queries) InsertEmployeeStores(ctx context.Context, arg InsertEmployeeStoresParams) error {
+	_, err := q.db.Exec(ctx, insertEmployeeStores, arg.EmployeeID, arg.StoreIds)
+	return err
+}
+
 const insertStoreWifiIPs = `-- name: InsertStoreWifiIPs :exec
 INSERT INTO store_wifi_ip (store_id, ip_address)
 SELECT $1, unnest($2::inet[])
@@ -468,26 +587,26 @@ func (q *Queries) InsertStoreWifiMacs(ctx context.Context, arg InsertStoreWifiMa
 }
 
 const listEmployeeIDsByIDs = `-- name: ListEmployeeIDsByIDs :many
-SELECT employee_id FROM employees
+SELECT odoo_employee_id FROM employees
 WHERE id = ANY($1::bigint[])
 `
 
 // Translates the internal ids a SyncEmployees caller supplies into the
-// Odoo-facing employee_id values runSync actually sends to Odoo. An id with
-// no matching row is silently omitted from the result.
-func (q *Queries) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]string, error) {
+// Odoo-facing odoo_employee_id values runSync actually sends to Odoo. An id
+// with no matching row is silently omitted from the result.
+func (q *Queries) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int64, error) {
 	rows, err := q.db.Query(ctx, listEmployeeIDsByIDs, ids)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []string
+	var items []int64
 	for rows.Next() {
-		var employee_id string
-		if err := rows.Scan(&employee_id); err != nil {
+		var odoo_employee_id int64
+		if err := rows.Scan(&odoo_employee_id); err != nil {
 			return nil, err
 		}
-		items = append(items, employee_id)
+		items = append(items, odoo_employee_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -496,7 +615,7 @@ func (q *Queries) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]stri
 }
 
 const listEmployees = `-- name: ListEmployees :many
-SELECT id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id FROM employees
+SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at FROM employees
 ORDER BY id
 `
 
@@ -511,17 +630,156 @@ func (q *Queries) ListEmployees(ctx context.Context) ([]Employee, error) {
 		var i Employee
 		if err := rows.Scan(
 			&i.ID,
-			&i.EmployeeID,
+			&i.OdooEmployeeID,
 			&i.FullName,
 			&i.Email,
 			&i.Username,
 			&i.Password,
-			&i.Role,
 			&i.IsActive,
 			&i.CreatedAt,
 			&i.UpdatedAt,
-			&i.StoreID,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPositionIDsByEmployeeID = `-- name: ListPositionIDsByEmployeeID :many
+SELECT position_id FROM employee_positions
+WHERE employee_id = $1
+ORDER BY position_id
+`
+
+func (q *Queries) ListPositionIDsByEmployeeID(ctx context.Context, employeeID int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listPositionIDsByEmployeeID, employeeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var position_id int64
+		if err := rows.Scan(&position_id); err != nil {
+			return nil, err
+		}
+		items = append(items, position_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPositionIDsByEmployeeIDs = `-- name: ListPositionIDsByEmployeeIDs :many
+SELECT employee_id, position_id FROM employee_positions
+WHERE employee_id = ANY($1::bigint[])
+ORDER BY employee_id, position_id
+`
+
+// Bulk counterpart of ListPositionIDsByEmployeeID for ListEmployees — one
+// round trip for every employee's position ids, grouped client-side by
+// employee_id rather than aggregated here (keeps this query a plain
+// row-per-pair scan, same shape as the single-employee version).
+func (q *Queries) ListPositionIDsByEmployeeIDs(ctx context.Context, employeeIds []int64) ([]EmployeePosition, error) {
+	rows, err := q.db.Query(ctx, listPositionIDsByEmployeeIDs, employeeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EmployeePosition
+	for rows.Next() {
+		var i EmployeePosition
+		if err := rows.Scan(&i.EmployeeID, &i.PositionID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPositions = `-- name: ListPositions :many
+SELECT id, name, created_at, updated_at FROM positions
+ORDER BY name
+`
+
+func (q *Queries) ListPositions(ctx context.Context) ([]Position, error) {
+	rows, err := q.db.Query(ctx, listPositions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Position
+	for rows.Next() {
+		var i Position
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStoreIDsByEmployeeID = `-- name: ListStoreIDsByEmployeeID :many
+SELECT store_id FROM employee_stores
+WHERE employee_id = $1
+ORDER BY store_id
+`
+
+func (q *Queries) ListStoreIDsByEmployeeID(ctx context.Context, employeeID int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listStoreIDsByEmployeeID, employeeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var store_id int64
+		if err := rows.Scan(&store_id); err != nil {
+			return nil, err
+		}
+		items = append(items, store_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStoreIDsByEmployeeIDs = `-- name: ListStoreIDsByEmployeeIDs :many
+SELECT employee_id, store_id FROM employee_stores
+WHERE employee_id = ANY($1::bigint[])
+ORDER BY employee_id, store_id
+`
+
+// Bulk counterpart of ListStoreIDsByEmployeeID for ListEmployees — same
+// plain row-per-pair shape as ListPositionIDsByEmployeeIDs, grouped
+// client-side by employee_id.
+func (q *Queries) ListStoreIDsByEmployeeIDs(ctx context.Context, employeeIds []int64) ([]EmployeeStore, error) {
+	rows, err := q.db.Query(ctx, listStoreIDsByEmployeeIDs, employeeIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EmployeeStore
+	for rows.Next() {
+		var i EmployeeStore
+		if err := rows.Scan(&i.EmployeeID, &i.StoreID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -648,6 +906,42 @@ func (q *Queries) ListStores(ctx context.Context) ([]ListStoresRow, error) {
 	return items, nil
 }
 
+const listStoresByOdooStoreIDs = `-- name: ListStoresByOdooStoreIDs :many
+SELECT id, odoo_store_id FROM store
+WHERE odoo_store_id = ANY($1::varchar[])
+`
+
+type ListStoresByOdooStoreIDsRow struct {
+	ID          int64       `json:"id"`
+	OdooStoreID pgtype.Text `json:"odoo_store_id"`
+}
+
+// Resolves a batch of Odoo store ids (matched against store's VARCHAR
+// odoo_store_id join key — the same one SyncStores already uses) to this
+// system's internal store.id, for employee sync to map each employee's
+// Odoo store membership onto local store rows (see ADR-0009). An
+// odoo_store_id with no matching row is simply absent from the result; the
+// caller (runSync) logs and skips those rather than failing the sync.
+func (q *Queries) ListStoresByOdooStoreIDs(ctx context.Context, odooStoreIds []string) ([]ListStoresByOdooStoreIDsRow, error) {
+	rows, err := q.db.Query(ctx, listStoresByOdooStoreIDs, odooStoreIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStoresByOdooStoreIDsRow
+	for rows.Next() {
+		var i ListStoresByOdooStoreIDsRow
+		if err := rows.Scan(&i.ID, &i.OdooStoreID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const redeemPasswordResetToken = `-- name: RedeemPasswordResetToken :one
 UPDATE password_reset_tokens
 SET used_at = now()
@@ -751,47 +1045,67 @@ func (q *Queries) SetStoreWifiWhitelistEnabled(ctx context.Context, arg SetStore
 
 const updateEmployee = `-- name: UpdateEmployee :one
 UPDATE employees
-SET employee_id = $2,
+SET odoo_employee_id = $2,
     full_name = $3,
     email = $4,
     username = $5,
-    role = $6,
     updated_at = now()
 WHERE id = $1
-RETURNING id, employee_id, full_name, email, username, password, role, is_active, created_at, updated_at, store_id
+RETURNING id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at
 `
 
 type UpdateEmployeeParams struct {
-	ID         int64  `json:"id"`
-	EmployeeID string `json:"employee_id"`
-	FullName   string `json:"full_name"`
-	Email      string `json:"email"`
-	Username   string `json:"username"`
-	Role       string `json:"role"`
+	ID             int64  `json:"id"`
+	OdooEmployeeID int64  `json:"odoo_employee_id"`
+	FullName       string `json:"full_name"`
+	Email          string `json:"email"`
+	Username       string `json:"username"`
 }
 
 func (q *Queries) UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) (Employee, error) {
 	row := q.db.QueryRow(ctx, updateEmployee,
 		arg.ID,
-		arg.EmployeeID,
+		arg.OdooEmployeeID,
 		arg.FullName,
 		arg.Email,
 		arg.Username,
-		arg.Role,
 	)
 	var i Employee
 	err := row.Scan(
 		&i.ID,
-		&i.EmployeeID,
+		&i.OdooEmployeeID,
 		&i.FullName,
 		&i.Email,
 		&i.Username,
 		&i.Password,
-		&i.Role,
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.StoreID,
+	)
+	return i, err
+}
+
+const updatePosition = `-- name: UpdatePosition :one
+UPDATE positions
+SET name = $2,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, name, created_at, updated_at
+`
+
+type UpdatePositionParams struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+func (q *Queries) UpdatePosition(ctx context.Context, arg UpdatePositionParams) (Position, error) {
+	row := q.db.QueryRow(ctx, updatePosition, arg.ID, arg.Name)
+	var i Position
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -855,44 +1169,40 @@ func (q *Queries) UpdateStoreGeofence(ctx context.Context, arg UpdateStoreGeofen
 }
 
 const upsertEmployees = `-- name: UpsertEmployees :many
-INSERT INTO employees (employee_id, full_name, email, username, role)
-SELECT unnest($1::varchar[]), unnest($2::varchar[]), unnest($3::citext[]), unnest($4::varchar[]), unnest($5::varchar[])
-ON CONFLICT (employee_id) DO UPDATE
-SET full_name = EXCLUDED.full_name,
-    email = EXCLUDED.email,
-    username = EXCLUDED.username,
-    role = EXCLUDED.role,
+UPDATE employees
+SET full_name = data.full_name,
+    email = data.email,
     updated_at = now()
-RETURNING id, employee_id, (xmax = 0) AS inserted
+FROM (
+    SELECT unnest($1::bigint[]) AS odoo_employee_id,
+           unnest($2::varchar[]) AS full_name,
+           unnest($3::citext[]) AS email
+) AS data
+WHERE employees.odoo_employee_id = data.odoo_employee_id
+RETURNING employees.id, employees.odoo_employee_id, false AS inserted
 `
 
 type UpsertEmployeesParams struct {
-	EmployeeIds []string `json:"employee_ids"`
-	FullNames   []string `json:"full_names"`
-	Emails      []string `json:"emails"`
-	Usernames   []string `json:"usernames"`
-	Roles       []string `json:"roles"`
+	OdooEmployeeIds []int64  `json:"odoo_employee_ids"`
+	FullNames       []string `json:"full_names"`
+	Emails          []string `json:"emails"`
 }
 
 type UpsertEmployeesRow struct {
-	ID         int64  `json:"id"`
-	EmployeeID string `json:"employee_id"`
-	Inserted   bool   `json:"inserted"`
+	ID             int64 `json:"id"`
+	OdooEmployeeID int64 `json:"odoo_employee_id"`
+	Inserted       bool  `json:"inserted"`
 }
 
-// Bulk-upserts one batch of Odoo employees (at most 50, see
-// employees.syncEmployeesParams) in a single round trip — same "(xmax = 0)"
-// trick as UpsertStores to distinguish an INSERT from an ON CONFLICT UPDATE
-// without a second query. employee_id is the shared key with Odoo (see
-// odoo.Employee), so it's the conflict target.
+// Bulk-updates one batch of Odoo employees (at most 50, see
+// employees.syncEmployeesParams) in a single round trip. Update-only, by
+// design (see ADR-0008/ADR-0009): an odoo_employee_id with no matching row
+// — not yet admin-created, or deleted since this batch was fetched from
+// Odoo — is silently ignored rather than inserted, so sync can never
+// (re)create an employee row (which would otherwise need a placeholder,
+// Odoo-blind username). Only CreateEmployee ever inserts a row.
 func (q *Queries) UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams) ([]UpsertEmployeesRow, error) {
-	rows, err := q.db.Query(ctx, upsertEmployees,
-		arg.EmployeeIds,
-		arg.FullNames,
-		arg.Emails,
-		arg.Usernames,
-		arg.Roles,
-	)
+	rows, err := q.db.Query(ctx, upsertEmployees, arg.OdooEmployeeIds, arg.FullNames, arg.Emails)
 	if err != nil {
 		return nil, err
 	}
@@ -900,7 +1210,7 @@ func (q *Queries) UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams
 	var items []UpsertEmployeesRow
 	for rows.Next() {
 		var i UpsertEmployeesRow
-		if err := rows.Scan(&i.ID, &i.EmployeeID, &i.Inserted); err != nil {
+		if err := rows.Scan(&i.ID, &i.OdooEmployeeID, &i.Inserted); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -912,14 +1222,12 @@ func (q *Queries) UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams
 }
 
 const upsertStores = `-- name: UpsertStores :many
-INSERT INTO store (odoo_store_id, store_name, city)
-SELECT unnest($1::varchar[]), unnest($2::varchar[]), unnest($3::varchar[])
+INSERT INTO store (odoo_store_id, store_name)
+SELECT unnest($1::varchar[]), unnest($2::varchar[])
 ON CONFLICT (odoo_store_id) DO UPDATE
 SET store_name = EXCLUDED.store_name,
-    city = EXCLUDED.city,
     updated_at = CASE
         WHEN store.store_name IS DISTINCT FROM EXCLUDED.store_name
-          OR store.city IS DISTINCT FROM EXCLUDED.city
         THEN now()
         ELSE store.updated_at
     END
@@ -929,7 +1237,6 @@ RETURNING id, odoo_store_id, (xmax = 0) AS inserted
 type UpsertStoresParams struct {
 	OdooStoreIds []string `json:"odoo_store_ids"`
 	StoreNames   []string `json:"store_names"`
-	Cities       []string `json:"cities"`
 }
 
 type UpsertStoresRow struct {
@@ -943,12 +1250,14 @@ type UpsertStoresRow struct {
 // ON CONFLICT UPDATE in the same statement: xmax is only set by an UPDATE,
 // so a fresh row's xmax is 0. The store-sync service uses it to report
 // inserted_stores vs updated_stores without a second query. updated_at only
-// advances when store_name/city actually changed — store.updated_at also
+// advances when store_name actually changed — store.updated_at also
 // doubles as the admin-facing optimistic-lock version for the whole store
 // aggregate, so a sync run that finds no real change must not invalidate a
-// concurrently-in-flight admin edit's lock token.
+// concurrently-in-flight admin edit's lock token. city isn't part of this
+// upsert at all: Odoo's pos.shop model has no city field yet, so sync must
+// not touch (and blank out) whatever city a store already has locally.
 func (q *Queries) UpsertStores(ctx context.Context, arg UpsertStoresParams) ([]UpsertStoresRow, error) {
-	rows, err := q.db.Query(ctx, upsertStores, arg.OdooStoreIds, arg.StoreNames, arg.Cities)
+	rows, err := q.db.Query(ctx, upsertStores, arg.OdooStoreIds, arg.StoreNames)
 	if err != nil {
 		return nil, err
 	}

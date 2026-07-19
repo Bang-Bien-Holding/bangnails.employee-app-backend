@@ -42,7 +42,7 @@ func TestEmployeeHandler_GetEmployeeByID(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					GetEmployeeByID(gomock.Any(), int64(1)).
-					Return(repo.Employee{ID: 1, EmployeeID: "M30", FullName: "Nguyen Van A"}, nil)
+					Return(EmployeeDetail{Employee: repo.Employee{ID: 1, OdooEmployeeID: 30, FullName: "Nguyen Van A"}}, nil)
 			},
 			expectedCode: http.StatusOK,
 			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
@@ -69,7 +69,7 @@ func TestEmployeeHandler_GetEmployeeByID(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					GetEmployeeByID(gomock.Any(), int64(999)).
-					Return(repo.Employee{}, ErrEmployeeNotFound)
+					Return(EmployeeDetail{}, ErrEmployeeNotFound)
 			},
 			expectedCode: http.StatusNotFound,
 		},
@@ -79,7 +79,7 @@ func TestEmployeeHandler_GetEmployeeByID(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					GetEmployeeByID(gomock.Any(), int64(1)).
-					Return(repo.Employee{}, errors.New("connection refused"))
+					Return(EmployeeDetail{}, errors.New("connection refused"))
 			},
 			expectedCode: http.StatusInternalServerError,
 		},
@@ -113,11 +113,10 @@ func TestEmployeeHandler_GetEmployeeByID(t *testing.T) {
 
 func TestEmployeeHandler_UpdateEmployee(t *testing.T) {
 	validParams := updateEmployeeParams{
-		EmployeeID: "EMP-001",
-		FullName:   "Nguyen Van A",
-		Email:      "van-a@example.com",
-		Username:   "nguyenvana",
-		Role:       "technician",
+		OdooEmployeeID: 1,
+		FullName:       "Nguyen Van A",
+		Email:          "van-a@example.com",
+		Username:       "nguyenvana",
 	}
 
 	tests := []struct {
@@ -135,7 +134,7 @@ func TestEmployeeHandler_UpdateEmployee(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					UpdateEmployee(gomock.Any(), int64(1), validParams).
-					Return(repo.Employee{ID: 1, FullName: validParams.FullName, Email: validParams.Email, Username: validParams.Username, Role: validParams.Role}, nil)
+					Return(EmployeeDetail{Employee: repo.Employee{ID: 1, FullName: validParams.FullName, Email: validParams.Email, Username: validParams.Username}}, nil)
 			},
 			expectedCode: http.StatusOK,
 			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
@@ -180,7 +179,7 @@ func TestEmployeeHandler_UpdateEmployee(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					UpdateEmployee(gomock.Any(), int64(999), validParams).
-					Return(repo.Employee{}, ErrEmployeeNotFound)
+					Return(EmployeeDetail{}, ErrEmployeeNotFound)
 			},
 			expectedCode: http.StatusNotFound,
 		},
@@ -191,7 +190,7 @@ func TestEmployeeHandler_UpdateEmployee(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					UpdateEmployee(gomock.Any(), int64(1), validParams).
-					Return(repo.Employee{}, ErrEmailAlreadyExists)
+					Return(EmployeeDetail{}, ErrEmailAlreadyExists)
 			},
 			expectedCode: http.StatusConflict,
 		},
@@ -202,7 +201,7 @@ func TestEmployeeHandler_UpdateEmployee(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					UpdateEmployee(gomock.Any(), int64(1), validParams).
-					Return(repo.Employee{}, ErrUsernameAlreadyExists)
+					Return(EmployeeDetail{}, ErrUsernameAlreadyExists)
 			},
 			expectedCode: http.StatusConflict,
 		},
@@ -213,9 +212,31 @@ func TestEmployeeHandler_UpdateEmployee(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					UpdateEmployee(gomock.Any(), int64(1), validParams).
-					Return(repo.Employee{}, ErrEmployeeIDAlreadyExists)
+					Return(EmployeeDetail{}, ErrOdooEmployeeIDAlreadyExists)
 			},
 			expectedCode: http.StatusConflict,
+		},
+		{
+			name:        "TS-HDL-24d: Map unknown position id to 400",
+			idParam:     "1",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					UpdateEmployee(gomock.Any(), int64(1), validParams).
+					Return(EmployeeDetail{}, ErrUnknownPositionID)
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:        "TS-HDL-24e: Map unverified odoo employee id to 400",
+			idParam:     "1",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					UpdateEmployee(gomock.Any(), int64(1), validParams).
+					Return(EmployeeDetail{}, ErrOdooEmployeeIDNotFound)
+			},
+			expectedCode: http.StatusBadRequest,
 		},
 		{
 			name:        "TS-HDL-25: Map internal server error on database failure",
@@ -224,7 +245,7 @@ func TestEmployeeHandler_UpdateEmployee(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					UpdateEmployee(gomock.Any(), int64(1), validParams).
-					Return(repo.Employee{}, errors.New("connection refused"))
+					Return(EmployeeDetail{}, errors.New("connection refused"))
 			},
 			expectedCode: http.StatusInternalServerError,
 		},
@@ -243,7 +264,7 @@ func TestEmployeeHandler_UpdateEmployee(t *testing.T) {
 				withPassword.Password = &pw
 				mockSvc.EXPECT().
 					UpdateEmployee(gomock.Any(), int64(1), withPassword).
-					Return(repo.Employee{ID: 1, FullName: validParams.FullName, Email: validParams.Email, Username: validParams.Username, Role: validParams.Role}, nil)
+					Return(EmployeeDetail{Employee: repo.Employee{ID: 1, FullName: validParams.FullName, Email: validParams.Email, Username: validParams.Username}}, nil)
 			},
 			expectedCode: http.StatusOK,
 		},
@@ -824,9 +845,9 @@ func TestEmployeeHandler_ListEmployees(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					ListEmployees(gomock.Any()).
-					Return([]repo.Employee{
-						{ID: 1, EmployeeID: "M30", FullName: "Nguyen Van A"},
-						{ID: 2, EmployeeID: "M31", FullName: "Tran Thi B"},
+					Return([]EmployeeDetail{
+						{Employee: repo.Employee{ID: 1, OdooEmployeeID: 30, FullName: "Nguyen Van A"}},
+						{Employee: repo.Employee{ID: 2, OdooEmployeeID: 31, FullName: "Tran Thi B"}},
 					}, nil)
 			},
 			expectedCode: http.StatusOK,
@@ -845,7 +866,7 @@ func TestEmployeeHandler_ListEmployees(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					ListEmployees(gomock.Any()).
-					Return([]repo.Employee{}, nil)
+					Return([]EmployeeDetail{}, nil)
 			},
 			expectedCode: http.StatusOK,
 			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
@@ -897,11 +918,10 @@ func TestEmployeeHandler_ListEmployees(t *testing.T) {
 func TestEmployeeHandler_CreateEmployee(t *testing.T) {
 	// Default valid payload from the client
 	validParams := createEmployeeParams{
-		EmployeeID: "M30",
-		FullName:   "Nguyen Van A",
-		Email:      "van-a@example.com",
-		Username:   "nguyenvana",
-		Role:       "technician",
+		OdooEmployeeID: 30,
+		FullName:       "Nguyen Van A",
+		Email:          "van-a@example.com",
+		Username:       "nguyenvana",
 	}
 
 	tests := []struct {
@@ -917,14 +937,13 @@ func TestEmployeeHandler_CreateEmployee(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					CreateEmployee(gomock.Any(), validParams).
-					Return(repo.Employee{
-						ID:         1,
-						EmployeeID: validParams.EmployeeID,
-						FullName:   validParams.FullName,
-						Email:      validParams.Email,
-						Username:   validParams.Username,
-						Role:       validParams.Role,
-					}, nil)
+					Return(EmployeeDetail{Employee: repo.Employee{
+						ID:             1,
+						OdooEmployeeID: validParams.OdooEmployeeID,
+						FullName:       validParams.FullName,
+						Email:          validParams.Email,
+						Username:       validParams.Username,
+					}}, nil)
 			},
 			expectedCode: http.StatusCreated,
 			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
@@ -940,8 +959,8 @@ func TestEmployeeHandler_CreateEmployee(t *testing.T) {
 		{
 			name: "TS-HDL-02: Create employee failed due to missing required fields",
 			bodyPayload: createEmployeeParams{
-				EmployeeID: "", // missing required field
-				Email:      "invalid-email",
+				OdooEmployeeID: 0, // missing required field
+				Email:          "invalid-email",
 			},
 			setupMock: func(mockSvc *MockService) {
 				// Service should NOT be called because validation happens at the Handler layer
@@ -959,7 +978,7 @@ func TestEmployeeHandler_CreateEmployee(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					CreateEmployee(gomock.Any(), validParams).
-					Return(repo.Employee{}, ErrEmailAlreadyExists)
+					Return(EmployeeDetail{}, ErrEmailAlreadyExists)
 			},
 			expectedCode: http.StatusConflict,
 			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
@@ -969,12 +988,12 @@ func TestEmployeeHandler_CreateEmployee(t *testing.T) {
 			},
 		},
 		{
-			name:        "TS-HDL-04b: Map conflict error when employee ID already exists",
+			name:        "TS-HDL-04b: Map conflict error when odoo employee ID already exists",
 			bodyPayload: validParams,
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					CreateEmployee(gomock.Any(), validParams).
-					Return(repo.Employee{}, ErrEmployeeIDAlreadyExists)
+					Return(EmployeeDetail{}, ErrOdooEmployeeIDAlreadyExists)
 			},
 			expectedCode: http.StatusConflict,
 		},
@@ -984,9 +1003,29 @@ func TestEmployeeHandler_CreateEmployee(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					CreateEmployee(gomock.Any(), validParams).
-					Return(repo.Employee{}, ErrUsernameAlreadyExists)
+					Return(EmployeeDetail{}, ErrUsernameAlreadyExists)
 			},
 			expectedCode: http.StatusConflict,
+		},
+		{
+			name:        "TS-HDL-04e: Map unverified odoo employee id to 400",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					CreateEmployee(gomock.Any(), validParams).
+					Return(EmployeeDetail{}, ErrOdooEmployeeIDNotFound)
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:        "TS-HDL-04d: Map unknown position id to 400",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					CreateEmployee(gomock.Any(), validParams).
+					Return(EmployeeDetail{}, ErrUnknownPositionID)
+			},
+			expectedCode: http.StatusBadRequest,
 		},
 		{
 			name:        "TS-HDL-12: Map internal server error on database failure",
@@ -994,7 +1033,7 @@ func TestEmployeeHandler_CreateEmployee(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					CreateEmployee(gomock.Any(), validParams).
-					Return(repo.Employee{}, errors.New("connection refused"))
+					Return(EmployeeDetail{}, errors.New("connection refused"))
 			},
 			expectedCode: http.StatusInternalServerError,
 		},
@@ -1043,15 +1082,15 @@ func TestEmployeeHandler_CreateEmployee(t *testing.T) {
 func TestEmployeeHandler_ResponseOmitsPasswordHash(t *testing.T) {
 	hashedPassword := []byte("$2a$10$abcdefghijklmnopqrstuv")
 	employeeWithHash := repo.Employee{
-		ID:         1,
-		EmployeeID: "M30",
-		FullName:   "Nguyen Van A",
-		Email:      "van-a@example.com",
-		Username:   "nguyenvana",
-		Password:   hashedPassword,
-		Role:       "technician",
-		IsActive:   true,
+		ID:             1,
+		OdooEmployeeID: 30,
+		FullName:       "Nguyen Van A",
+		Email:          "van-a@example.com",
+		Username:       "nguyenvana",
+		Password:       hashedPassword,
+		IsActive:       true,
 	}
+	detailWithHash := EmployeeDetail{Employee: employeeWithHash}
 
 	assertNoPassword := func(t *testing.T, body []byte) {
 		t.Helper()
@@ -1066,8 +1105,8 @@ func TestEmployeeHandler_ResponseOmitsPasswordHash(t *testing.T) {
 	t.Run("CreateEmployee", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockSvc := NewMockService(ctrl)
-		params := createEmployeeParams{EmployeeID: "M30", FullName: "Nguyen Van A", Email: "van-a@example.com", Username: "nguyenvana", Role: "technician"}
-		mockSvc.EXPECT().CreateEmployee(gomock.Any(), params).Return(employeeWithHash, nil)
+		params := createEmployeeParams{OdooEmployeeID: 30, FullName: "Nguyen Van A", Email: "van-a@example.com", Username: "nguyenvana"}
+		mockSvc.EXPECT().CreateEmployee(gomock.Any(), params).Return(detailWithHash, nil)
 
 		h := NewHandler(mockSvc)
 		jsonBody, _ := json.Marshal(params)
@@ -1082,7 +1121,7 @@ func TestEmployeeHandler_ResponseOmitsPasswordHash(t *testing.T) {
 	t.Run("GetEmployeeByID", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockSvc := NewMockService(ctrl)
-		mockSvc.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(employeeWithHash, nil)
+		mockSvc.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(detailWithHash, nil)
 
 		h := NewHandler(mockSvc)
 		req := httptest.NewRequest(http.MethodGet, "/employees/1", nil)
@@ -1097,8 +1136,8 @@ func TestEmployeeHandler_ResponseOmitsPasswordHash(t *testing.T) {
 	t.Run("UpdateEmployee", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockSvc := NewMockService(ctrl)
-		params := updateEmployeeParams{EmployeeID: "M30", FullName: "Nguyen Van A", Email: "van-a@example.com", Username: "nguyenvana", Role: "technician"}
-		mockSvc.EXPECT().UpdateEmployee(gomock.Any(), int64(1), params).Return(employeeWithHash, nil)
+		params := updateEmployeeParams{OdooEmployeeID: 30, FullName: "Nguyen Van A", Email: "van-a@example.com", Username: "nguyenvana"}
+		mockSvc.EXPECT().UpdateEmployee(gomock.Any(), int64(1), params).Return(detailWithHash, nil)
 
 		h := NewHandler(mockSvc)
 		jsonBody, _ := json.Marshal(params)
@@ -1114,7 +1153,7 @@ func TestEmployeeHandler_ResponseOmitsPasswordHash(t *testing.T) {
 	t.Run("ListEmployees", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockSvc := NewMockService(ctrl)
-		mockSvc.EXPECT().ListEmployees(gomock.Any()).Return([]repo.Employee{employeeWithHash}, nil)
+		mockSvc.EXPECT().ListEmployees(gomock.Any()).Return([]EmployeeDetail{detailWithHash}, nil)
 
 		h := NewHandler(mockSvc)
 		req := httptest.NewRequest(http.MethodGet, "/employees", nil)

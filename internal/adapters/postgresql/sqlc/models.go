@@ -12,17 +12,25 @@ import (
 )
 
 type Employee struct {
-	ID         int64              `json:"id"`
-	EmployeeID string             `json:"employee_id"`
-	FullName   string             `json:"full_name"`
-	Email      string             `json:"email"`
-	Username   string             `json:"username"`
-	Password   []byte             `json:"password"`
-	Role       string             `json:"role"`
-	IsActive   bool               `json:"is_active"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
-	StoreID    pgtype.Int8        `json:"store_id"`
+	ID             int64              `json:"id"`
+	OdooEmployeeID int64              `json:"odoo_employee_id"`
+	FullName       string             `json:"full_name"`
+	Email          string             `json:"email"`
+	Username       string             `json:"username"`
+	Password       []byte             `json:"password"`
+	IsActive       bool               `json:"is_active"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type EmployeePosition struct {
+	EmployeeID int64 `json:"employee_id"`
+	PositionID int64 `json:"position_id"`
+}
+
+type EmployeeStore struct {
+	EmployeeID int64 `json:"employee_id"`
+	StoreID    int64 `json:"store_id"`
 }
 
 type PasswordResetToken struct {
@@ -32,6 +40,13 @@ type PasswordResetToken struct {
 	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
 	UsedAt     pgtype.Timestamptz `json:"used_at"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type Position struct {
+	ID        int64              `json:"id"`
+	Name      string             `json:"name"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Store struct {

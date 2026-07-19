@@ -36,8 +36,11 @@ func (h *Handler) CreateEmployee(w http.ResponseWriter, r *http.Request) {
 	employee, err := h.service.CreateEmployee(r.Context(), params)
 	if err != nil {
 		status := http.StatusInternalServerError
-		if errors.Is(err, ErrEmailAlreadyExists) || errors.Is(err, ErrUsernameAlreadyExists) || errors.Is(err, ErrEmployeeIDAlreadyExists) {
+		switch {
+		case errors.Is(err, ErrEmailAlreadyExists), errors.Is(err, ErrUsernameAlreadyExists), errors.Is(err, ErrOdooEmployeeIDAlreadyExists):
 			status = http.StatusConflict
+		case errors.Is(err, ErrUnknownPositionID), errors.Is(err, ErrOdooEmployeeIDNotFound):
+			status = http.StatusBadRequest
 		}
 		http.Error(w, err.Error(), status)
 		return
@@ -90,8 +93,10 @@ func (h *Handler) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, ErrEmployeeNotFound):
 			status = http.StatusNotFound
-		case errors.Is(err, ErrEmailAlreadyExists), errors.Is(err, ErrUsernameAlreadyExists), errors.Is(err, ErrEmployeeIDAlreadyExists):
+		case errors.Is(err, ErrEmailAlreadyExists), errors.Is(err, ErrUsernameAlreadyExists), errors.Is(err, ErrOdooEmployeeIDAlreadyExists):
 			status = http.StatusConflict
+		case errors.Is(err, ErrUnknownPositionID), errors.Is(err, ErrOdooEmployeeIDNotFound):
+			status = http.StatusBadRequest
 		}
 		http.Error(w, err.Error(), status)
 		return
