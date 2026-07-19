@@ -4,74 +4,19 @@ import (
 	"context"
 	"log/slog"
 	"os"
-
-	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/env"
-	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/mailer"
-	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
 	ctx := context.Background()
 
-	cfg := config{
-		addr:        env.GetString("ADDR", ":8080"),
-		frontendURL: env.GetString("APP_URL", "http://localhost:8081"),
-		db: dbConfig{
-			dsn: env.GetString("DATABASE_DSN", "host=localhost user=postgres password=postgres dbname=employees sslmode=disable"),
-		},
-	}
-
-	// Logger
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	slog.SetDefault(logger)
 
-	// Database
-	pool, err := pgxpool.New(ctx, cfg.db.dsn)
+	api, err := buildApplication(ctx, logger)
 	if err != nil {
 		panic(err)
 	}
-	defer pool.Close()
-
-	if err := pool.Ping(ctx); err != nil {
-		panic(err)
-	}
-
-	connConfig := pool.Config().ConnConfig
-	logger.Info("connected to database", "host", connConfig.Host, "port", connConfig.Port, "database", connConfig.Database)
-
-	// Mailer
-	mailClient, err := mailer.New(mailer.Config{
-		Env:         env.GetString("APP_ENV", mailer.EnvDevelopment),
-		FromEmail:   env.GetString("MAIL_FROM_EMAIL", "no-reply@bangnails.local"),
-		FromName:    env.GetString("MAIL_FROM_NAME", "Bangnails"),
-		MailpitAddr: env.GetString("MAILPIT_ADDR", "localhost:1025"),
-		BrevoAPIKey: env.GetString("BREVO_API_KEY", ""),
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	// Odoo
-	odooClient, err := odoo.NewHTTPClient(odoo.Config{
-		BaseURL:      env.GetString("ODOO_BASE_URL", ""),
-		ClientID:     env.GetString("ODOO_CLIENT_ID", ""),
-		ClientSecret: env.GetString("ODOO_CLIENT_SECRET", ""),
-		Username:     env.GetString("ODOO_USERNAME", ""),
-		Password:     env.GetString("ODOO_PASSWORD", ""),
-		Database:     env.GetString("ODOO_DATABASE", ""),
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	api := application{
-		config: cfg,
-		db:     pool,
-		mailer: mailClient,
-		odoo:   odooClient,
-		logger: logger,
-	}
+	defer api.db.Close()
 
 	if err := api.run(api.mount()); err != nil {
 		logger.Error("server has failed to start", "error", err)

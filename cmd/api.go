@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/employees"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/env"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/mailer"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/positions"
@@ -28,6 +30,68 @@ type application struct {
 	mailer mailer.Client
 	odoo   odoo.Client
 	logger *slog.Logger
+}
+
+// buildApplication wires up the real application exactly as main() runs
+// it in production: config from env, a live Postgres pool, the real mailer,
+// and the real Odoo HTTP client. Factored out of main() so the e2e test
+// suite (cmd/e2e_test.go) exercises the identical wiring rather than a
+// hand-rolled approximation of it. The caller owns closing the returned
+// application's db pool.
+func buildApplication(ctx context.Context, logger *slog.Logger) (*application, error) {
+	cfg := config{
+		addr:        env.GetString("ADDR", ":8080"),
+		frontendURL: env.GetString("APP_URL", "http://localhost:8081"),
+		db: dbConfig{
+			dsn: env.GetString("DATABASE_DSN", "host=localhost user=postgres password=postgres dbname=employees sslmode=disable"),
+		},
+	}
+
+	pool, err := pgxpool.New(ctx, cfg.db.dsn)
+	if err != nil {
+		return nil, fmt.Errorf("build application: connect to database: %w", err)
+	}
+
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("build application: ping database: %w", err)
+	}
+
+	connConfig := pool.Config().ConnConfig
+	logger.Info("connected to database", "host", connConfig.Host, "port", connConfig.Port, "database", connConfig.Database)
+
+	mailClient, err := mailer.New(mailer.Config{
+		Env:         env.GetString("APP_ENV", mailer.EnvDevelopment),
+		FromEmail:   env.GetString("MAIL_FROM_EMAIL", "no-reply@bangnails.local"),
+		FromName:    env.GetString("MAIL_FROM_NAME", "Bangnails"),
+		MailpitAddr: env.GetString("MAILPIT_ADDR", "localhost:1025"),
+		BrevoAPIKey: env.GetString("BREVO_API_KEY", ""),
+	})
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("build application: build mailer: %w", err)
+	}
+
+	odooClient, err := odoo.NewHTTPClient(odoo.Config{
+		BaseURL:      env.GetString("ODOO_BASE_URL", ""),
+		ClientID:     env.GetString("ODOO_CLIENT_ID", ""),
+		ClientSecret: env.GetString("ODOO_CLIENT_SECRET", ""),
+		Username:     env.GetString("ODOO_USERNAME", ""),
+		Password:     env.GetString("ODOO_PASSWORD", ""),
+		Database:     env.GetString("ODOO_DATABASE", ""),
+	})
+	if err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("build application: build odoo client: %w", err)
+	}
+
+	return &application{
+		config: cfg,
+		db:     pool,
+		mailer: mailClient,
+		odoo:   odooClient,
+		logger: logger,
+	}, nil
 }
 
 func (app *application) mount() http.Handler {
