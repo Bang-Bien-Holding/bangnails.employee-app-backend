@@ -210,6 +210,20 @@ func TestPositionHandler_UpdatePosition(t *testing.T) {
 			expectedCode: http.StatusBadRequest,
 		},
 		{
+			name:         "Zero id path param returns 400",
+			idParam:      "0",
+			bodyPayload:  validParams,
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:         "Negative id path param returns 400",
+			idParam:      "-1",
+			bodyPayload:  validParams,
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
 			name:        "Unknown id maps ErrPositionNotFound to 404",
 			idParam:     "999",
 			bodyPayload: validParams,
@@ -296,6 +310,18 @@ func TestPositionHandler_DeletePosition(t *testing.T) {
 		{
 			name:         "Non-numeric id path param returns 400",
 			idParam:      "not-a-number",
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:         "Zero id path param returns 400",
+			idParam:      "0",
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:         "Negative id path param returns 400",
+			idParam:      "-1",
 			setupMock:    func(mockSvc *MockService) {},
 			expectedCode: http.StatusBadRequest,
 		},

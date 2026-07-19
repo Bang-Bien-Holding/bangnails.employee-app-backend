@@ -2,6 +2,7 @@ package positions
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -36,30 +37,36 @@ func (h *Handler) CreatePosition(w http.ResponseWriter, r *http.Request) {
 
 	position, err := h.service.CreatePosition(r.Context(), params)
 	if err != nil {
-		status := http.StatusInternalServerError
 		if errors.Is(err, ErrPositionNameAlreadyExists) {
-			status = http.StatusConflict
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
 		}
-		http.Error(w, err.Error(), status)
+		slog.Error("positions: create position", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	json.Write(w, http.StatusCreated, newPositionResponse(position))
+	if err := json.Write(w, http.StatusCreated, newPositionResponse(position)); err != nil {
+		slog.Error("positions: write create position response", "error", err)
+	}
 }
 
 func (h *Handler) ListPositions(w http.ResponseWriter, r *http.Request) {
 	positions, err := h.service.ListPositions(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		slog.Error("positions: list positions", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	json.Write(w, http.StatusOK, newPositionResponses(positions))
+	if err := json.Write(w, http.StatusOK, newPositionResponses(positions)); err != nil {
+		slog.Error("positions: write list positions response", "error", err)
+	}
 }
 
 func (h *Handler) UpdatePosition(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
+	if err != nil || id <= 0 {
 		http.Error(w, "invalid position id", http.StatusBadRequest)
 		return
 	}
@@ -78,33 +85,37 @@ func (h *Handler) UpdatePosition(w http.ResponseWriter, r *http.Request) {
 
 	position, err := h.service.UpdatePosition(r.Context(), id, params)
 	if err != nil {
-		status := http.StatusInternalServerError
 		switch {
 		case errors.Is(err, ErrPositionNotFound):
-			status = http.StatusNotFound
+			http.Error(w, err.Error(), http.StatusNotFound)
 		case errors.Is(err, ErrPositionNameAlreadyExists):
-			status = http.StatusConflict
+			http.Error(w, err.Error(), http.StatusConflict)
+		default:
+			slog.Error("positions: update position", "id", id, "error", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 		}
-		http.Error(w, err.Error(), status)
 		return
 	}
 
-	json.Write(w, http.StatusOK, newPositionResponse(position))
+	if err := json.Write(w, http.StatusOK, newPositionResponse(position)); err != nil {
+		slog.Error("positions: write update position response", "error", err)
+	}
 }
 
 func (h *Handler) DeletePosition(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
+	if err != nil || id <= 0 {
 		http.Error(w, "invalid position id", http.StatusBadRequest)
 		return
 	}
 
 	if err := h.service.DeletePosition(r.Context(), id); err != nil {
-		status := http.StatusInternalServerError
 		if errors.Is(err, ErrPositionNotFound) {
-			status = http.StatusNotFound
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
 		}
-		http.Error(w, err.Error(), status)
+		slog.Error("positions: delete position", "id", id, "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 

@@ -126,7 +126,7 @@ func TestHTTPClient_FetchStores_AuthenticatesAndQueries(t *testing.T) {
 			})
 
 		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 	})
 
@@ -157,7 +157,7 @@ func TestHTTPClient_CachesToken(t *testing.T) {
 			atomic.AddInt32(&calls, 1)
 			writeJSON(w, []map[string]any{})
 		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 	})
 
@@ -199,7 +199,7 @@ func TestHTTPClient_ReAuthenticatesOn401(t *testing.T) {
 			}
 			writeJSON(w, []map[string]any{{"id": float64(1), "name": "Store #1", "city": "Hanoi"}})
 		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 	})
 
@@ -243,7 +243,7 @@ func TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_ParsesID(t *testing.T) {
 				{"id": float64(102), "name": "Tran Thi B", "email": "tran-b@example.com", "x_pos_shop_ids": []any{}},
 			})
 		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 	})
 
@@ -286,7 +286,7 @@ func TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_LargeID(t *testing.T) {
 			// client is the only thing that ever parses this number.
 			fmt.Fprintf(w, `[{"id":%d,"name":"Nguyen Van A","email":"van-a@example.com","x_pos_shop_ids":[]}]`, largeID)
 		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 	})
 
@@ -307,7 +307,7 @@ func TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_LargeID(t *testing.T) {
 // FakeClient's existing determinism for this edge case.
 func TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_EmptyInput(t *testing.T) {
 	client, tokenRequests := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("unexpected request for an empty id list: %s %s", r.Method, r.URL.Path)
+		t.Errorf("unexpected request for an empty id list: %s %s", r.Method, r.URL.Path)
 	})
 
 	employees, err := client.FetchEmployeesByOdooEmployeeIDs(context.Background(), nil)
@@ -328,7 +328,7 @@ func TestHTTPClient_FetchEmployeesByOdooEmployeeIDs_EmptyInput(t *testing.T) {
 func TestHTTPClient_AuthenticateFailure_ReturnsError(t *testing.T) {
 	client, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != tokenEndpoint {
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
@@ -355,7 +355,7 @@ func TestHTTPClient_SearchReadFailure_ReturnsError(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 			_, _ = w.Write([]byte("internal error"))
 		default:
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
 	})
 
