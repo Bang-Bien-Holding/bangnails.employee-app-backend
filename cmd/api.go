@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/employees"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/env"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/mailer"
@@ -142,12 +141,14 @@ func (app *application) mount() http.Handler {
 		// token in the body identifies the employee.
 		r.Post("/activate", employeeHandler.CompleteActivation)
 
-		positionsService := positions.NewService(repo.New(app.db))
+		positionsService := positions.NewService(app.db)
 		positionsHandler := positions.NewHandler(positionsService)
 		r.Post("/positions", positionsHandler.CreatePosition)
 		r.Get("/positions", positionsHandler.ListPositions)
 		r.Put("/positions/{id}", positionsHandler.UpdatePosition)
 		r.Delete("/positions/{id}", positionsHandler.DeletePosition)
+		r.Get("/positions/{id}/employees", positionsHandler.GetPositionEmployees)
+		r.Put("/positions/{id}/employees", positionsHandler.SetPositionEmployees)
 
 		storesService := stores.NewService(app.db, app.odoo)
 		storesHandler := stores.NewHandler(storesService)

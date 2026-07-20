@@ -56,6 +56,22 @@ func (q *Queries) BulkSetStoreWifiWhitelistEnabled(ctx context.Context, arg Bulk
 	return items, nil
 }
 
+const countEmployeesByIDs = `-- name: CountEmployeesByIDs :one
+SELECT count(*) FROM employees
+WHERE id = ANY($1::bigint[])
+`
+
+// Position-first counterpart of CountPositionsByIDs: validates a submitted
+// set of employee ids in one round trip for PUT /positions/{id}/employees
+// (see ADR-0011) — a count short of the distinct submitted ids means at
+// least one id isn't a real employee.
+func (q *Queries) CountEmployeesByIDs(ctx context.Context, ids []int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countEmployeesByIDs, ids)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPositionsByIDs = `-- name: CountPositionsByIDs :one
 SELECT count(*) FROM positions
 WHERE id = ANY($1::bigint[])
@@ -162,6 +178,28 @@ func (q *Queries) DeleteEmployee(ctx context.Context, id int64) (int64, error) {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const deleteEmployeePositionsByPositionIDNotIn = `-- name: DeleteEmployeePositionsByPositionIDNotIn :exec
+DELETE FROM employee_positions
+WHERE position_id = $1
+  AND employee_id != ALL($2::bigint[])
+`
+
+type DeleteEmployeePositionsByPositionIDNotInParams struct {
+	PositionID  int64   `json:"position_id"`
+	EmployeeIds []int64 `json:"employee_ids"`
+}
+
+// Position-first half of the "replace this position's employee set to match
+// employee_ids exactly" diff (paired with InsertPositionEmployees, see
+// ADR-0011) — deletes whatever's currently assigned but no longer
+// submitted. Same "!= ALL(...) over empty is vacuously true" behavior as
+// DeleteEmployeePositionsNotIn: submitting [] clears the position's entire
+// employee set rather than being a no-op.
+func (q *Queries) DeleteEmployeePositionsByPositionIDNotIn(ctx context.Context, arg DeleteEmployeePositionsByPositionIDNotInParams) error {
+	_, err := q.db.Exec(ctx, deleteEmployeePositionsByPositionIDNotIn, arg.PositionID, arg.EmployeeIds)
+	return err
 }
 
 const deleteEmployeePositionsNotIn = `-- name: DeleteEmployeePositionsNotIn :exec
@@ -447,6 +485,26 @@ func (q *Queries) GetEmployeeByUsername(ctx context.Context, username string) (E
 	return i, err
 }
 
+const getPositionByID = `-- name: GetPositionByID :one
+SELECT id, name, created_at, updated_at FROM positions
+WHERE id = $1
+`
+
+// Existence check for the position-first endpoints (ADR-0011) — GET/PUT
+// /positions/{id}/employees both need to 404 on an unknown position id
+// before touching employee_positions.
+func (q *Queries) GetPositionByID(ctx context.Context, id int64) (Position, error) {
+	row := q.db.QueryRow(ctx, getPositionByID, id)
+	var i Position
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getStoreByID = `-- name: GetStoreByID :one
 SELECT id, odoo_store_id, store_name, city, latitude, longitude, radius_meters, wifi_whitelist_enabled, created_at, updated_at FROM store
 WHERE id = $1
@@ -550,6 +608,26 @@ func (q *Queries) InsertEmployeeStores(ctx context.Context, arg InsertEmployeeSt
 	return err
 }
 
+const insertPositionEmployees = `-- name: InsertPositionEmployees :exec
+INSERT INTO employee_positions (employee_id, position_id)
+SELECT unnest($1::bigint[]), $2
+ON CONFLICT (employee_id, position_id) DO NOTHING
+`
+
+type InsertPositionEmployeesParams struct {
+	EmployeeIds []int64 `json:"employee_ids"`
+	PositionID  int64   `json:"position_id"`
+}
+
+// Position-first half of the replace diff: inserts whatever's newly
+// submitted. ON CONFLICT DO NOTHING is what makes assignments already
+// present in both the old and new set stay untouched rather than being
+// deleted and reinserted.
+func (q *Queries) InsertPositionEmployees(ctx context.Context, arg InsertPositionEmployeesParams) error {
+	_, err := q.db.Exec(ctx, insertPositionEmployees, arg.EmployeeIds, arg.PositionID)
+	return err
+}
+
 const insertStoreWifiIPs = `-- name: InsertStoreWifiIPs :exec
 INSERT INTO store_wifi_ip (store_id, ip_address)
 SELECT $1, unnest($2::inet[])
@@ -607,6 +685,34 @@ func (q *Queries) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int6
 			return nil, err
 		}
 		items = append(items, odoo_employee_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEmployeeIDsByPositionID = `-- name: ListEmployeeIDsByPositionID :many
+SELECT employee_id FROM employee_positions
+WHERE position_id = $1
+ORDER BY employee_id
+`
+
+// Position-first counterpart of ListPositionIDsByEmployeeID, for
+// GET /positions/{id}/employees (see ADR-0011).
+func (q *Queries) ListEmployeeIDsByPositionID(ctx context.Context, positionID int64) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listEmployeeIDsByPositionID, positionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var employee_id int64
+		if err := rows.Scan(&employee_id); err != nil {
+			return nil, err
+		}
+		items = append(items, employee_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

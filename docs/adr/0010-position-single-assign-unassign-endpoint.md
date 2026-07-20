@@ -23,3 +23,5 @@ Building the endpoint ahead of that need would add API surface, a second writer 
 - `PUT /v1/employees/{id}` (and `POST /v1/employees`) remain the only way to change an Employee's Position membership — full-set replace via `positionIds`, unchanged from ADR-0008.
 - If a Position-first screen or integration becomes concrete later, revisit issue #12 — the implementation (single-row conflict-safe insert/delete `repo.Querier` methods, existence-check-then-write service logic, `positions`-package ownership) is a known-working design; it just isn't needed yet.
 - No change to `CONTEXT.md`'s Position entry — it continues to document only the one assignment mechanism that actually exists.
+
+**Update:** a Position-first screen did become concrete — see ADR-0011, which answers the "is this needed yet" question with a yes but picks whole-set replace over this ADR's single-row design (the screen submits a full desired Employee set per save, not incremental per-row edits). This ADR's rejection of the single-row design specifically still stands.

@@ -19,6 +19,11 @@ var ErrPositionNotFound = errors.New("position not found")
 // surface as a clear client error, not a raw database constraint failure).
 var ErrPositionNameAlreadyExists = errors.New("position name already exists")
 
+// ErrUnknownEmployeeID is returned by SetPositionEmployees when employeeIds
+// references an id that isn't a real employee — a clear client error, not a
+// raw FK-violation 500 (see ADR-0011, mirroring employees.ErrUnknownPositionID).
+var ErrUnknownEmployeeID = errors.New("unknown employee id")
+
 // createPositionParams is the body for POST /v1/positions.
 type createPositionParams struct {
 	Name string `json:"name" validate:"required"`
@@ -55,9 +60,34 @@ func newPositionResponses(positions []repo.Position) []positionResponse {
 	return responses
 }
 
+// setPositionEmployeesParams is the body for PUT /v1/positions/{id}/employees
+// (ADR-0011) — always a whole-set replace via diff, same always-full-replace
+// convention as createEmployeeParams.PositionIDs: a nil/empty EmployeeIDs
+// both mean "no employees assigned".
+type setPositionEmployeesParams struct {
+	EmployeeIDs []int64 `json:"employeeIds" validate:"omitempty,unique,dive,required"`
+}
+
+// positionEmployeesResponse is the body for both GET and PUT
+// /v1/positions/{id}/employees (ADR-0011) — EmployeeIDs is always non-nil
+// (empty, not null, for a position with no employees), same convention as
+// EmployeeDetail.PositionIDs.
+type positionEmployeesResponse struct {
+	EmployeeIDs []int64 `json:"employee_ids"`
+}
+
+func newPositionEmployeesResponse(employeeIDs []int64) positionEmployeesResponse {
+	if employeeIDs == nil {
+		employeeIDs = []int64{}
+	}
+	return positionEmployeesResponse{EmployeeIDs: employeeIDs}
+}
+
 type Service interface {
 	CreatePosition(ctx context.Context, params createPositionParams) (repo.Position, error)
 	ListPositions(ctx context.Context) ([]repo.Position, error)
 	UpdatePosition(ctx context.Context, id int64, params updatePositionParams) (repo.Position, error)
 	DeletePosition(ctx context.Context, id int64) error
+	GetPositionEmployees(ctx context.Context, id int64) ([]int64, error)
+	SetPositionEmployees(ctx context.Context, id int64, params setPositionEmployeesParams) ([]int64, error)
 }

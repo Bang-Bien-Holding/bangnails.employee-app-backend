@@ -7,6 +7,7 @@ import (
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // uniqueViolationCode is Postgres' SQLSTATE for a unique_violation error.
@@ -18,11 +19,32 @@ const uniqueViolationCode = "23505"
 const positionsNameKeyConstraint = "positions_name_key"
 
 type service struct {
+	// repo is a plain, non-transactional Querier for reads/writes that don't
+	// need transaction scoping — everything except SetPositionEmployees'
+	// delete+insert diff uses this rather than withTx.
 	repo repo.Querier
+	// withTx wraps fn in a transaction-scoped repo.Querier — a real
+	// pool-backed implementation is installed by NewService; tests replace
+	// it with a stub that calls fn against a mocked Querier directly.
+	withTx func(ctx context.Context, fn func(repo.Querier) error) error
 }
 
-func NewService(r repo.Querier) Service {
-	return &service{repo: r}
+func NewService(pool *pgxpool.Pool) Service {
+	return &service{
+		repo: repo.New(pool),
+		withTx: func(ctx context.Context, fn func(repo.Querier) error) error {
+			tx, err := pool.Begin(ctx)
+			if err != nil {
+				return err
+			}
+			defer tx.Rollback(ctx)
+
+			if err := fn(repo.New(tx)); err != nil {
+				return err
+			}
+			return tx.Commit(ctx)
+		},
+	}
 }
 
 func (s *service) CreatePosition(ctx context.Context, params createPositionParams) (repo.Position, error) {
@@ -58,6 +80,89 @@ func (s *service) DeletePosition(ctx context.Context, id int64) error {
 	}
 	if rowsAffected == 0 {
 		return ErrPositionNotFound
+	}
+	return nil
+}
+
+func (s *service) GetPositionEmployees(ctx context.Context, id int64) ([]int64, error) {
+	if _, err := s.repo.GetPositionByID(ctx, id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrPositionNotFound
+		}
+		return nil, err
+	}
+
+	employeeIDs, err := s.repo.ListEmployeeIDsByPositionID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return employeeIDs, nil
+}
+
+// SetPositionEmployees replaces a position's whole employee set via diff
+// (delete what's no longer submitted, insert what's newly submitted) inside
+// one transaction, so a failing insert rolls back the delete too (see
+// ADR-0011). It calls repo.Querier directly rather than employees.Service —
+// a deliberate second writer of employee_positions, since a position-first
+// diff (given a position, compute which employees to add/remove) is a
+// different operation from employees.Service's employee-first diff, not the
+// same operation duplicated.
+func (s *service) SetPositionEmployees(ctx context.Context, id int64, params setPositionEmployeesParams) ([]int64, error) {
+	employeeIDs := params.EmployeeIDs
+	if employeeIDs == nil {
+		employeeIDs = []int64{}
+	}
+
+	err := s.withTx(ctx, func(q repo.Querier) error {
+		if _, err := q.GetPositionByID(ctx, id); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrPositionNotFound
+			}
+			return err
+		}
+
+		if err := validateEmployeeIDs(ctx, q, employeeIDs); err != nil {
+			return err
+		}
+
+		if err := q.DeleteEmployeePositionsByPositionIDNotIn(ctx, repo.DeleteEmployeePositionsByPositionIDNotInParams{
+			PositionID:  id,
+			EmployeeIds: employeeIDs,
+		}); err != nil {
+			return err
+		}
+		if len(employeeIDs) > 0 {
+			if err := q.InsertPositionEmployees(ctx, repo.InsertPositionEmployeesParams{
+				PositionID:  id,
+				EmployeeIds: employeeIDs,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return employeeIDs, nil
+}
+
+// validateEmployeeIDs rejects a submitted employee-id set containing an id
+// that isn't a real employee, via one round trip comparing CountEmployeesByIDs
+// against the distinct submitted count (see ADR-0011, mirroring
+// employees.validatePositionIDs). An empty/nil ids is always valid (a
+// position with no employees), so it short-circuits before the query.
+func validateEmployeeIDs(ctx context.Context, q repo.Querier, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	count, err := q.CountEmployeesByIDs(ctx, ids)
+	if err != nil {
+		return err
+	}
+	if count != int64(len(ids)) {
+		return ErrUnknownEmployeeID
 	}
 	return nil
 }

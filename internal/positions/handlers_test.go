@@ -354,3 +354,199 @@ func TestPositionHandler_DeletePosition(t *testing.T) {
 		})
 	}
 }
+
+func TestPositionHandler_GetPositionEmployees(t *testing.T) {
+	tests := []struct {
+		name          string
+		idParam       string
+		setupMock     func(mockSvc *MockService)
+		expectedCode  int
+		checkResponse func(t *testing.T, rec *httptest.ResponseRecorder)
+	}{
+		{
+			name:    "List employees assigned to an existing position",
+			idParam: "1",
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().GetPositionEmployees(gomock.Any(), int64(1)).Return([]int64{10, 20}, nil)
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var got positionEmployeesResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal response body: %v", err)
+				}
+				if len(got.EmployeeIDs) != 2 {
+					t.Errorf("expected 2 employee ids, got %v", got.EmployeeIDs)
+				}
+			},
+		},
+		{
+			name:         "Non-numeric id path param returns 400",
+			idParam:      "not-a-number",
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:         "Zero id path param returns 400",
+			idParam:      "0",
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "Unknown id maps ErrPositionNotFound to 404",
+			idParam: "999",
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().GetPositionEmployees(gomock.Any(), int64(999)).Return(nil, ErrPositionNotFound)
+			},
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name:    "Database error maps to 500",
+			idParam: "1",
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().GetPositionEmployees(gomock.Any(), int64(1)).Return(nil, errors.New("connection refused"))
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockService(ctrl)
+			tc.setupMock(mockSvc)
+
+			h := NewHandler(mockSvc)
+			req := httptest.NewRequest(http.MethodGet, "/positions/"+tc.idParam+"/employees", nil)
+			req = withURLParam(req, "id", tc.idParam)
+			rec := httptest.NewRecorder()
+
+			h.GetPositionEmployees(rec, req)
+
+			if rec.Code != tc.expectedCode {
+				t.Errorf("expected status %d, got %d", tc.expectedCode, rec.Code)
+			}
+			if tc.checkResponse != nil {
+				tc.checkResponse(t, rec)
+			}
+		})
+	}
+}
+
+func TestPositionHandler_SetPositionEmployees(t *testing.T) {
+	validParams := setPositionEmployeesParams{EmployeeIDs: []int64{10, 20}}
+
+	tests := []struct {
+		name          string
+		idParam       string
+		bodyPayload   any
+		setupMock     func(mockSvc *MockService)
+		expectedCode  int
+		checkResponse func(t *testing.T, rec *httptest.ResponseRecorder)
+	}{
+		{
+			name:        "Replace the position's employee set successfully",
+			idParam:     "1",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					SetPositionEmployees(gomock.Any(), int64(1), validParams).
+					Return([]int64{10, 20}, nil)
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var got positionEmployeesResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+					t.Fatalf("failed to unmarshal response body: %v", err)
+				}
+				if len(got.EmployeeIDs) != 2 {
+					t.Errorf("expected 2 employee ids, got %v", got.EmployeeIDs)
+				}
+			},
+		},
+		{
+			name:        "Empty employeeIds clears the assignment",
+			idParam:     "1",
+			bodyPayload: setPositionEmployeesParams{EmployeeIDs: []int64{}},
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					SetPositionEmployees(gomock.Any(), int64(1), setPositionEmployeesParams{EmployeeIDs: []int64{}}).
+					Return([]int64{}, nil)
+			},
+			expectedCode: http.StatusOK,
+		},
+		{
+			name:         "Non-numeric id path param returns 400",
+			idParam:      "not-a-number",
+			bodyPayload:  validParams,
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:         "Duplicate ids in body fail validation",
+			idParam:      "1",
+			bodyPayload:  setPositionEmployeesParams{EmployeeIDs: []int64{10, 10}},
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:        "Unknown position id maps ErrPositionNotFound to 404",
+			idParam:     "999",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					SetPositionEmployees(gomock.Any(), int64(999), validParams).
+					Return(nil, ErrPositionNotFound)
+			},
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name:        "Unknown employee id maps ErrUnknownEmployeeID to 400",
+			idParam:     "1",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					SetPositionEmployees(gomock.Any(), int64(1), validParams).
+					Return(nil, ErrUnknownEmployeeID)
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:        "Database error maps to 500",
+			idParam:     "1",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().
+					SetPositionEmployees(gomock.Any(), int64(1), validParams).
+					Return(nil, errors.New("connection refused"))
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockService(ctrl)
+			tc.setupMock(mockSvc)
+
+			h := NewHandler(mockSvc)
+			jsonBody, err := json.Marshal(tc.bodyPayload)
+			if err != nil {
+				t.Fatalf("failed to marshal request body: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPut, "/positions/"+tc.idParam+"/employees", bytes.NewReader(jsonBody))
+			req = withURLParam(req, "id", tc.idParam)
+			rec := httptest.NewRecorder()
+
+			h.SetPositionEmployees(rec, req)
+
+			if rec.Code != tc.expectedCode {
+				t.Errorf("expected status %d, got %d", tc.expectedCode, rec.Code)
+			}
+			if tc.checkResponse != nil {
+				tc.checkResponse(t, rec)
+			}
+		})
+	}
+}

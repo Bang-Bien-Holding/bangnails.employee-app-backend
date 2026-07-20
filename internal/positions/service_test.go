@@ -12,6 +12,17 @@ import (
 	"go.uber.org/mock/gomock"
 )
 
+// newTestService builds a service whose withTx calls fn directly against q,
+// bypassing real transaction plumbing (mirrors stores/service_test.go).
+func newTestService(q repo.Querier) *service {
+	return &service{
+		repo: q,
+		withTx: func(ctx context.Context, fn func(repo.Querier) error) error {
+			return fn(q)
+		},
+	}
+}
+
 func TestPositionService_CreatePosition(t *testing.T) {
 	ctx := context.Background()
 
@@ -66,7 +77,7 @@ func TestPositionService_CreatePosition(t *testing.T) {
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo)
+			svc := newTestService(mockRepo)
 			position, err := svc.CreatePosition(ctx, tc.inputParams)
 
 			if tc.expectedErr != nil {
@@ -129,7 +140,7 @@ func TestPositionService_ListPositions(t *testing.T) {
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo)
+			svc := newTestService(mockRepo)
 			got, err := svc.ListPositions(ctx)
 
 			if tc.expectedErr != nil {
@@ -205,7 +216,7 @@ func TestPositionService_UpdatePosition(t *testing.T) {
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo)
+			svc := newTestService(mockRepo)
 			_, err := svc.UpdatePosition(ctx, 1, updatePositionParams{Name: "Senior Technician"})
 
 			if tc.expectedErr != nil {
@@ -216,6 +227,191 @@ func TestPositionService_UpdatePosition(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestPositionService_GetPositionEmployees(t *testing.T) {
+	ctx := context.Background()
+	dbErr := errors.New("connection refused")
+
+	tests := []struct {
+		name        string
+		inputID     int64
+		setupMock   func(mockRepo *mocks.MockQuerier)
+		expectedErr error
+		expectedIDs []int64
+	}{
+		{
+			name:    "TC-GET-01: List employees assigned to an existing position",
+			inputID: 1,
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(1)).Return(repo.Position{ID: 1, Name: "Technician"}, nil)
+				mockRepo.EXPECT().ListEmployeeIDsByPositionID(gomock.Any(), int64(1)).Return([]int64{10, 20}, nil)
+			},
+			expectedIDs: []int64{10, 20},
+		},
+		{
+			name:    "TC-GET-02: Unknown position id translates no-rows to ErrPositionNotFound",
+			inputID: 999,
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(999)).Return(repo.Position{}, pgx.ErrNoRows)
+			},
+			expectedErr: ErrPositionNotFound,
+		},
+		{
+			name:    "TC-GET-03: Fails on database error fetching the position",
+			inputID: 1,
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(1)).Return(repo.Position{}, dbErr)
+			},
+			expectedErr: dbErr,
+		},
+		{
+			name:    "TC-GET-04: Fails on database error listing employee ids",
+			inputID: 1,
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(1)).Return(repo.Position{ID: 1, Name: "Technician"}, nil)
+				mockRepo.EXPECT().ListEmployeeIDsByPositionID(gomock.Any(), int64(1)).Return(nil, dbErr)
+			},
+			expectedErr: dbErr,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockRepo := mocks.NewMockQuerier(ctrl)
+			tc.setupMock(mockRepo)
+
+			svc := newTestService(mockRepo)
+			got, err := svc.GetPositionEmployees(ctx, tc.inputID)
+
+			if tc.expectedErr != nil {
+				if !errors.Is(err, tc.expectedErr) {
+					t.Errorf("expected error %v, got %v", tc.expectedErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if len(got) != len(tc.expectedIDs) {
+				t.Fatalf("expected %v, got %v", tc.expectedIDs, got)
+			}
+			for i, id := range tc.expectedIDs {
+				if got[i] != id {
+					t.Errorf("expected %v, got %v", tc.expectedIDs, got)
+				}
+			}
+		})
+	}
+}
+
+func TestPositionService_SetPositionEmployees(t *testing.T) {
+	ctx := context.Background()
+	dbErr := errors.New("connection refused")
+
+	tests := []struct {
+		name        string
+		inputID     int64
+		inputParams setPositionEmployeesParams
+		setupMock   func(mockRepo *mocks.MockQuerier)
+		expectedErr error
+		expectedIDs []int64
+	}{
+		{
+			name:        "TC-SET-01: Replaces the position's employee set",
+			inputID:     1,
+			inputParams: setPositionEmployeesParams{EmployeeIDs: []int64{10, 20}},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(1)).Return(repo.Position{ID: 1, Name: "Technician"}, nil)
+				mockRepo.EXPECT().CountEmployeesByIDs(gomock.Any(), []int64{10, 20}).Return(int64(2), nil)
+				mockRepo.EXPECT().DeleteEmployeePositionsByPositionIDNotIn(gomock.Any(), repo.DeleteEmployeePositionsByPositionIDNotInParams{
+					PositionID:  1,
+					EmployeeIds: []int64{10, 20},
+				}).Return(nil)
+				mockRepo.EXPECT().InsertPositionEmployees(gomock.Any(), repo.InsertPositionEmployeesParams{
+					PositionID:  1,
+					EmployeeIds: []int64{10, 20},
+				}).Return(nil)
+			},
+			expectedIDs: []int64{10, 20},
+		},
+		{
+			name:        "TC-SET-02: Empty set clears every assignment without inserting",
+			inputID:     1,
+			inputParams: setPositionEmployeesParams{EmployeeIDs: nil},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(1)).Return(repo.Position{ID: 1, Name: "Technician"}, nil)
+				mockRepo.EXPECT().DeleteEmployeePositionsByPositionIDNotIn(gomock.Any(), repo.DeleteEmployeePositionsByPositionIDNotInParams{
+					PositionID:  1,
+					EmployeeIds: []int64{},
+				}).Return(nil)
+			},
+			expectedIDs: []int64{},
+		},
+		{
+			name:        "TC-SET-03: Unknown position id translates no-rows to ErrPositionNotFound",
+			inputID:     999,
+			inputParams: setPositionEmployeesParams{EmployeeIDs: []int64{10}},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(999)).Return(repo.Position{}, pgx.ErrNoRows)
+			},
+			expectedErr: ErrPositionNotFound,
+		},
+		{
+			name:        "TC-SET-04: An id not referencing a real employee translates to ErrUnknownEmployeeID",
+			inputID:     1,
+			inputParams: setPositionEmployeesParams{EmployeeIDs: []int64{10, 999}},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(1)).Return(repo.Position{ID: 1, Name: "Technician"}, nil)
+				mockRepo.EXPECT().CountEmployeesByIDs(gomock.Any(), []int64{10, 999}).Return(int64(1), nil)
+			},
+			expectedErr: ErrUnknownEmployeeID,
+		},
+		{
+			name:        "TC-SET-05: Fails on database error deleting stale assignments",
+			inputID:     1,
+			inputParams: setPositionEmployeesParams{EmployeeIDs: []int64{10}},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(1)).Return(repo.Position{ID: 1, Name: "Technician"}, nil)
+				mockRepo.EXPECT().CountEmployeesByIDs(gomock.Any(), []int64{10}).Return(int64(1), nil)
+				mockRepo.EXPECT().DeleteEmployeePositionsByPositionIDNotIn(gomock.Any(), repo.DeleteEmployeePositionsByPositionIDNotInParams{
+					PositionID:  1,
+					EmployeeIds: []int64{10},
+				}).Return(dbErr)
+			},
+			expectedErr: dbErr,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockRepo := mocks.NewMockQuerier(ctrl)
+			tc.setupMock(mockRepo)
+
+			svc := newTestService(mockRepo)
+			got, err := svc.SetPositionEmployees(ctx, tc.inputID, tc.inputParams)
+
+			if tc.expectedErr != nil {
+				if !errors.Is(err, tc.expectedErr) {
+					t.Errorf("expected error %v, got %v", tc.expectedErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if len(got) != len(tc.expectedIDs) {
+				t.Fatalf("expected %v, got %v", tc.expectedIDs, got)
+			}
+			for i, id := range tc.expectedIDs {
+				if got[i] != id {
+					t.Errorf("expected %v, got %v", tc.expectedIDs, got)
+				}
 			}
 		})
 	}
@@ -262,7 +458,7 @@ func TestPositionService_DeletePosition(t *testing.T) {
 			mockRepo := mocks.NewMockQuerier(ctrl)
 			tc.setupMock(mockRepo)
 
-			svc := NewService(mockRepo)
+			svc := newTestService(mockRepo)
 			err := svc.DeletePosition(ctx, tc.inputID)
 
 			if tc.expectedErr != nil {
