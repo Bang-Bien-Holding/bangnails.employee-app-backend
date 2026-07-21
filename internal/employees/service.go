@@ -17,15 +17,12 @@ import (
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/env"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/mailer"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/pgerr"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 )
-
-// uniqueViolationCode is Postgres' SQLSTATE for a unique_violation error.
-const uniqueViolationCode = "23505"
 
 // Constraint names come from internal/adapters/postgresql/migrations/00001_create_employees.sql
 // (Postgres' default naming: <table>_<column>_key); employees_odoo_employee_id_key
@@ -36,6 +33,11 @@ const (
 	employeesOdooEmployeeIDKeyConstraint = "employees_odoo_employee_id_key"
 	employeesUsernameKeyConstraint       = "employees_username_key"
 )
+
+// employeePositionsPositionIDFkeyConstraint comes from
+// internal/adapters/postgresql/migrations/00011_create_employee_positions.sql
+// (Postgres' default naming: <table>_<column>_fkey).
+const employeePositionsPositionIDFkeyConstraint = "employee_positions_position_id_fkey"
 
 // activationTokenTTL matches the existing password-reset scope (30 minutes),
 // per feat-007's explicit choice over a longer first-activation-specific TTL.
@@ -151,7 +153,7 @@ func (s *service) CreateEmployee(ctx context.Context, params createEmployeeParam
 				EmployeeID:  employee.ID,
 				PositionIds: params.PositionIDs,
 			}); err != nil {
-				return err
+				return translateInsertEmployeePositionsForeignKeyViolation(err)
 			}
 		}
 
@@ -284,7 +286,7 @@ func (s *service) UpdateEmployee(ctx context.Context, id int64, params updateEmp
 				EmployeeID:  id,
 				PositionIds: positionIDs,
 			}); err != nil {
-				return err
+				return translateInsertEmployeePositionsForeignKeyViolation(err)
 			}
 		}
 
@@ -783,19 +785,21 @@ func hashToken(token string) string {
 // errors to the package's sentinel conflict errors, leaving every other
 // error untouched. Shared by CreateEmployee and UpdateEmployee.
 func translateEmployeeUniqueViolation(err error) error {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != uniqueViolationCode {
-		return err
-	}
+	return pgerr.Translate(err, pgerr.UniqueViolation, map[string]error{
+		employeesEmailKeyConstraint:          ErrEmailAlreadyExists,
+		employeesOdooEmployeeIDKeyConstraint: ErrOdooEmployeeIDAlreadyExists,
+		employeesUsernameKeyConstraint:       ErrUsernameAlreadyExists,
+	})
+}
 
-	switch pgErr.ConstraintName {
-	case employeesEmailKeyConstraint:
-		return ErrEmailAlreadyExists
-	case employeesOdooEmployeeIDKeyConstraint:
-		return ErrOdooEmployeeIDAlreadyExists
-	case employeesUsernameKeyConstraint:
-		return ErrUsernameAlreadyExists
-	default:
-		return err
-	}
+// translateInsertEmployeePositionsForeignKeyViolation maps a Postgres
+// foreign-key violation on employee_positions.position_id to
+// ErrUnknownPositionID, out of the narrow race window between
+// validatePositionIDs' pre-check and this insert, leaving every other error
+// untouched. employee_id can't violate here — the employee row was just
+// written earlier in the same transaction.
+func translateInsertEmployeePositionsForeignKeyViolation(err error) error {
+	return pgerr.Translate(err, pgerr.ForeignKeyViolation, map[string]error{
+		employeePositionsPositionIDFkeyConstraint: ErrUnknownPositionID,
+	})
 }

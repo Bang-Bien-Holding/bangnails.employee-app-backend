@@ -5,17 +5,10 @@ import (
 	"errors"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/pgerr"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
-
-// uniqueViolationCode is Postgres' SQLSTATE for a unique_violation error.
-const uniqueViolationCode = "23505"
-
-// foreignKeyViolationCode is Postgres' SQLSTATE for a foreign_key_violation
-// error.
-const foreignKeyViolationCode = "23503"
 
 // positionsNameKeyConstraint comes from
 // internal/adapters/postgresql/migrations/00010_create_positions.sql
@@ -256,14 +249,9 @@ func validateEmployeeIDs(ctx context.Context, q repo.Querier, ids []int64) error
 // positions.name to ErrPositionNameAlreadyExists, leaving every other error
 // untouched. Shared by CreatePosition and UpdatePosition.
 func translatePositionUniqueViolation(err error) error {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != uniqueViolationCode {
-		return err
-	}
-	if pgErr.ConstraintName == positionsNameKeyConstraint {
-		return ErrPositionNameAlreadyExists
-	}
-	return err
+	return pgerr.Translate(err, pgerr.UniqueViolation, map[string]error{
+		positionsNameKeyConstraint: ErrPositionNameAlreadyExists,
+	})
 }
 
 // translateInsertPositionEmployeesForeignKeyViolation maps a Postgres
@@ -273,16 +261,8 @@ func translatePositionUniqueViolation(err error) error {
 // SetPositionEmployees' pre-checks and this insert, leaving every other
 // error untouched.
 func translateInsertPositionEmployeesForeignKeyViolation(err error) error {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) || pgErr.Code != foreignKeyViolationCode {
-		return err
-	}
-	switch pgErr.ConstraintName {
-	case employeePositionsPositionIDFkeyConstraint:
-		return ErrPositionNotFound
-	case employeePositionsEmployeeIDFkeyConstraint:
-		return ErrUnknownEmployeeID
-	default:
-		return err
-	}
+	return pgerr.Translate(err, pgerr.ForeignKeyViolation, map[string]error{
+		employeePositionsPositionIDFkeyConstraint: ErrPositionNotFound,
+		employeePositionsEmployeeIDFkeyConstraint: ErrUnknownEmployeeID,
+	})
 }
