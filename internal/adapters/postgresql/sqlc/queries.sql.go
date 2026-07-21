@@ -258,6 +258,24 @@ func (q *Queries) DeletePosition(ctx context.Context, id int64) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const deletePositions = `-- name: DeletePositions :execrows
+DELETE FROM positions
+WHERE id = ANY($1::bigint[])
+`
+
+// Bulk-delete counterpart of DeletePosition (see issue #13) — deletes every
+// submitted id in one statement. BulkDeletePositions pre-checks all ids
+// exist via CountPositionsByIDs inside the same transaction, so this is
+// only the "delete" half of an all-or-nothing count-check-then-delete, not
+// an existence check itself.
+func (q *Queries) DeletePositions(ctx context.Context, ids []int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePositions, ids)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteStoreWifiIPsByValue = `-- name: DeleteStoreWifiIPsByValue :many
 DELETE FROM store_wifi_ip
 WHERE store_id = $1
@@ -692,34 +710,6 @@ func (q *Queries) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int6
 	return items, nil
 }
 
-const listEmployeeIDsByPositionID = `-- name: ListEmployeeIDsByPositionID :many
-SELECT employee_id FROM employee_positions
-WHERE position_id = $1
-ORDER BY employee_id
-`
-
-// Position-first counterpart of ListPositionIDsByEmployeeID, for
-// GET /positions/{id}/employees (see ADR-0011).
-func (q *Queries) ListEmployeeIDsByPositionID(ctx context.Context, positionID int64) ([]int64, error) {
-	rows, err := q.db.Query(ctx, listEmployeeIDsByPositionID, positionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []int64
-	for rows.Next() {
-		var employee_id int64
-		if err := rows.Scan(&employee_id); err != nil {
-			return nil, err
-		}
-		items = append(items, employee_id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listEmployees = `-- name: ListEmployees :many
 SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at FROM employees
 ORDER BY id
@@ -727,6 +717,47 @@ ORDER BY id
 
 func (q *Queries) ListEmployees(ctx context.Context) ([]Employee, error) {
 	rows, err := q.db.Query(ctx, listEmployees)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Employee
+	for rows.Next() {
+		var i Employee
+		if err := rows.Scan(
+			&i.ID,
+			&i.OdooEmployeeID,
+			&i.FullName,
+			&i.Email,
+			&i.Username,
+			&i.Password,
+			&i.IsActive,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEmployeesByPositionID = `-- name: ListEmployeesByPositionID :many
+SELECT e.id, e.odoo_employee_id, e.full_name, e.email, e.username, e.password, e.is_active, e.created_at, e.updated_at FROM employees e
+JOIN employee_positions ep ON ep.employee_id = e.id
+WHERE ep.position_id = $1
+ORDER BY e.id
+`
+
+// Position-first counterpart of ListPositionIDsByEmployeeID, for
+// GET/PUT /positions/{id}/employees — returns full employee rows (not just
+// ids) so the position package can build the same employeeResponse shape
+// GET /employees already returns (see issue #13).
+func (q *Queries) ListEmployeesByPositionID(ctx context.Context, positionID int64) ([]Employee, error) {
+	rows, err := q.db.Query(ctx, listEmployeesByPositionID, positionID)
 	if err != nil {
 		return nil, err
 	}

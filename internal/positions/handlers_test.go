@@ -367,16 +367,19 @@ func TestPositionHandler_GetPositionEmployees(t *testing.T) {
 			name:    "List employees assigned to an existing position",
 			idParam: "1",
 			setupMock: func(mockSvc *MockService) {
-				mockSvc.EXPECT().GetPositionEmployees(gomock.Any(), int64(1)).Return([]int64{10, 20}, nil)
+				mockSvc.EXPECT().GetPositionEmployees(gomock.Any(), int64(1)).Return([]EmployeeDetail{
+					{Employee: repo.Employee{ID: 10, FullName: "Alice"}, PositionIDs: []int64{}, StoreIDs: []int64{}},
+					{Employee: repo.Employee{ID: 20, FullName: "Bob"}, PositionIDs: []int64{}, StoreIDs: []int64{}},
+				}, nil)
 			},
 			expectedCode: http.StatusOK,
 			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
-				var got positionEmployeesResponse
+				var got []employeeResponse
 				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 					t.Fatalf("failed to unmarshal response body: %v", err)
 				}
-				if len(got.EmployeeIDs) != 2 {
-					t.Errorf("expected 2 employee ids, got %v", got.EmployeeIDs)
+				if len(got) != 2 {
+					t.Errorf("expected 2 employees, got %v", got)
 				}
 			},
 		},
@@ -440,10 +443,18 @@ func TestPositionHandler_SetPositionEmployees(t *testing.T) {
 		name          string
 		idParam       string
 		bodyPayload   any
+		rawBody       []byte // when set, used verbatim instead of marshaling bodyPayload
 		setupMock     func(mockSvc *MockService)
 		expectedCode  int
 		checkResponse func(t *testing.T, rec *httptest.ResponseRecorder)
 	}{
+		{
+			name:         "Malformed JSON body returns 400",
+			idParam:      "1",
+			rawBody:      []byte(`{"employeeIds": [10,`),
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
 		{
 			name:        "Replace the position's employee set successfully",
 			idParam:     "1",
@@ -451,16 +462,19 @@ func TestPositionHandler_SetPositionEmployees(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					SetPositionEmployees(gomock.Any(), int64(1), validParams).
-					Return([]int64{10, 20}, nil)
+					Return([]EmployeeDetail{
+						{Employee: repo.Employee{ID: 10, FullName: "Alice"}, PositionIDs: []int64{}, StoreIDs: []int64{}},
+						{Employee: repo.Employee{ID: 20, FullName: "Bob"}, PositionIDs: []int64{}, StoreIDs: []int64{}},
+					}, nil)
 			},
 			expectedCode: http.StatusOK,
 			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
-				var got positionEmployeesResponse
+				var got []employeeResponse
 				if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 					t.Fatalf("failed to unmarshal response body: %v", err)
 				}
-				if len(got.EmployeeIDs) != 2 {
-					t.Errorf("expected 2 employee ids, got %v", got.EmployeeIDs)
+				if len(got) != 2 {
+					t.Errorf("expected 2 employees, got %v", got)
 				}
 			},
 		},
@@ -471,13 +485,27 @@ func TestPositionHandler_SetPositionEmployees(t *testing.T) {
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
 					SetPositionEmployees(gomock.Any(), int64(1), setPositionEmployeesParams{EmployeeIDs: []int64{}}).
-					Return([]int64{}, nil)
+					Return([]EmployeeDetail{}, nil)
 			},
 			expectedCode: http.StatusOK,
 		},
 		{
 			name:         "Non-numeric id path param returns 400",
 			idParam:      "not-a-number",
+			bodyPayload:  validParams,
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:         "Zero id path param returns 400",
+			idParam:      "0",
+			bodyPayload:  validParams,
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:         "Negative id path param returns 400",
+			idParam:      "-1",
 			bodyPayload:  validParams,
 			setupMock:    func(mockSvc *MockService) {},
 			expectedCode: http.StatusBadRequest,
@@ -531,9 +559,13 @@ func TestPositionHandler_SetPositionEmployees(t *testing.T) {
 			tc.setupMock(mockSvc)
 
 			h := NewHandler(mockSvc)
-			jsonBody, err := json.Marshal(tc.bodyPayload)
-			if err != nil {
-				t.Fatalf("failed to marshal request body: %v", err)
+			jsonBody := tc.rawBody
+			if jsonBody == nil {
+				var err error
+				jsonBody, err = json.Marshal(tc.bodyPayload)
+				if err != nil {
+					t.Fatalf("failed to marshal request body: %v", err)
+				}
 			}
 			req := httptest.NewRequest(http.MethodPut, "/positions/"+tc.idParam+"/employees", bytes.NewReader(jsonBody))
 			req = withURLParam(req, "id", tc.idParam)
@@ -546,6 +578,99 @@ func TestPositionHandler_SetPositionEmployees(t *testing.T) {
 			}
 			if tc.checkResponse != nil {
 				tc.checkResponse(t, rec)
+			}
+		})
+	}
+}
+
+func TestPositionHandler_BulkDeletePositions(t *testing.T) {
+	validParams := bulkDeletePositionsParams{IDs: []int64{1, 2}}
+
+	tests := []struct {
+		name         string
+		bodyPayload  any
+		rawBody      []byte // when set, used verbatim instead of marshaling bodyPayload
+		setupMock    func(mockSvc *MockService)
+		expectedCode int
+	}{
+		{
+			name:         "Malformed JSON body returns 400",
+			rawBody:      []byte(`{"ids": [1,`),
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:        "Bulk delete positions successfully",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().BulkDeletePositions(gomock.Any(), []int64{1, 2}).Return(nil)
+			},
+			expectedCode: http.StatusNoContent,
+		},
+		{
+			name:         "Empty ids returns 400",
+			bodyPayload:  bulkDeletePositionsParams{IDs: []int64{}},
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:         "Duplicate ids fail validation",
+			bodyPayload:  bulkDeletePositionsParams{IDs: []int64{1, 1}},
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:         "Zero id fails validation",
+			bodyPayload:  bulkDeletePositionsParams{IDs: []int64{0}},
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:         "Negative id fails validation",
+			bodyPayload:  bulkDeletePositionsParams{IDs: []int64{-1}},
+			setupMock:    func(mockSvc *MockService) {},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:        "A submitted id that doesn't exist maps ErrPositionNotFound to 404",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().BulkDeletePositions(gomock.Any(), []int64{1, 2}).Return(ErrPositionNotFound)
+			},
+			expectedCode: http.StatusNotFound,
+		},
+		{
+			name:        "Database error maps to 500",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().BulkDeletePositions(gomock.Any(), []int64{1, 2}).Return(errors.New("connection refused"))
+			},
+			expectedCode: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockService(ctrl)
+			tc.setupMock(mockSvc)
+
+			h := NewHandler(mockSvc)
+			jsonBody := tc.rawBody
+			if jsonBody == nil {
+				var err error
+				jsonBody, err = json.Marshal(tc.bodyPayload)
+				if err != nil {
+					t.Fatalf("failed to marshal request body: %v", err)
+				}
+			}
+			req := httptest.NewRequest(http.MethodDelete, "/positions", bytes.NewReader(jsonBody))
+			rec := httptest.NewRecorder()
+
+			h.BulkDeletePositions(rec, req)
+
+			if rec.Code != tc.expectedCode {
+				t.Errorf("expected status %d, got %d", tc.expectedCode, rec.Code)
 			}
 		})
 	}

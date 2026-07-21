@@ -51,6 +51,12 @@ type Querier interface {
 	// membership is Odoo-owned, never admin-writable (see ADR-0009).
 	DeleteEmployeeStoresNotIn(ctx context.Context, arg DeleteEmployeeStoresNotInParams) error
 	DeletePosition(ctx context.Context, id int64) (int64, error)
+	// Bulk-delete counterpart of DeletePosition (see issue #13) — deletes every
+	// submitted id in one statement. BulkDeletePositions pre-checks all ids
+	// exist via CountPositionsByIDs inside the same transaction, so this is
+	// only the "delete" half of an all-or-nothing count-check-then-delete, not
+	// an existence check itself.
+	DeletePositions(ctx context.Context, ids []int64) (int64, error)
 	// Deletes specific store_wifi_ip rows by value, not the table's internal id
 	// (see ADR-0003 — a value unambiguously identifies the row within a store
 	// thanks to the UNIQUE (store_id, ip_address) constraint) — the surgical
@@ -126,10 +132,12 @@ type Querier interface {
 	// Odoo-facing odoo_employee_id values runSync actually sends to Odoo. An id
 	// with no matching row is silently omitted from the result.
 	ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int64, error)
-	// Position-first counterpart of ListPositionIDsByEmployeeID, for
-	// GET /positions/{id}/employees (see ADR-0011).
-	ListEmployeeIDsByPositionID(ctx context.Context, positionID int64) ([]int64, error)
 	ListEmployees(ctx context.Context) ([]Employee, error)
+	// Position-first counterpart of ListPositionIDsByEmployeeID, for
+	// GET/PUT /positions/{id}/employees — returns full employee rows (not just
+	// ids) so the position package can build the same employeeResponse shape
+	// GET /employees already returns (see issue #13).
+	ListEmployeesByPositionID(ctx context.Context, positionID int64) ([]Employee, error)
 	ListPositionIDsByEmployeeID(ctx context.Context, employeeID int64) ([]int64, error)
 	// Bulk counterpart of ListPositionIDsByEmployeeID for ListEmployees — one
 	// round trip for every employee's position ids, grouped client-side by

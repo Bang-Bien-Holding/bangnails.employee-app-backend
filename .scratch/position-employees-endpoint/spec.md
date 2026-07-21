@@ -1,5 +1,10 @@
 Status: resolved (published as GitHub issue #15)
 
+**Update:** issue #13 changed the response shape documented below —
+`GET`/`PUT /v1/positions/{id}/employees` now return the full `employeeResponse`
+array (same shape as `GET /employees`), not `{employee_ids: []int64}`. See
+ADR-0012.
+
 # Position CRUD + position-first employee membership endpoints (ADR-0011)
 
 ## Problem Statement

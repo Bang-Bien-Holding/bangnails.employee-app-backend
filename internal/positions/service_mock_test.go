@@ -41,6 +41,20 @@ func (m *MockService) EXPECT() *MockServiceMockRecorder {
 	return m.recorder
 }
 
+// BulkDeletePositions mocks base method.
+func (m *MockService) BulkDeletePositions(ctx context.Context, ids []int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BulkDeletePositions", ctx, ids)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// BulkDeletePositions indicates an expected call of BulkDeletePositions.
+func (mr *MockServiceMockRecorder) BulkDeletePositions(ctx, ids any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BulkDeletePositions", reflect.TypeOf((*MockService)(nil).BulkDeletePositions), ctx, ids)
+}
+
 // CreatePosition mocks base method.
 func (m *MockService) CreatePosition(ctx context.Context, params createPositionParams) (repo.Position, error) {
 	m.ctrl.T.Helper()
@@ -71,10 +85,10 @@ func (mr *MockServiceMockRecorder) DeletePosition(ctx, id any) *gomock.Call {
 }
 
 // GetPositionEmployees mocks base method.
-func (m *MockService) GetPositionEmployees(ctx context.Context, id int64) ([]int64, error) {
+func (m *MockService) GetPositionEmployees(ctx context.Context, id int64) ([]EmployeeDetail, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "GetPositionEmployees", ctx, id)
-	ret0, _ := ret[0].([]int64)
+	ret0, _ := ret[0].([]EmployeeDetail)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
@@ -101,10 +115,10 @@ func (mr *MockServiceMockRecorder) ListPositions(ctx any) *gomock.Call {
 }
 
 // SetPositionEmployees mocks base method.
-func (m *MockService) SetPositionEmployees(ctx context.Context, id int64, params setPositionEmployeesParams) ([]int64, error) {
+func (m *MockService) SetPositionEmployees(ctx context.Context, id int64, params setPositionEmployeesParams) ([]EmployeeDetail, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "SetPositionEmployees", ctx, id, params)
-	ret0, _ := ret[0].([]int64)
+	ret0, _ := ret[0].([]EmployeeDetail)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }

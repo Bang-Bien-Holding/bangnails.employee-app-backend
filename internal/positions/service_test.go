@@ -248,7 +248,14 @@ func TestPositionService_GetPositionEmployees(t *testing.T) {
 			inputID: 1,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(1)).Return(repo.Position{ID: 1, Name: "Technician"}, nil)
-				mockRepo.EXPECT().ListEmployeeIDsByPositionID(gomock.Any(), int64(1)).Return([]int64{10, 20}, nil)
+				mockRepo.EXPECT().ListEmployeesByPositionID(gomock.Any(), int64(1)).Return([]repo.Employee{
+					{ID: 10, FullName: "Alice"},
+					{ID: 20, FullName: "Bob"},
+				}, nil)
+				mockRepo.EXPECT().ListPositionIDsByEmployeeIDs(gomock.Any(), []int64{10, 20}).
+					Return([]repo.EmployeePosition{{EmployeeID: 10, PositionID: 1}}, nil)
+				mockRepo.EXPECT().ListStoreIDsByEmployeeIDs(gomock.Any(), []int64{10, 20}).
+					Return([]repo.EmployeeStore{{EmployeeID: 20, StoreID: 5}}, nil)
 			},
 			expectedIDs: []int64{10, 20},
 		},
@@ -269,13 +276,24 @@ func TestPositionService_GetPositionEmployees(t *testing.T) {
 			expectedErr: dbErr,
 		},
 		{
-			name:    "TC-GET-04: Fails on database error listing employee ids",
+			name:    "TC-GET-04: Fails on database error listing employees",
 			inputID: 1,
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(1)).Return(repo.Position{ID: 1, Name: "Technician"}, nil)
-				mockRepo.EXPECT().ListEmployeeIDsByPositionID(gomock.Any(), int64(1)).Return(nil, dbErr)
+				mockRepo.EXPECT().ListEmployeesByPositionID(gomock.Any(), int64(1)).Return(nil, dbErr)
 			},
 			expectedErr: dbErr,
+		},
+		{
+			name:    "TC-GET-05: An empty employee set returns an empty, non-nil slice",
+			inputID: 1,
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(1)).Return(repo.Position{ID: 1, Name: "Technician"}, nil)
+				mockRepo.EXPECT().ListEmployeesByPositionID(gomock.Any(), int64(1)).Return([]repo.Employee{}, nil)
+				mockRepo.EXPECT().ListPositionIDsByEmployeeIDs(gomock.Any(), []int64{}).Return([]repo.EmployeePosition{}, nil)
+				mockRepo.EXPECT().ListStoreIDsByEmployeeIDs(gomock.Any(), []int64{}).Return([]repo.EmployeeStore{}, nil)
+			},
+			expectedIDs: []int64{},
 		},
 	}
 
@@ -301,8 +319,11 @@ func TestPositionService_GetPositionEmployees(t *testing.T) {
 				t.Fatalf("expected %v, got %v", tc.expectedIDs, got)
 			}
 			for i, id := range tc.expectedIDs {
-				if got[i] != id {
-					t.Errorf("expected %v, got %v", tc.expectedIDs, got)
+				if got[i].Employee.ID != id {
+					t.Errorf("expected employee id %v, got %v", tc.expectedIDs, got)
+				}
+				if got[i].PositionIDs == nil || got[i].StoreIDs == nil {
+					t.Errorf("expected non-nil PositionIDs/StoreIDs, got %+v", got[i])
 				}
 			}
 		})
@@ -336,6 +357,12 @@ func TestPositionService_SetPositionEmployees(t *testing.T) {
 					PositionID:  1,
 					EmployeeIds: []int64{10, 20},
 				}).Return(nil)
+				mockRepo.EXPECT().ListEmployeesByPositionID(gomock.Any(), int64(1)).Return([]repo.Employee{
+					{ID: 10, FullName: "Alice"},
+					{ID: 20, FullName: "Bob"},
+				}, nil)
+				mockRepo.EXPECT().ListPositionIDsByEmployeeIDs(gomock.Any(), []int64{10, 20}).Return([]repo.EmployeePosition{}, nil)
+				mockRepo.EXPECT().ListStoreIDsByEmployeeIDs(gomock.Any(), []int64{10, 20}).Return([]repo.EmployeeStore{}, nil)
 			},
 			expectedIDs: []int64{10, 20},
 		},
@@ -349,6 +376,9 @@ func TestPositionService_SetPositionEmployees(t *testing.T) {
 					PositionID:  1,
 					EmployeeIds: []int64{},
 				}).Return(nil)
+				mockRepo.EXPECT().ListEmployeesByPositionID(gomock.Any(), int64(1)).Return([]repo.Employee{}, nil)
+				mockRepo.EXPECT().ListPositionIDsByEmployeeIDs(gomock.Any(), []int64{}).Return([]repo.EmployeePosition{}, nil)
+				mockRepo.EXPECT().ListStoreIDsByEmployeeIDs(gomock.Any(), []int64{}).Return([]repo.EmployeeStore{}, nil)
 			},
 			expectedIDs: []int64{},
 		},
@@ -385,6 +415,25 @@ func TestPositionService_SetPositionEmployees(t *testing.T) {
 			},
 			expectedErr: dbErr,
 		},
+		{
+			name:        "TC-SET-06: Fails on database error refetching the new employee set",
+			inputID:     1,
+			inputParams: setPositionEmployeesParams{EmployeeIDs: []int64{10}},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(1)).Return(repo.Position{ID: 1, Name: "Technician"}, nil)
+				mockRepo.EXPECT().CountEmployeesByIDs(gomock.Any(), []int64{10}).Return(int64(1), nil)
+				mockRepo.EXPECT().DeleteEmployeePositionsByPositionIDNotIn(gomock.Any(), repo.DeleteEmployeePositionsByPositionIDNotInParams{
+					PositionID:  1,
+					EmployeeIds: []int64{10},
+				}).Return(nil)
+				mockRepo.EXPECT().InsertPositionEmployees(gomock.Any(), repo.InsertPositionEmployeesParams{
+					PositionID:  1,
+					EmployeeIds: []int64{10},
+				}).Return(nil)
+				mockRepo.EXPECT().ListEmployeesByPositionID(gomock.Any(), int64(1)).Return(nil, dbErr)
+			},
+			expectedErr: dbErr,
+		},
 	}
 
 	for _, tc := range tests {
@@ -409,9 +458,76 @@ func TestPositionService_SetPositionEmployees(t *testing.T) {
 				t.Fatalf("expected %v, got %v", tc.expectedIDs, got)
 			}
 			for i, id := range tc.expectedIDs {
-				if got[i] != id {
-					t.Errorf("expected %v, got %v", tc.expectedIDs, got)
+				if got[i].Employee.ID != id {
+					t.Errorf("expected employee id %v, got %v", tc.expectedIDs, got)
 				}
+			}
+		})
+	}
+}
+
+func TestPositionService_BulkDeletePositions(t *testing.T) {
+	ctx := context.Background()
+	dbErr := errors.New("connection refused")
+
+	tests := []struct {
+		name        string
+		inputIDs    []int64
+		setupMock   func(mockRepo *mocks.MockQuerier)
+		expectedErr error
+	}{
+		{
+			name:     "TC-BULK-DEL-01: Deletes every submitted position",
+			inputIDs: []int64{1, 2},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().CountPositionsByIDs(gomock.Any(), []int64{1, 2}).Return(int64(2), nil)
+				mockRepo.EXPECT().DeletePositions(gomock.Any(), []int64{1, 2}).Return(int64(2), nil)
+			},
+		},
+		{
+			name:     "TC-BULK-DEL-02: A submitted id that doesn't exist fails all-or-nothing with ErrPositionNotFound",
+			inputIDs: []int64{1, 999},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().CountPositionsByIDs(gomock.Any(), []int64{1, 999}).Return(int64(1), nil)
+			},
+			expectedErr: ErrPositionNotFound,
+		},
+		{
+			name:     "TC-BULK-DEL-03: Fails on database error counting positions",
+			inputIDs: []int64{1, 2},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().CountPositionsByIDs(gomock.Any(), []int64{1, 2}).Return(int64(0), dbErr)
+			},
+			expectedErr: dbErr,
+		},
+		{
+			name:     "TC-BULK-DEL-04: Fails on database error deleting",
+			inputIDs: []int64{1, 2},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().CountPositionsByIDs(gomock.Any(), []int64{1, 2}).Return(int64(2), nil)
+				mockRepo.EXPECT().DeletePositions(gomock.Any(), []int64{1, 2}).Return(int64(0), dbErr)
+			},
+			expectedErr: dbErr,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockRepo := mocks.NewMockQuerier(ctrl)
+			tc.setupMock(mockRepo)
+
+			svc := newTestService(mockRepo)
+			err := svc.BulkDeletePositions(ctx, tc.inputIDs)
+
+			if tc.expectedErr != nil {
+				if !errors.Is(err, tc.expectedErr) {
+					t.Errorf("expected error %v, got %v", tc.expectedErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
 			}
 		})
 	}

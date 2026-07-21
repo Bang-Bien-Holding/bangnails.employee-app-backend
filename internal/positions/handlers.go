@@ -131,7 +131,7 @@ func (h *Handler) GetPositionEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	employeeIDs, err := h.service.GetPositionEmployees(r.Context(), id)
+	details, err := h.service.GetPositionEmployees(r.Context(), id)
 	if err != nil {
 		if errors.Is(err, ErrPositionNotFound) {
 			http.Error(w, err.Error(), http.StatusNotFound)
@@ -142,7 +142,7 @@ func (h *Handler) GetPositionEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := json.Write(w, http.StatusOK, newPositionEmployeesResponse(employeeIDs)); err != nil {
+	if err := json.Write(w, http.StatusOK, newEmployeeResponses(details)); err != nil {
 		slog.Error("positions: write get position employees response", "error", err)
 	}
 }
@@ -169,7 +169,7 @@ func (h *Handler) SetPositionEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	employeeIDs, err := h.service.SetPositionEmployees(r.Context(), id, params)
+	details, err := h.service.SetPositionEmployees(r.Context(), id, params)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrPositionNotFound):
@@ -183,7 +183,35 @@ func (h *Handler) SetPositionEmployees(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := json.Write(w, http.StatusOK, newPositionEmployeesResponse(employeeIDs)); err != nil {
+	if err := json.Write(w, http.StatusOK, newEmployeeResponses(details)); err != nil {
 		slog.Error("positions: write set position employees response", "error", err)
 	}
+}
+
+// BulkDeletePositions handles DELETE /v1/positions (bulk, issue #13) —
+// all-or-nothing, unlike employees.Handler.BulkDeleteEmployees' best-effort
+// per-id results (see Service.BulkDeletePositions).
+func (h *Handler) BulkDeletePositions(w http.ResponseWriter, r *http.Request) {
+	var params bulkDeletePositionsParams
+	if err := json.Read(w, r, &params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := validate.Struct(params); err != nil {
+		http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := h.service.BulkDeletePositions(r.Context(), params.IDs); err != nil {
+		if errors.Is(err, ErrPositionNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		slog.Error("positions: bulk delete positions", "ids", params.IDs, "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }

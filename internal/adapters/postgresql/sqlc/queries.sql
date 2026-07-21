@@ -306,6 +306,15 @@ RETURNING *;
 DELETE FROM positions
 WHERE id = $1;
 
+-- name: DeletePositions :execrows
+-- Bulk-delete counterpart of DeletePosition (see issue #13) — deletes every
+-- submitted id in one statement. BulkDeletePositions pre-checks all ids
+-- exist via CountPositionsByIDs inside the same transaction, so this is
+-- only the "delete" half of an all-or-nothing count-check-then-delete, not
+-- an existence check itself.
+DELETE FROM positions
+WHERE id = ANY(sqlc.arg(ids)::bigint[]);
+
 -- name: CountPositionsByIDs :one
 -- Used to validate a submitted set of position ids in one round trip: if the
 -- count of matching rows is less than the count of distinct submitted ids,
@@ -363,12 +372,15 @@ ON CONFLICT (employee_id, position_id) DO NOTHING;
 SELECT count(*) FROM employees
 WHERE id = ANY(sqlc.arg(ids)::bigint[]);
 
--- name: ListEmployeeIDsByPositionID :many
+-- name: ListEmployeesByPositionID :many
 -- Position-first counterpart of ListPositionIDsByEmployeeID, for
--- GET /positions/{id}/employees (see ADR-0011).
-SELECT employee_id FROM employee_positions
-WHERE position_id = $1
-ORDER BY employee_id;
+-- GET/PUT /positions/{id}/employees — returns full employee rows (not just
+-- ids) so the position package can build the same employeeResponse shape
+-- GET /employees already returns (see issue #13).
+SELECT e.* FROM employees e
+JOIN employee_positions ep ON ep.employee_id = e.id
+WHERE ep.position_id = $1
+ORDER BY e.id;
 
 -- name: DeleteEmployeePositionsByPositionIDNotIn :exec
 -- Position-first half of the "replace this position's employee set to match

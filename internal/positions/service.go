@@ -97,7 +97,27 @@ func (s *service) DeletePosition(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (s *service) GetPositionEmployees(ctx context.Context, id int64) ([]int64, error) {
+// BulkDeletePositions deletes every submitted id in one transaction,
+// all-or-nothing (see issue #13) — unlike employees.BulkDeleteEmployees'
+// best-effort per-id []BulkActionResult, a Position bulk-delete is one
+// intent from the FE's confirmation dialog, not a batch of independent
+// attempts: if any id doesn't reference a real position, the whole request
+// fails via ErrPositionNotFound and nothing is deleted.
+func (s *service) BulkDeletePositions(ctx context.Context, ids []int64) error {
+	return s.withTx(ctx, func(q repo.Querier) error {
+		count, err := q.CountPositionsByIDs(ctx, ids)
+		if err != nil {
+			return err
+		}
+		if count != int64(len(ids)) {
+			return ErrPositionNotFound
+		}
+		_, err = q.DeletePositions(ctx, ids)
+		return err
+	})
+}
+
+func (s *service) GetPositionEmployees(ctx context.Context, id int64) ([]EmployeeDetail, error) {
 	if _, err := s.repo.GetPositionByID(ctx, id); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrPositionNotFound
@@ -105,11 +125,11 @@ func (s *service) GetPositionEmployees(ctx context.Context, id int64) ([]int64, 
 		return nil, err
 	}
 
-	employeeIDs, err := s.repo.ListEmployeeIDsByPositionID(ctx, id)
+	employees, err := s.repo.ListEmployeesByPositionID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return employeeIDs, nil
+	return buildEmployeeDetails(ctx, s.repo, employees)
 }
 
 // SetPositionEmployees replaces a position's whole employee set via diff
@@ -120,12 +140,13 @@ func (s *service) GetPositionEmployees(ctx context.Context, id int64) ([]int64, 
 // diff (given a position, compute which employees to add/remove) is a
 // different operation from employees.Service's employee-first diff, not the
 // same operation duplicated.
-func (s *service) SetPositionEmployees(ctx context.Context, id int64, params setPositionEmployeesParams) ([]int64, error) {
+func (s *service) SetPositionEmployees(ctx context.Context, id int64, params setPositionEmployeesParams) ([]EmployeeDetail, error) {
 	employeeIDs := params.EmployeeIDs
 	if employeeIDs == nil {
 		employeeIDs = []int64{}
 	}
 
+	var details []EmployeeDetail
 	err := s.withTx(ctx, func(q repo.Querier) error {
 		if _, err := q.GetPositionByID(ctx, id); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -152,13 +173,64 @@ func (s *service) SetPositionEmployees(ctx context.Context, id int64, params set
 				return translateInsertPositionEmployeesForeignKeyViolation(err)
 			}
 		}
-		return nil
+
+		employees, err := q.ListEmployeesByPositionID(ctx, id)
+		if err != nil {
+			return err
+		}
+		details, err = buildEmployeeDetails(ctx, q, employees)
+		return err
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	return employeeIDs, nil
+	return details, nil
+}
+
+// buildEmployeeDetails attaches each employee's full position/store id sets
+// (the same batched-by-ids queries employees.Service.ListEmployees uses),
+// for GetPositionEmployees/SetPositionEmployees' employeeResponse shape (see
+// issue #13). Called with a plain repo.Querier for reads and with the
+// transaction-scoped Querier from SetPositionEmployees' withTx so the
+// refetch sees its own just-written diff.
+func buildEmployeeDetails(ctx context.Context, q repo.Querier, employees []repo.Employee) ([]EmployeeDetail, error) {
+	ids := make([]int64, len(employees))
+	for i, e := range employees {
+		ids[i] = e.ID
+	}
+
+	positionsByEmployee, err := q.ListPositionIDsByEmployeeIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	positionIDs := make(map[int64][]int64, len(employees))
+	for _, p := range positionsByEmployee {
+		positionIDs[p.EmployeeID] = append(positionIDs[p.EmployeeID], p.PositionID)
+	}
+
+	storesByEmployee, err := q.ListStoreIDsByEmployeeIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	storeIDs := make(map[int64][]int64, len(employees))
+	for _, st := range storesByEmployee {
+		storeIDs[st.EmployeeID] = append(storeIDs[st.EmployeeID], st.StoreID)
+	}
+
+	details := make([]EmployeeDetail, len(employees))
+	for i, e := range employees {
+		positions := positionIDs[e.ID]
+		if positions == nil {
+			positions = []int64{}
+		}
+		stores := storeIDs[e.ID]
+		if stores == nil {
+			stores = []int64{}
+		}
+		details[i] = EmployeeDetail{Employee: e, PositionIDs: positions, StoreIDs: stores}
+	}
+	return details, nil
 }
 
 // validateEmployeeIDs rejects a submitted employee-id set containing an id

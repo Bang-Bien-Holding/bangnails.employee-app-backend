@@ -147,6 +147,7 @@ func (app *application) mount() http.Handler {
 		r.Get("/positions", positionsHandler.ListPositions)
 		r.Put("/positions/{id}", positionsHandler.UpdatePosition)
 		r.Delete("/positions/{id}", positionsHandler.DeletePosition)
+		r.Delete("/positions", positionsHandler.BulkDeletePositions)
 		r.Get("/positions/{id}/employees", positionsHandler.GetPositionEmployees)
 		r.Put("/positions/{id}/employees", positionsHandler.SetPositionEmployees)
 
