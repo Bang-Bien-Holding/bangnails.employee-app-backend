@@ -7,6 +7,7 @@ import (
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc/mocks"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/pgerr"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"go.uber.org/mock/gomock"
@@ -28,7 +29,7 @@ func TestPositionService_CreatePosition(t *testing.T) {
 
 	dbErr := errors.New("connection refused")
 	pgDupNameErr := &pgconn.PgError{
-		Code:           uniqueViolationCode,
+		Code:           pgerr.UniqueViolation,
 		ConstraintName: positionsNameKeyConstraint,
 		Message:        `duplicate key value violates unique constraint "positions_name_key"`,
 	}
@@ -163,7 +164,7 @@ func TestPositionService_UpdatePosition(t *testing.T) {
 	ctx := context.Background()
 	dbErr := errors.New("connection refused")
 	pgDupNameErr := &pgconn.PgError{
-		Code:           uniqueViolationCode,
+		Code:           pgerr.UniqueViolation,
 		ConstraintName: positionsNameKeyConstraint,
 		Message:        `duplicate key value violates unique constraint "positions_name_key"`,
 	}

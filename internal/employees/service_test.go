@@ -12,6 +12,7 @@ import (
 	mailermocks "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/mailer/mocks"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
 	odoomocks "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo/mocks"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/pgerr"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -68,12 +69,12 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 	dbErr := errors.New("connection refused")
 
 	pgDupEmailErr := &pgconn.PgError{
-		Code:           uniqueViolationCode,
+		Code:           pgerr.UniqueViolation,
 		ConstraintName: employeesEmailKeyConstraint,
 		Message:        `duplicate key value violates unique constraint "employees_email_key"`,
 	}
 	pgDupEmployeeIDErr := &pgconn.PgError{
-		Code:           uniqueViolationCode,
+		Code:           pgerr.UniqueViolation,
 		ConstraintName: employeesOdooEmployeeIDKeyConstraint,
 		Message:        `duplicate key value violates unique constraint "employees_odoo_employee_id_key"`,
 	}
@@ -454,6 +455,44 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 			},
 			expectedErr: ErrOdooEmployeeIDNotFound,
 		},
+		{
+			name: "TC-POST-15: Create employee whose position is deleted in the race window between validation and insert fails closed with ErrUnknownPositionID",
+			inputParams: func() createEmployeeParams {
+				p := defaultParams
+				p.PositionIDs = []int64{10, 20}
+				return p
+			}(),
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					CountPositionsByIDs(gomock.Any(), []int64{10, 20}).
+					Return(int64(2), nil)
+				mockRepo.EXPECT().
+					CreateEmployee(gomock.Any(), defaultRepoParams).
+					Return(repo.Employee{
+						ID:             1,
+						OdooEmployeeID: defaultParams.OdooEmployeeID,
+						FullName:       defaultParams.FullName,
+						Email:          defaultParams.Email,
+						Username:       defaultParams.Username,
+					}, nil)
+				mockRepo.EXPECT().
+					InsertEmployeePositions(gomock.Any(), repo.InsertEmployeePositionsParams{
+						EmployeeID:  1,
+						PositionIds: []int64{10, 20},
+					}).
+					Return(&pgconn.PgError{
+						Code:           pgerr.ForeignKeyViolation,
+						ConstraintName: "employee_positions_position_id_fkey",
+						Message:        `insert or update on table "employee_positions" violates foreign key constraint "employee_positions_position_id_fkey"`,
+					})
+			},
+			expectedErr: ErrUnknownPositionID,
+			checkResponse: func(t *testing.T, detail EmployeeDetail) {
+				if detail.Employee.ID != 0 {
+					t.Error("Expected zero-value employee response when an error occurs")
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -783,17 +822,17 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 	}
 
 	dupEmailErr := &pgconn.PgError{
-		Code:           uniqueViolationCode,
+		Code:           pgerr.UniqueViolation,
 		ConstraintName: employeesEmailKeyConstraint,
 		Message:        `duplicate key value violates unique constraint "employees_email_key"`,
 	}
 	dupUsernameErr := &pgconn.PgError{
-		Code:           uniqueViolationCode,
+		Code:           pgerr.UniqueViolation,
 		ConstraintName: employeesUsernameKeyConstraint,
 		Message:        `duplicate key value violates unique constraint "employees_username_key"`,
 	}
 	dupEmployeeIDErr := &pgconn.PgError{
-		Code:           uniqueViolationCode,
+		Code:           pgerr.UniqueViolation,
 		ConstraintName: employeesOdooEmployeeIDKeyConstraint,
 		Message:        `duplicate key value violates unique constraint "employees_odoo_employee_id_key"`,
 	}
@@ -1121,6 +1160,47 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 					Return(nil, errors.New("odoo: connection refused"))
 			},
 			expectedErr: ErrOdooEmployeeIDNotFound,
+		},
+		{
+			name: "TC-PUT-14: Update employee whose position is deleted in the race window between validation and insert fails closed with ErrUnknownPositionID",
+			params: func() updateEmployeeParams {
+				p := inputParams
+				p.PositionIDs = []int64{10, 20}
+				return p
+			}(),
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().
+					GetEmployeeByID(gomock.Any(), int64(1)).
+					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
+				mockRepo.EXPECT().
+					CountPositionsByIDs(gomock.Any(), []int64{10, 20}).
+					Return(int64(2), nil)
+				mockRepo.EXPECT().
+					UpdateEmployee(gomock.Any(), repoParams).
+					Return(repo.Employee{
+						ID:       1,
+						FullName: inputParams.FullName,
+						Email:    inputParams.Email,
+						Username: inputParams.Username,
+					}, nil)
+				mockRepo.EXPECT().
+					DeleteEmployeePositionsNotIn(gomock.Any(), repo.DeleteEmployeePositionsNotInParams{
+						EmployeeID:  1,
+						PositionIds: []int64{10, 20},
+					}).
+					Return(nil)
+				mockRepo.EXPECT().
+					InsertEmployeePositions(gomock.Any(), repo.InsertEmployeePositionsParams{
+						EmployeeID:  1,
+						PositionIds: []int64{10, 20},
+					}).
+					Return(&pgconn.PgError{
+						Code:           pgerr.ForeignKeyViolation,
+						ConstraintName: "employee_positions_position_id_fkey",
+						Message:        `insert or update on table "employee_positions" violates foreign key constraint "employee_positions_position_id_fkey"`,
+					})
+			},
+			expectedErr: ErrUnknownPositionID,
 		},
 	}
 
