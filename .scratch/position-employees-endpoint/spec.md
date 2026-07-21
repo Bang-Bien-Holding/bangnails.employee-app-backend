@@ -80,6 +80,91 @@ Add a `positions` API surface with full CRUD for the Position resource itself, p
 - **Response shape convention**: `employeeResponse` (snake_case fields) is the array element shape for both membership endpoints, matching `GET /employees` exactly — not the `employee_ids`-only shape this feature originally shipped with. `positionResponse` fields stay in the existing camelCase-free style matching `repo.Position` directly. Every id/array field on these responses is always serialized non-nil (empty array, not `null`) when there's nothing to show — same convention as `EmployeeDetail.PositionIDs`.
 - **New `repo.Querier` methods for this round**: `ListEmployeesByPositionID` (full employee rows for a Position, replacing the earlier ids-only `ListEmployeeIDsByPositionID`) and `DeletePositions` (bulk delete by id set, paired with the existing `CountPositionsByIDs` for the pre-check).
 
+## API Reference
+
+All routes below are mounted under `/v1`. Error bodies are plain text (`http.Error`), not a JSON envelope — e.g. a 404 body is literally `position not found\n`. No auth/authz middleware exists on any `/v1` route in this codebase today.
+
+### `POST /v1/positions` — Create Position
+Request:
+```json
+{ "name": "Technician" }
+```
+Response `201`:
+```json
+{ "id": 1, "name": "Technician", "created_at": "2026-07-21T09:00:00Z", "updated_at": "2026-07-21T09:00:00Z" }
+```
+Errors: `400` (missing/empty `name`) · `409` `position name already exists` · `500`.
+
+### `GET /v1/positions` — List Positions
+No params, no body. Response `200`:
+```json
+[
+  { "id": 1, "name": "Manager", "created_at": "2026-07-21T09:00:00Z", "updated_at": "2026-07-21T09:00:00Z" },
+  { "id": 2, "name": "Technician", "created_at": "2026-07-21T09:00:00Z", "updated_at": "2026-07-21T09:00:00Z" }
+]
+```
+Errors: `500`.
+
+### `PUT /v1/positions/{id}` — Rename Position
+Request:
+```json
+{ "name": "Senior Technician" }
+```
+Response `200`:
+```json
+{ "id": 1, "name": "Senior Technician", "created_at": "2026-07-21T09:00:00Z", "updated_at": "2026-07-21T10:15:00Z" }
+```
+Errors: `400` (invalid id / empty `name`) · `404` `position not found` · `409` `position name already exists` · `500`.
+
+### `DELETE /v1/positions/{id}` — Delete Position
+No body. Response `204 No Content`. Cascades to `employee_positions` via `ON DELETE CASCADE` (ADR-0008).
+Errors: `400` `invalid position id` · `404` `position not found` · `500`.
+
+### `DELETE /v1/positions` — Bulk Delete Positions (all-or-nothing)
+Request:
+```json
+{ "ids": [1, 2] }
+```
+`ids`: required, non-empty, unique, every id `> 0`. Response `204 No Content`.
+Errors: `400` (empty/duplicate/non-positive id, malformed JSON) · `404` `position not found` (if any submitted id doesn't exist — nothing is deleted) · `500`.
+
+### `GET /v1/positions/{id}/employees` — Read Position's Employee set
+No body. Response `200` (always an array, empty rather than `null` when there are no members):
+```json
+[
+  {
+    "id": 10,
+    "odoo_employee_id": 30,
+    "full_name": "Alice Nguyen",
+    "email": "alice@example.com",
+    "username": "alicenguyen",
+    "is_active": true,
+    "position_ids": [1],
+    "store_ids": [4],
+    "created_at": "2026-07-21T09:00:00Z",
+    "updated_at": "2026-07-21T09:00:00Z"
+  }
+]
+```
+Errors: `400` `invalid position id` · `404` `position not found` · `500`.
+
+### `PUT /v1/positions/{id}/employees` — Whole-set replace Position's Employees
+Request:
+```json
+{ "employeeIds": [10, 20] }
+```
+`employeeIds`: optional — nil/omitted/empty all mean "no employees assigned"; no duplicates, no zero-value elements when present. Response `200` — same `employeeResponse` array shape as the read endpoint above, refetched inside the same transaction as the write:
+```json
+[
+  { "id": 10, "odoo_employee_id": 30, "full_name": "Alice Nguyen", "email": "alice@example.com", "username": "alicenguyen", "is_active": true, "position_ids": [1], "store_ids": [4], "created_at": "2026-07-21T09:00:00Z", "updated_at": "2026-07-21T09:00:00Z" },
+  { "id": 20, "odoo_employee_id": 31, "full_name": "Bob Tran", "email": "bob@example.com", "username": "bobtran", "is_active": true, "position_ids": [1], "store_ids": [4], "created_at": "2026-07-21T09:00:00Z", "updated_at": "2026-07-21T09:00:00Z" }
+]
+```
+Errors: `400` (invalid path id, validation failure, or `unknown employee id` for a submitted id that isn't a real employee) · `404` `position not found` (also on the race where the position is deleted mid-transaction) · `500`.
+
+### Related, not under `/v1/positions`
+`POST /v1/employees` and `PUT /v1/employees/{id}` (`internal/employees`) accept an optional `positionIds: []int64` that whole-set-replaces an *employee's* position set — the Employee-first mirror of the endpoint above (ADR-0008), unchanged by this spec.
+
 ## Testing Decisions
 
 - Two seams, matching the existing pattern in `internal/employees` and `internal/stores`:
