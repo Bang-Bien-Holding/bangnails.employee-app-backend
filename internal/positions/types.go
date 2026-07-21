@@ -65,7 +65,7 @@ func newPositionResponses(positions []repo.Position) []positionResponse {
 // convention as createEmployeeParams.PositionIDs: a nil/empty EmployeeIDs
 // both mean "no employees assigned".
 type setPositionEmployeesParams struct {
-	EmployeeIDs []int64 `json:"employeeIds" validate:"omitempty,unique,dive,required"`
+	EmployeeIDs []int64 `json:"employeeIds" validate:"omitempty,unique,dive,gt=0"`
 }
 
 // bulkDeletePositionsParams is the body for DELETE /v1/positions (bulk,
