@@ -14,6 +14,7 @@ import (
 	"time"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/dbx"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/env"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/mailer"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
@@ -275,19 +276,24 @@ func (s *service) UpdateEmployee(ctx context.Context, id int64, params updateEmp
 			return translateEmployeeUniqueViolation(err)
 		}
 
-		if err := q.DeleteEmployeePositionsNotIn(ctx, repo.DeleteEmployeePositionsNotInParams{
-			EmployeeID:  id,
-			PositionIds: positionIDs,
-		}); err != nil {
+		if err := dbx.DiffReplace(ctx,
+			func(ctx context.Context) error {
+				return q.DeleteEmployeePositionsNotIn(ctx, repo.DeleteEmployeePositionsNotInParams{
+					EmployeeID:  id,
+					PositionIds: positionIDs,
+				})
+			},
+			func(ctx context.Context) error {
+				if err := q.InsertEmployeePositions(ctx, repo.InsertEmployeePositionsParams{
+					EmployeeID:  id,
+					PositionIds: positionIDs,
+				}); err != nil {
+					return translateInsertEmployeePositionsForeignKeyViolation(err)
+				}
+				return nil
+			},
+		); err != nil {
 			return err
-		}
-		if len(positionIDs) > 0 {
-			if err := q.InsertEmployeePositions(ctx, repo.InsertEmployeePositionsParams{
-				EmployeeID:  id,
-				PositionIds: positionIDs,
-			}); err != nil {
-				return translateInsertEmployeePositionsForeignKeyViolation(err)
-			}
 		}
 
 		if hashedPassword != nil {
@@ -670,21 +676,20 @@ func (s *service) syncEmployeeStores(ctx context.Context, employees []odoo.Emplo
 		// employee's failure is logged and skipped — it doesn't abort the
 		// rest of the batch.
 		err := s.withTx(ctx, func(q repo.Querier) error {
-			if err := q.DeleteEmployeeStoresNotIn(ctx, repo.DeleteEmployeeStoresNotInParams{
-				EmployeeID: internalID,
-				StoreIds:   storeIDs,
-			}); err != nil {
-				return err
-			}
-			if len(storeIDs) > 0 {
-				if err := q.InsertEmployeeStores(ctx, repo.InsertEmployeeStoresParams{
-					EmployeeID: internalID,
-					StoreIds:   storeIDs,
-				}); err != nil {
-					return err
-				}
-			}
-			return nil
+			return dbx.DiffReplace(ctx,
+				func(ctx context.Context) error {
+					return q.DeleteEmployeeStoresNotIn(ctx, repo.DeleteEmployeeStoresNotInParams{
+						EmployeeID: internalID,
+						StoreIds:   storeIDs,
+					})
+				},
+				func(ctx context.Context) error {
+					return q.InsertEmployeeStores(ctx, repo.InsertEmployeeStoresParams{
+						EmployeeID: internalID,
+						StoreIds:   storeIDs,
+					})
+				},
+			)
 		})
 		if err != nil {
 			slog.Error("employees: sync store membership", "employee_id", internalID, "error", err)

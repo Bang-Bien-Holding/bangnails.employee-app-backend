@@ -12,6 +12,7 @@ import (
 	"time"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/dbx"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -123,14 +124,18 @@ func (s *service) UpdateStore(ctx context.Context, id int64, params patchStorePa
 			if err != nil {
 				return err
 			}
-			if err := q.DeleteStoreWifiIPsNotIn(ctx, repo.DeleteStoreWifiIPsNotInParams{
-				StoreID: id, IpAddresses: ips,
-			}); err != nil {
-				return err
-			}
-			if err := q.InsertStoreWifiIPs(ctx, repo.InsertStoreWifiIPsParams{
-				StoreID: id, IpAddresses: ips,
-			}); err != nil {
+			if err := dbx.DiffReplace(ctx,
+				func(ctx context.Context) error {
+					return q.DeleteStoreWifiIPsNotIn(ctx, repo.DeleteStoreWifiIPsNotInParams{
+						StoreID: id, IpAddresses: ips,
+					})
+				},
+				func(ctx context.Context) error {
+					return q.InsertStoreWifiIPs(ctx, repo.InsertStoreWifiIPsParams{
+						StoreID: id, IpAddresses: ips,
+					})
+				},
+			); err != nil {
 				return err
 			}
 		}
@@ -140,14 +145,18 @@ func (s *service) UpdateStore(ctx context.Context, id int64, params patchStorePa
 			if err != nil {
 				return err
 			}
-			if err := q.DeleteStoreWifiMacsNotIn(ctx, repo.DeleteStoreWifiMacsNotInParams{
-				StoreID: id, MacAddresses: macs,
-			}); err != nil {
-				return err
-			}
-			if err := q.InsertStoreWifiMacs(ctx, repo.InsertStoreWifiMacsParams{
-				StoreID: id, MacAddresses: macs,
-			}); err != nil {
+			if err := dbx.DiffReplace(ctx,
+				func(ctx context.Context) error {
+					return q.DeleteStoreWifiMacsNotIn(ctx, repo.DeleteStoreWifiMacsNotInParams{
+						StoreID: id, MacAddresses: macs,
+					})
+				},
+				func(ctx context.Context) error {
+					return q.InsertStoreWifiMacs(ctx, repo.InsertStoreWifiMacsParams{
+						StoreID: id, MacAddresses: macs,
+					})
+				},
+			); err != nil {
 				return err
 			}
 		}

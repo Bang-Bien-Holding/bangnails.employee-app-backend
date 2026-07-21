@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/dbx"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/pgerr"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -152,19 +153,24 @@ func (s *service) SetPositionEmployees(ctx context.Context, id int64, params set
 			return err
 		}
 
-		if err := q.DeleteEmployeePositionsByPositionIDNotIn(ctx, repo.DeleteEmployeePositionsByPositionIDNotInParams{
-			PositionID:  id,
-			EmployeeIds: employeeIDs,
-		}); err != nil {
+		if err := dbx.DiffReplace(ctx,
+			func(ctx context.Context) error {
+				return q.DeleteEmployeePositionsByPositionIDNotIn(ctx, repo.DeleteEmployeePositionsByPositionIDNotInParams{
+					PositionID:  id,
+					EmployeeIds: employeeIDs,
+				})
+			},
+			func(ctx context.Context) error {
+				if err := q.InsertPositionEmployees(ctx, repo.InsertPositionEmployeesParams{
+					PositionID:  id,
+					EmployeeIds: employeeIDs,
+				}); err != nil {
+					return translateInsertPositionEmployeesForeignKeyViolation(err)
+				}
+				return nil
+			},
+		); err != nil {
 			return err
-		}
-		if len(employeeIDs) > 0 {
-			if err := q.InsertPositionEmployees(ctx, repo.InsertPositionEmployeesParams{
-				PositionID:  id,
-				EmployeeIds: employeeIDs,
-			}); err != nil {
-				return translateInsertPositionEmployeesForeignKeyViolation(err)
-			}
 		}
 
 		employees, err := q.ListEmployeesByPositionID(ctx, id)
