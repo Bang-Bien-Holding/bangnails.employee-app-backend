@@ -48,6 +48,8 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, ErrInvalidCredentials):
 			status = http.StatusUnauthorized
+		case errors.Is(err, ErrAccountNotActivated):
+			status = http.StatusForbidden
 		case errors.Is(err, ErrNoStoreMatch):
 			status = http.StatusForbidden
 		}

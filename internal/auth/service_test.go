@@ -154,6 +154,29 @@ func TestAuthService_Login(t *testing.T) {
 			wantErr: ErrInvalidCredentials,
 		},
 		{
+			name:   "an Employee who never activated (NULL password) returns a distinct not-activated error and records no failed attempt",
+			params: newLoginParams(t, username, password, deviceLat, deviceLong),
+			setupMock: func(mockRepo *sqlcmocks.MockQuerier) {
+				notActivated := baseEmployee
+				notActivated.Password = nil
+				mockRepo.EXPECT().GetEmployeeByUsername(gomock.Any(), username).Return(notActivated, nil)
+				// No RecordFailedLoginAttempt expected — a not-yet-activated
+				// Employee hasn't done anything wrong, so this shouldn't
+				// count toward their lockout counter.
+			},
+			wantErr: ErrAccountNotActivated,
+		},
+		{
+			name:   "an Employee with an empty (non-nil) password is treated the same as NULL",
+			params: newLoginParams(t, username, password, deviceLat, deviceLong),
+			setupMock: func(mockRepo *sqlcmocks.MockQuerier) {
+				notActivated := baseEmployee
+				notActivated.Password = []byte{}
+				mockRepo.EXPECT().GetEmployeeByUsername(gomock.Any(), username).Return(notActivated, nil)
+			},
+			wantErr: ErrAccountNotActivated,
+		},
+		{
 			name:   "correct credentials matched via IP issue a session and reset the lockout counter",
 			params: newLoginParams(t, username, password, deviceLat, deviceLong),
 			setupMock: func(mockRepo *sqlcmocks.MockQuerier) {

@@ -98,8 +98,14 @@ func (s *service) Login(ctx context.Context, params loginParams, clientIP netip.
 		found = false
 	}
 
-	// The bcrypt compare always runs — against dummyPasswordHash when no
-	// such Employee exists — so an unknown username, a deactivated or
+	// notActivated is an Employee who exists but has never completed
+	// POST /v1/activate — password is still NULL/empty, so there is no
+	// real hash to compare against.
+	notActivated := found && len(employee.Password) == 0
+
+	// The bcrypt compare always runs — against dummyPasswordHash whenever
+	// there's no real password hash to check (unknown username or a
+	// not-yet-activated Employee) — so those cases, a deactivated or
 	// locked-out Employee, and a genuinely wrong password all cost the
 	// same, before any of those cases short-circuits below. Skipping this
 	// call whenever found/IsActive/locked already told us the answer would
@@ -107,13 +113,18 @@ func (s *service) Login(ctx context.Context, params loginParams, clientIP netip.
 	// password, letting a timing attack distinguish states
 	// ErrInvalidCredentials deliberately doesn't.
 	passwordHash := []byte(dummyPasswordHash)
-	if found {
+	if found && !notActivated {
 		passwordHash = employee.Password
 	}
 	passwordMatches := bcrypt.CompareHashAndPassword(passwordHash, []byte(params.Password)) == nil
 
 	if !found {
 		return LoginResult{}, ErrInvalidCredentials
+	}
+	// Distinct from ErrInvalidCredentials — the Employee hasn't done
+	// anything wrong, they just haven't finished activation yet.
+	if notActivated {
+		return LoginResult{}, ErrAccountNotActivated
 	}
 	// Folded into the same generic error as a wrong password — see
 	// ErrInvalidCredentials.

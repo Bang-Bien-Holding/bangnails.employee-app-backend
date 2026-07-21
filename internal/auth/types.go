@@ -21,6 +21,14 @@ import (
 // account's owner yet.
 var ErrInvalidCredentials = errors.New("invalid username or password")
 
+// ErrAccountNotActivated is returned by Login for an Employee who exists but
+// has never completed the activation flow (POST /v1/activate) — password is
+// still NULL, so there is no password to check against at all. Deliberately
+// distinct from ErrInvalidCredentials: the Employee has done nothing wrong
+// here, they just haven't finished setup yet, so the caller is told to
+// activate rather than being told their credentials are wrong.
+var ErrAccountNotActivated = errors.New("please activate your account")
+
 // ErrNoStoreMatch is returned by Login when username/password check out but
 // none of the Employee's Stores match on IP, Geofence, or MAC (ADR-0013) — a
 // distinct, non-generic error, unlike ErrInvalidCredentials, since the
@@ -164,5 +172,5 @@ type heartbeatResponse struct {
 }
 
 func newHeartbeatResponse(result HeartbeatResult) heartbeatResponse {
-	return heartbeatResponse{Active: result.Active, Reason: result.Reason}
+	return heartbeatResponse(result)
 }

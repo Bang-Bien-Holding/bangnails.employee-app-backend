@@ -76,6 +76,15 @@ func TestAuthHandler_Login(t *testing.T) {
 			expectedCode: http.StatusForbidden,
 		},
 		{
+			name:       "account not activated maps to 403",
+			body:       validBody,
+			remoteAddr: "203.0.113.5:54321",
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().Login(gomock.Any(), gomock.Any(), gomock.Any()).Return(LoginResult{}, ErrAccountNotActivated)
+			},
+			expectedCode: http.StatusForbidden,
+		},
+		{
 			name:       "an unexpected service error maps to 500",
 			body:       validBody,
 			remoteAddr: "203.0.113.5:54321",
