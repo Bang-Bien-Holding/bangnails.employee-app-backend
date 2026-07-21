@@ -13,10 +13,23 @@ import (
 // uniqueViolationCode is Postgres' SQLSTATE for a unique_violation error.
 const uniqueViolationCode = "23505"
 
+// foreignKeyViolationCode is Postgres' SQLSTATE for a foreign_key_violation
+// error.
+const foreignKeyViolationCode = "23503"
+
 // positionsNameKeyConstraint comes from
 // internal/adapters/postgresql/migrations/00010_create_positions.sql
 // (Postgres' default naming: <table>_<column>_key).
 const positionsNameKeyConstraint = "positions_name_key"
+
+// employeePositionsPositionIDFkeyConstraint and
+// employeePositionsEmployeeIDFkeyConstraint come from
+// internal/adapters/postgresql/migrations/00011_create_employee_positions.sql
+// (Postgres' default naming: <table>_<column>_fkey).
+const (
+	employeePositionsPositionIDFkeyConstraint = "employee_positions_position_id_fkey"
+	employeePositionsEmployeeIDFkeyConstraint = "employee_positions_employee_id_fkey"
+)
 
 type service struct {
 	// repo is a plain, non-transactional Querier for reads/writes that don't
@@ -136,7 +149,7 @@ func (s *service) SetPositionEmployees(ctx context.Context, id int64, params set
 				PositionID:  id,
 				EmployeeIds: employeeIDs,
 			}); err != nil {
-				return err
+				return translateInsertPositionEmployeesForeignKeyViolation(err)
 			}
 		}
 		return nil
@@ -179,4 +192,25 @@ func translatePositionUniqueViolation(err error) error {
 		return ErrPositionNameAlreadyExists
 	}
 	return err
+}
+
+// translateInsertPositionEmployeesForeignKeyViolation maps a Postgres
+// foreign-key violation on employee_positions to the matching domain error —
+// ErrPositionNotFound if the position was deleted, ErrUnknownEmployeeID if an
+// employee was deleted — out of the narrow race window between
+// SetPositionEmployees' pre-checks and this insert, leaving every other
+// error untouched.
+func translateInsertPositionEmployeesForeignKeyViolation(err error) error {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != foreignKeyViolationCode {
+		return err
+	}
+	switch pgErr.ConstraintName {
+	case employeePositionsPositionIDFkeyConstraint:
+		return ErrPositionNotFound
+	case employeePositionsEmployeeIDFkeyConstraint:
+		return ErrUnknownEmployeeID
+	default:
+		return err
+	}
 }
