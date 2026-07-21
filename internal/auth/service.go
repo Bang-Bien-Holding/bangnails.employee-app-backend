@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"net"
 	"net/netip"
 	"slices"
 	"time"
@@ -25,11 +26,26 @@ const (
 	loginLockoutDuration  = 15 * time.Minute
 
 	// nonAdminSessionTTL is the absolute expiry cap Login applies to every
-	// Session it creates, regardless of Heartbeat outcome — the backstop
-	// against a forgotten Logout (ADR-0014). Admin Sessions' flat 8-hour
-	// expiry, and Admin Login's presence-check bypass, are out of this
-	// ticket's scope — see issue #24.
+	// non-Admin Session it creates, regardless of Heartbeat outcome — the
+	// backstop against a forgotten Logout (ADR-0014).
 	nonAdminSessionTTL = 12 * time.Hour
+
+	// adminSessionTTL is the flat expiry Login applies to an Admin Session
+	// (issue #24) — no presence check to re-verify, so no Heartbeat, so no
+	// absolute-cap-vs-heartbeat-outcome distinction to make: just one flat
+	// duration (ADR-0014/ADR-0015).
+	adminSessionTTL = 8 * time.Hour
+
+	// heartbeatFailureThreshold is the count RecordHeartbeatFailure's
+	// returned consecutive_failures must reach before Heartbeat ends the
+	// Session — "two consecutive failed heartbeats" (ADR-0014, issue #23).
+	heartbeatFailureThreshold = 2
+
+	// heartbeatSilenceTimeout is the backstop against a device that's gone
+	// fully silent (killed app, dead battery, no connectivity): no
+	// heartbeat at all — pass or fail — for this long also ends the
+	// Session (ADR-0014, issue #23).
+	heartbeatSilenceTimeout = 90 * time.Second
 
 	// sessionTokenBytes is the raw bearer token's length before hex
 	// encoding — same size as employees' activationTokenBytes.
@@ -123,13 +139,28 @@ func (s *service) Login(ctx context.Context, params loginParams, clientIP netip.
 		return LoginResult{}, err
 	}
 
-	candidates, err := s.repo.ListStoresForLoginByEmployeeID(ctx, employee.ID)
+	admin, err := s.isAdmin(ctx, employee.ID)
 	if err != nil {
 		return LoginResult{}, err
 	}
-	store, ok := matchStore(candidates, clientIP, *params.Latitude, *params.Longitude)
-	if !ok {
-		return LoginResult{}, ErrNoStoreMatch
+
+	// storeID stays the zero value (Valid: false) for an Admin Session —
+	// Admin Login skips the presence check entirely, so there is no Store
+	// to record (ADR-0015).
+	var storeID pgtype.Int8
+	ttl := nonAdminSessionTTL
+	if admin {
+		ttl = adminSessionTTL
+	} else {
+		candidates, err := s.repo.ListStoresForLoginByEmployeeID(ctx, employee.ID)
+		if err != nil {
+			return LoginResult{}, err
+		}
+		store, ok := matchStore(candidates, clientIP, *params.Latitude, *params.Longitude, parseMAC(params.MACAddress))
+		if !ok {
+			return LoginResult{}, ErrNoStoreMatch
+		}
+		storeID = pgtype.Int8{Int64: store.ID, Valid: true}
 	}
 
 	token, err := tokenx.Generate(sessionTokenBytes)
@@ -139,15 +170,23 @@ func (s *service) Login(ctx context.Context, params loginParams, clientIP netip.
 
 	session, err := s.repo.UpsertSession(ctx, repo.UpsertSessionParams{
 		EmployeeID: employee.ID,
-		StoreID:    pgtype.Int8{Int64: store.ID, Valid: true},
+		StoreID:    storeID,
 		TokenHash:  tokenx.Hash(token),
-		ExpiresAt:  pgtype.Timestamptz{Time: time.Now().Add(nonAdminSessionTTL), Valid: true},
+		ExpiresAt:  pgtype.Timestamptz{Time: time.Now().Add(ttl), Valid: true},
 	})
 	if err != nil {
 		return LoginResult{}, err
 	}
 
 	return LoginResult{Token: token, Session: session}, nil
+}
+
+// isAdmin is the one call site (ADR-0015) for "does this Employee hold the
+// Admin Position" — Login's presence-check bypass (issue #24) and
+// ValidateSession's admin-gating check (issue #25) both go through this
+// rather than duplicating the position-name comparison.
+func (s *service) isAdmin(ctx context.Context, employeeID int64) (bool, error) {
+	return s.repo.IsEmployeeAdmin(ctx, employeeID)
 }
 
 // Logout deletes the Session matching token's hash — see Service.Logout for
@@ -157,17 +196,110 @@ func (s *service) Logout(ctx context.Context, token string) error {
 	return err
 }
 
-// matchStore implements Login's presence check (ADR-0013) over one
-// Employee's candidate Stores — already ordered by store id
+// Heartbeat reruns Login's presence check against token's Session's Store
+// (ADR-0014, issue #23). See GetSessionByTokenHash's comment for why a token
+// this query can't resolve to an open Session always reports
+// ReasonLoggedOutElsewhere, regardless of the actual cause.
+func (s *service) Heartbeat(ctx context.Context, token string, params heartbeatParams, clientIP netip.Addr) (HeartbeatResult, error) {
+	tokenHash := tokenx.Hash(token)
+
+	session, err := s.repo.GetSessionByTokenHash(ctx, tokenHash)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return HeartbeatResult{Reason: ReasonLoggedOutElsewhere}, nil
+		}
+		return HeartbeatResult{}, err
+	}
+
+	// An Admin Session carries no Store and is never Heartbeat-monitored
+	// (ADR-0015) — a no-op that neither ends the Session nor touches its
+	// heartbeat bookkeeping.
+	if !session.StoreID.Valid {
+		return HeartbeatResult{Active: true}, nil
+	}
+
+	now := time.Now()
+	silent := now.Sub(session.LastHeartbeatAt.Time) > heartbeatSilenceTimeout
+	if session.ExpiresAt.Time.Before(now) || silent {
+		if _, err := s.repo.DeleteSessionByTokenHash(ctx, tokenHash); err != nil {
+			return HeartbeatResult{}, err
+		}
+		return HeartbeatResult{Reason: ReasonSessionExpired}, nil
+	}
+
+	store, err := s.repo.GetStoreByID(ctx, session.StoreID.Int64)
+	if err != nil {
+		return HeartbeatResult{}, err
+	}
+	ips, err := s.repo.ListStoreWifiIPsByStoreID(ctx, store.ID)
+	if err != nil {
+		return HeartbeatResult{}, err
+	}
+	macs, err := s.repo.ListStoreWifiMacsByStoreID(ctx, store.ID)
+	if err != nil {
+		return HeartbeatResult{}, err
+	}
+	candidate := repo.ListStoresForLoginByEmployeeIDRow{Store: store, IpAddresses: ips, MacAddresses: macs}
+
+	_, matched := matchStore([]repo.ListStoresForLoginByEmployeeIDRow{candidate}, clientIP, *params.Latitude, *params.Longitude, parseMAC(params.MACAddress))
+	if matched {
+		if _, err := s.repo.RecordHeartbeatSuccess(ctx, tokenHash); err != nil {
+			return HeartbeatResult{}, err
+		}
+		return HeartbeatResult{Active: true}, nil
+	}
+
+	failed, err := s.repo.RecordHeartbeatFailure(ctx, tokenHash)
+	if err != nil {
+		return HeartbeatResult{}, err
+	}
+	if failed.ConsecutiveFailures >= heartbeatFailureThreshold {
+		if _, err := s.repo.DeleteSessionByTokenHash(ctx, tokenHash); err != nil {
+			return HeartbeatResult{}, err
+		}
+		return HeartbeatResult{Reason: ReasonLeftPremises}, nil
+	}
+	return HeartbeatResult{Active: true}, nil
+}
+
+// ValidateSession resolves token to the Session it names (issue #25) — the
+// one seam the admin-gating middleware, and any future authenticated
+// handler, hangs off. ErrSessionNotFound covers both "no such token" and
+// "found, but past its expiry" identically; the caller only needs to know
+// the Session isn't currently open, not why.
+func (s *service) ValidateSession(ctx context.Context, token string) (ValidatedSession, error) {
+	session, err := s.repo.GetSessionByTokenHash(ctx, tokenx.Hash(token))
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ValidatedSession{}, ErrSessionNotFound
+		}
+		return ValidatedSession{}, err
+	}
+	if session.ExpiresAt.Time.Before(time.Now()) {
+		return ValidatedSession{}, ErrSessionNotFound
+	}
+
+	admin, err := s.isAdmin(ctx, session.EmployeeID)
+	if err != nil {
+		return ValidatedSession{}, err
+	}
+	return ValidatedSession{EmployeeID: session.EmployeeID, IsAdmin: admin}, nil
+}
+
+// matchStore implements Login's/Heartbeat's presence check (ADR-0013) over
+// one Employee's candidate Stores — already ordered by store id
 // (ListStoresForLoginByEmployeeID) for a deterministic tie-break when more
 // than one Store could plausibly match. IP is tried first, across every
-// candidate, before Geofence is tried at all — "trust-ordered, not
-// request-ordered" per ADR-0013's title. MAC (ADR-0013's third tier) is out
-// of this ticket's scope — see issue #22.
-func matchStore(candidates []repo.ListStoresForLoginByEmployeeIDRow, clientIP netip.Addr, latitude, longitude float64) (repo.Store, bool) {
+// candidate, then Geofence, then MAC last across every candidate again —
+// "trust-ordered, not request-ordered" per ADR-0013's title. mac is nil
+// when the caller (native-app-only, best-effort) didn't submit one; the MAC
+// tier is then simply never checked, same as an empty candidate list would
+// be.
+func matchStore(candidates []repo.ListStoresForLoginByEmployeeIDRow, clientIP netip.Addr, latitude, longitude float64, mac net.HardwareAddr) (repo.Store, bool) {
 	for _, c := range candidates {
-		// wifi_whitelist_enabled gates only this tier (CONTEXT.md's Store
-		// entry) — it has no bearing on the Geofence pass below.
+		// wifi_whitelist_enabled gates only the Wifi Whitelist tiers
+		// (CONTEXT.md's Store entry, both IP and MAC) — it has no bearing
+		// on the Geofence pass below.
 		if !c.Store.WifiWhitelistEnabled {
 			continue
 		}
@@ -194,7 +326,43 @@ func matchStore(candidates []repo.ListStoresForLoginByEmployeeIDRow, clientIP ne
 		}
 	}
 
+	if mac != nil {
+		for _, c := range candidates {
+			if !c.Store.WifiWhitelistEnabled {
+				continue
+			}
+			for _, candidateMAC := range c.MacAddresses {
+				if bytesEqualMAC(candidateMAC, mac) {
+					return c.Store, true
+				}
+			}
+		}
+	}
+
 	return repo.Store{}, false
+}
+
+// bytesEqualMAC compares two net.HardwareAddr byte-for-byte — net.ParseMAC
+// (both here and in the Wifi Whitelist's own store_wifi_mac writes, see
+// stores.parseAddresses) always normalizes to 6 raw bytes, so a direct
+// byte-slice comparison is exact, not a string-format coincidence.
+func bytesEqualMAC(a, b net.HardwareAddr) bool {
+	return slices.Equal(a, b)
+}
+
+// parseMAC returns the parsed form of a device's optional, already-validated
+// (validate:"omitempty,mac") MAC/BSSID string, or nil for an omitted one —
+// matchStore treats a nil mac as "don't check this tier" rather than an
+// error, since a malformed value can never reach here past validation.
+func parseMAC(raw string) net.HardwareAddr {
+	if raw == "" {
+		return nil
+	}
+	mac, err := net.ParseMAC(raw)
+	if err != nil {
+		return nil
+	}
+	return mac
 }
 
 // haversineMeters returns the great-circle distance, in meters, between two

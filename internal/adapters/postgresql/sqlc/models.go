@@ -52,12 +52,14 @@ type Position struct {
 }
 
 type Session struct {
-	ID         int64              `json:"id"`
-	EmployeeID int64              `json:"employee_id"`
-	StoreID    pgtype.Int8        `json:"store_id"`
-	TokenHash  string             `json:"token_hash"`
-	IssuedAt   pgtype.Timestamptz `json:"issued_at"`
-	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	ID                  int64              `json:"id"`
+	EmployeeID          int64              `json:"employee_id"`
+	StoreID             pgtype.Int8        `json:"store_id"`
+	TokenHash           string             `json:"token_hash"`
+	IssuedAt            pgtype.Timestamptz `json:"issued_at"`
+	ExpiresAt           pgtype.Timestamptz `json:"expires_at"`
+	LastHeartbeatAt     pgtype.Timestamptz `json:"last_heartbeat_at"`
+	ConsecutiveFailures int32              `json:"consecutive_failures"`
 }
 
 type Store struct {

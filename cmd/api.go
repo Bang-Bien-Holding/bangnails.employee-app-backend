@@ -127,46 +127,55 @@ func (app *application) mount() http.Handler {
 		authHandler := auth.NewHandler(authService)
 		r.Post("/auth/login", authHandler.Login)
 		r.Post("/auth/logout", authHandler.Logout)
+		r.Post("/auth/heartbeat", authHandler.Heartbeat)
 
-		employeeService := employees.NewService(app.db, app.mailer, app.odoo)
-		employeeHandler := employees.NewHandler(employeeService)
-		r.Post("/employees", employeeHandler.CreateEmployee)
-		r.Get("/employees", employeeHandler.ListEmployees)
-		r.Get("/employees/{id}", employeeHandler.GetEmployeeByID)
-		r.Put("/employees/{id}", employeeHandler.UpdateEmployee)
-		r.Patch("/employees/{id}/status", employeeHandler.SetEmployeeActive)
-		r.Patch("/employees/{id}/password", employeeHandler.SetEmployeePassword)
-		r.Delete("/employees/{id}", employeeHandler.DeleteEmployee)
-		r.Delete("/employees", employeeHandler.BulkDeleteEmployees)
-		r.Post("/employees/password-reset-links", employeeHandler.BulkSendPasswordResetLinks)
-		r.Post("/employees/syncs", employeeHandler.SyncEmployees)
-		r.Get("/employees/syncs", employeeHandler.SyncStatus)
+		employeeHandler := employees.NewHandler(employees.NewService(app.db, app.mailer, app.odoo))
+		positionsHandler := positions.NewHandler(positions.NewService(app.db))
+		storesHandler := stores.NewHandler(stores.NewService(app.db, app.odoo))
 
-		// Public, unauthenticated — not nested under /employees since
-		// it's not a CRUD action on a specific employee resource; the
-		// token in the body identifies the employee.
+		// Public, unauthenticated — not nested under /employees since it's
+		// not a CRUD action on a specific employee resource; the token in
+		// the body identifies the employee. Deliberately outside the
+		// AdminOnly group below (ADR-0015): activation proves email
+		// ownership, not admin identity.
 		r.Post("/activate", employeeHandler.CompleteActivation)
 
-		positionsService := positions.NewService(app.db)
-		positionsHandler := positions.NewHandler(positionsService)
-		r.Post("/positions", positionsHandler.CreatePosition)
-		r.Get("/positions", positionsHandler.ListPositions)
-		r.Put("/positions/{id}", positionsHandler.UpdatePosition)
-		r.Delete("/positions/{id}", positionsHandler.DeletePosition)
-		r.Delete("/positions", positionsHandler.BulkDeletePositions)
-		r.Get("/positions/{id}/employees", positionsHandler.GetPositionEmployees)
-		r.Put("/positions/{id}/employees", positionsHandler.SetPositionEmployees)
+		// Every existing admin endpoint (Employees, Stores, Positions) now
+		// requires a valid Admin Session (ADR-0015, issue #25) — the gate
+		// lives entirely at this routing layer, via auth.AdminOnly,
+		// without touching these packages' own Service/Handler internals.
+		r.Group(func(r chi.Router) {
+			r.Use(auth.AdminOnly(authService))
 
-		storesService := stores.NewService(app.db, app.odoo)
-		storesHandler := stores.NewHandler(storesService)
-		r.Post("/stores/syncs", storesHandler.SyncStores)
-		r.Get("/stores/syncs", storesHandler.SyncStatus)
-		r.Get("/stores", storesHandler.ListStores)
-		r.Patch("/stores", storesHandler.BulkSetWifiWhitelistEnabled)
-		r.Get("/stores/{id}", storesHandler.GetStoreByID)
-		r.Patch("/stores/{id}", storesHandler.PatchStore)
-		r.Patch("/stores/{id}/wifi-whitelist-enabled", storesHandler.SetStoreWifiWhitelistEnabled)
-		r.Delete("/stores/{id}/wifi-whitelist", storesHandler.DeleteWifiWhitelistEntries)
+			r.Post("/employees", employeeHandler.CreateEmployee)
+			r.Get("/employees", employeeHandler.ListEmployees)
+			r.Get("/employees/{id}", employeeHandler.GetEmployeeByID)
+			r.Put("/employees/{id}", employeeHandler.UpdateEmployee)
+			r.Patch("/employees/{id}/status", employeeHandler.SetEmployeeActive)
+			r.Patch("/employees/{id}/password", employeeHandler.SetEmployeePassword)
+			r.Delete("/employees/{id}", employeeHandler.DeleteEmployee)
+			r.Delete("/employees", employeeHandler.BulkDeleteEmployees)
+			r.Post("/employees/password-reset-links", employeeHandler.BulkSendPasswordResetLinks)
+			r.Post("/employees/syncs", employeeHandler.SyncEmployees)
+			r.Get("/employees/syncs", employeeHandler.SyncStatus)
+
+			r.Post("/positions", positionsHandler.CreatePosition)
+			r.Get("/positions", positionsHandler.ListPositions)
+			r.Put("/positions/{id}", positionsHandler.UpdatePosition)
+			r.Delete("/positions/{id}", positionsHandler.DeletePosition)
+			r.Delete("/positions", positionsHandler.BulkDeletePositions)
+			r.Get("/positions/{id}/employees", positionsHandler.GetPositionEmployees)
+			r.Put("/positions/{id}/employees", positionsHandler.SetPositionEmployees)
+
+			r.Post("/stores/syncs", storesHandler.SyncStores)
+			r.Get("/stores/syncs", storesHandler.SyncStatus)
+			r.Get("/stores", storesHandler.ListStores)
+			r.Patch("/stores", storesHandler.BulkSetWifiWhitelistEnabled)
+			r.Get("/stores/{id}", storesHandler.GetStoreByID)
+			r.Patch("/stores/{id}", storesHandler.PatchStore)
+			r.Patch("/stores/{id}/wifi-whitelist-enabled", storesHandler.SetStoreWifiWhitelistEnabled)
+			r.Delete("/stores/{id}/wifi-whitelist", storesHandler.DeleteWifiWhitelistEntries)
+		})
 	})
 
 	return r

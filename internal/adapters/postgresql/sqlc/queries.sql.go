@@ -286,7 +286,8 @@ WHERE token_hash = $1
 // Logout: ends the Session matching this bearer token's hash immediately,
 // no re-authentication required. A hash matching no row (already logged
 // out, expired and reaped, or never valid) still returns 0 rows rather than
-// an error — Logout is idempotent, see auth.Service.Logout.
+// an error — Logout is idempotent, see auth.Service.Logout. Also reused by
+// Heartbeat (issue #23) to end a Session on expiry/silence/left_premises.
 func (q *Queries) DeleteSessionByTokenHash(ctx context.Context, tokenHash string) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteSessionByTokenHash, tokenHash)
 	if err != nil {
@@ -548,6 +549,35 @@ func (q *Queries) GetPositionByID(ctx context.Context, id int64) (Position, erro
 	return i, err
 }
 
+const getSessionByTokenHash = `-- name: GetSessionByTokenHash :one
+SELECT id, employee_id, store_id, token_hash, issued_at, expires_at, last_heartbeat_at, consecutive_failures FROM sessions
+WHERE token_hash = $1
+`
+
+// Heartbeat's (issue #23) and ValidateSession's (issue #25) lookup of the
+// Session a bearer token currently names. A hash matching no row — never
+// valid, already logged out/expired-and-ended, or (for a stale token still
+// held by a device) superseded by a newer Login's UpsertSession overwriting
+// the same employee_id row in place — is pgx.ErrNoRows; the caller can't
+// distinguish those cases from this query alone, which is why Heartbeat
+// reports the generic logged_out_elsewhere reason for all of them (see
+// auth.Service.Heartbeat).
+func (q *Queries) GetSessionByTokenHash(ctx context.Context, tokenHash string) (Session, error) {
+	row := q.db.QueryRow(ctx, getSessionByTokenHash, tokenHash)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.EmployeeID,
+		&i.StoreID,
+		&i.TokenHash,
+		&i.IssuedAt,
+		&i.ExpiresAt,
+		&i.LastHeartbeatAt,
+		&i.ConsecutiveFailures,
+	)
+	return i, err
+}
+
 const getStoreByID = `-- name: GetStoreByID :one
 SELECT id, odoo_store_id, store_name, city, latitude, longitude, radius_meters, wifi_whitelist_enabled, created_at, updated_at FROM store
 WHERE id = $1
@@ -705,6 +735,28 @@ type InsertStoreWifiMacsParams struct {
 func (q *Queries) InsertStoreWifiMacs(ctx context.Context, arg InsertStoreWifiMacsParams) error {
 	_, err := q.db.Exec(ctx, insertStoreWifiMacs, arg.StoreID, arg.MacAddresses)
 	return err
+}
+
+const isEmployeeAdmin = `-- name: IsEmployeeAdmin :one
+SELECT EXISTS (
+    SELECT 1
+    FROM employee_positions ep
+    JOIN positions p ON p.id = ep.position_id
+    WHERE ep.employee_id = $1
+    AND LOWER(p.name) = 'admin'
+)
+`
+
+// The single centralized "does this Employee hold the Admin Position" check
+// ADR-0015 calls for — an exact, case-insensitive match on the Position
+// name "Admin", not a pattern. Shared by Login's presence-check bypass
+// (issue #24) and the admin-gating middleware (issue #25); no other call
+// site should reimplement this comparison.
+func (q *Queries) IsEmployeeAdmin(ctx context.Context, employeeID int64) (bool, error) {
+	row := q.db.QueryRow(ctx, isEmployeeAdmin, employeeID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const listEmployeeIDsByIDs = `-- name: ListEmployeeIDsByIDs :many
@@ -1111,7 +1163,8 @@ func (q *Queries) ListStoresByOdooStoreIDs(ctx context.Context, odooStoreIds []s
 const listStoresForLoginByEmployeeID = `-- name: ListStoresForLoginByEmployeeID :many
 SELECT
     s.id, s.odoo_store_id, s.store_name, s.city, s.latitude, s.longitude, s.radius_meters, s.wifi_whitelist_enabled, s.created_at, s.updated_at,
-    COALESCE(ip.ip_addresses, '{}')::inet[] AS ip_addresses
+    COALESCE(ip.ip_addresses, '{}')::inet[] AS ip_addresses,
+    COALESCE(mac.mac_addresses, '{}')::macaddr[] AS mac_addresses
 FROM store s
 JOIN employee_stores es ON es.store_id = s.id
 LEFT JOIN LATERAL (
@@ -1119,23 +1172,28 @@ LEFT JOIN LATERAL (
     FROM store_wifi_ip
     WHERE store_id = s.id
 ) ip ON true
+LEFT JOIN LATERAL (
+    SELECT array_agg(mac_address ORDER BY id) AS mac_addresses
+    FROM store_wifi_mac
+    WHERE store_id = s.id
+) mac ON true
 WHERE es.employee_id = $1
 ORDER BY s.id
 `
 
 type ListStoresForLoginByEmployeeIDRow struct {
-	Store       Store        `json:"store"`
-	IpAddresses []netip.Addr `json:"ip_addresses"`
+	Store        Store              `json:"store"`
+	IpAddresses  []netip.Addr       `json:"ip_addresses"`
+	MacAddresses []net.HardwareAddr `json:"mac_addresses"`
 }
 
-// Every Store an Employee belongs to, each with its current IP whitelist —
-// Login's (issue #21) candidate set for the IP/Geofence presence check
-// (ADR-0013). Deliberately no MAC whitelist here (out of this ticket's
-// scope, see issue #22) and ordered by store id, the deterministic
+// Every Store an Employee belongs to, each with its current IP and MAC
+// whitelists — Login's (issues #21/#22) candidate set for the IP/Geofence/MAC
+// presence check (ADR-0013). Ordered by store id, the deterministic
 // tie-break auth.matchStore relies on when more than one Store could
 // plausibly match. wifi_whitelist_enabled comes along on the embedded
-// Store row so the caller can gate the IP tier per store without a second
-// query; geofence columns are on the same row for the same reason.
+// Store row so the caller can gate the IP/MAC tiers per store without a
+// second query; geofence columns are on the same row for the same reason.
 func (q *Queries) ListStoresForLoginByEmployeeID(ctx context.Context, employeeID int64) ([]ListStoresForLoginByEmployeeIDRow, error) {
 	rows, err := q.db.Query(ctx, listStoresForLoginByEmployeeID, employeeID)
 	if err != nil {
@@ -1157,6 +1215,7 @@ func (q *Queries) ListStoresForLoginByEmployeeID(ctx context.Context, employeeID
 			&i.Store.CreatedAt,
 			&i.Store.UpdatedAt,
 			&i.IpAddresses,
+			&i.MacAddresses,
 		); err != nil {
 			return nil, err
 		}
@@ -1221,6 +1280,64 @@ func (q *Queries) RecordFailedLoginAttempt(ctx context.Context, arg RecordFailed
 		&i.UpdatedAt,
 		&i.FailedLoginAttempts,
 		&i.LockedUntil,
+	)
+	return i, err
+}
+
+const recordHeartbeatFailure = `-- name: RecordHeartbeatFailure :one
+UPDATE sessions
+SET last_heartbeat_at = now(),
+    consecutive_failures = consecutive_failures + 1
+WHERE token_hash = $1
+RETURNING id, employee_id, store_id, token_hash, issued_at, expires_at, last_heartbeat_at, consecutive_failures
+`
+
+// A Heartbeat (issue #23) whose presence recheck did not match the Session's
+// Store: still refreshes last_heartbeat_at (a failed check is still a check
+// that arrived — only true silence should trip the 90s backstop) and
+// increments consecutive_failures by one. The caller (auth.Service.Heartbeat)
+// ends the Session once the returned count reaches 2.
+func (q *Queries) RecordHeartbeatFailure(ctx context.Context, tokenHash string) (Session, error) {
+	row := q.db.QueryRow(ctx, recordHeartbeatFailure, tokenHash)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.EmployeeID,
+		&i.StoreID,
+		&i.TokenHash,
+		&i.IssuedAt,
+		&i.ExpiresAt,
+		&i.LastHeartbeatAt,
+		&i.ConsecutiveFailures,
+	)
+	return i, err
+}
+
+const recordHeartbeatSuccess = `-- name: RecordHeartbeatSuccess :one
+UPDATE sessions
+SET last_heartbeat_at = now(),
+    consecutive_failures = 0
+WHERE token_hash = $1
+RETURNING id, employee_id, store_id, token_hash, issued_at, expires_at, last_heartbeat_at, consecutive_failures
+`
+
+// A Heartbeat (issue #23) whose presence recheck matched the Session's Store:
+// resets consecutive_failures to 0 (a pass between failures forgives them,
+// per ADR-0014) and refreshes last_heartbeat_at so the 90s silence backstop's
+// clock restarts. Does not touch expires_at — the 12-hour cap is absolute,
+// not extended by a passing Heartbeat.
+func (q *Queries) RecordHeartbeatSuccess(ctx context.Context, tokenHash string) (Session, error) {
+	row := q.db.QueryRow(ctx, recordHeartbeatSuccess, tokenHash)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.EmployeeID,
+		&i.StoreID,
+		&i.TokenHash,
+		&i.IssuedAt,
+		&i.ExpiresAt,
+		&i.LastHeartbeatAt,
+		&i.ConsecutiveFailures,
 	)
 	return i, err
 }
@@ -1529,8 +1646,10 @@ ON CONFLICT (employee_id) DO UPDATE
 SET store_id = EXCLUDED.store_id,
     token_hash = EXCLUDED.token_hash,
     issued_at = now(),
-    expires_at = EXCLUDED.expires_at
-RETURNING id, employee_id, store_id, token_hash, issued_at, expires_at
+    expires_at = EXCLUDED.expires_at,
+    last_heartbeat_at = now(),
+    consecutive_failures = 0
+RETURNING id, employee_id, store_id, token_hash, issued_at, expires_at, last_heartbeat_at, consecutive_failures
 `
 
 type UpsertSessionParams struct {
@@ -1544,7 +1663,11 @@ type UpsertSessionParams struct {
 // employee_id, or, if one already exists (UNIQUE employee_id), atomically
 // replaces it in place — the "a new Login invalidates any Session already
 // open for that Employee" rule, in one round trip rather than a
-// delete-then-insert.
+// delete-then-insert. On the DO UPDATE path, last_heartbeat_at/
+// consecutive_failures are reset explicitly (the INSERT path already gets
+// them from the column defaults) — a re-issued Session for an Employee who
+// had one open before starts Heartbeat's silence/failure tracking clean,
+// not carrying over the old Session's state (issue #23).
 func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) (Session, error) {
 	row := q.db.QueryRow(ctx, upsertSession,
 		arg.EmployeeID,
@@ -1560,6 +1683,8 @@ func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) (S
 		&i.TokenHash,
 		&i.IssuedAt,
 		&i.ExpiresAt,
+		&i.LastHeartbeatAt,
+		&i.ConsecutiveFailures,
 	)
 	return i, err
 }

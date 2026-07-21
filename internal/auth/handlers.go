@@ -78,6 +78,42 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// Heartbeat handles POST /v1/auth/heartbeat. Like Login, the presence
+// check's IP comes from middleware.GetClientIPAddr, not the body; the
+// session token comes from the Authorization header, same as Logout.
+func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
+	token, ok := bearerToken(r)
+	if !ok {
+		http.Error(w, "missing or malformed Authorization header", http.StatusUnauthorized)
+		return
+	}
+
+	var params heartbeatParams
+	if err := json.Read(w, r, &params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := validate.Struct(params); err != nil {
+		http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	clientIP := middleware.GetClientIPAddr(r.Context())
+	if !clientIP.IsValid() {
+		http.Error(w, "could not determine client IP", http.StatusInternalServerError)
+		return
+	}
+
+	result, err := h.service.Heartbeat(r.Context(), token, params, clientIP)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	json.Write(w, http.StatusOK, newHeartbeatResponse(result))
+}
+
 // bearerToken extracts the token from a request's "Authorization: Bearer
 // <token>" header.
 func bearerToken(r *http.Request) (string, bool) {

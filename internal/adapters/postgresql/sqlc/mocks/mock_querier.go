@@ -383,6 +383,21 @@ func (mr *MockQuerierMockRecorder) GetPositionByID(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPositionByID", reflect.TypeOf((*MockQuerier)(nil).GetPositionByID), ctx, id)
 }
 
+// GetSessionByTokenHash mocks base method.
+func (m *MockQuerier) GetSessionByTokenHash(ctx context.Context, tokenHash string) (repo.Session, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetSessionByTokenHash", ctx, tokenHash)
+	ret0, _ := ret[0].(repo.Session)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetSessionByTokenHash indicates an expected call of GetSessionByTokenHash.
+func (mr *MockQuerierMockRecorder) GetSessionByTokenHash(ctx, tokenHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetSessionByTokenHash", reflect.TypeOf((*MockQuerier)(nil).GetSessionByTokenHash), ctx, tokenHash)
+}
+
 // GetStoreByID mocks base method.
 func (m *MockQuerier) GetStoreByID(ctx context.Context, id int64) (repo.Store, error) {
 	m.ctrl.T.Helper()
@@ -481,6 +496,21 @@ func (m *MockQuerier) InsertStoreWifiMacs(ctx context.Context, arg repo.InsertSt
 func (mr *MockQuerierMockRecorder) InsertStoreWifiMacs(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertStoreWifiMacs", reflect.TypeOf((*MockQuerier)(nil).InsertStoreWifiMacs), ctx, arg)
+}
+
+// IsEmployeeAdmin mocks base method.
+func (m *MockQuerier) IsEmployeeAdmin(ctx context.Context, employeeID int64) (bool, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "IsEmployeeAdmin", ctx, employeeID)
+	ret0, _ := ret[0].(bool)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// IsEmployeeAdmin indicates an expected call of IsEmployeeAdmin.
+func (mr *MockQuerierMockRecorder) IsEmployeeAdmin(ctx, employeeID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsEmployeeAdmin", reflect.TypeOf((*MockQuerier)(nil).IsEmployeeAdmin), ctx, employeeID)
 }
 
 // ListEmployeeIDsByIDs mocks base method.
@@ -691,6 +721,36 @@ func (m *MockQuerier) RecordFailedLoginAttempt(ctx context.Context, arg repo.Rec
 func (mr *MockQuerierMockRecorder) RecordFailedLoginAttempt(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordFailedLoginAttempt", reflect.TypeOf((*MockQuerier)(nil).RecordFailedLoginAttempt), ctx, arg)
+}
+
+// RecordHeartbeatFailure mocks base method.
+func (m *MockQuerier) RecordHeartbeatFailure(ctx context.Context, tokenHash string) (repo.Session, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RecordHeartbeatFailure", ctx, tokenHash)
+	ret0, _ := ret[0].(repo.Session)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RecordHeartbeatFailure indicates an expected call of RecordHeartbeatFailure.
+func (mr *MockQuerierMockRecorder) RecordHeartbeatFailure(ctx, tokenHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordHeartbeatFailure", reflect.TypeOf((*MockQuerier)(nil).RecordHeartbeatFailure), ctx, tokenHash)
+}
+
+// RecordHeartbeatSuccess mocks base method.
+func (m *MockQuerier) RecordHeartbeatSuccess(ctx context.Context, tokenHash string) (repo.Session, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RecordHeartbeatSuccess", ctx, tokenHash)
+	ret0, _ := ret[0].(repo.Session)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RecordHeartbeatSuccess indicates an expected call of RecordHeartbeatSuccess.
+func (mr *MockQuerierMockRecorder) RecordHeartbeatSuccess(ctx, tokenHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordHeartbeatSuccess", reflect.TypeOf((*MockQuerier)(nil).RecordHeartbeatSuccess), ctx, tokenHash)
 }
 
 // RedeemPasswordResetToken mocks base method.

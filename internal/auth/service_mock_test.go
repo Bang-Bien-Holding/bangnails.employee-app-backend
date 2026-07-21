@@ -41,6 +41,21 @@ func (m *MockService) EXPECT() *MockServiceMockRecorder {
 	return m.recorder
 }
 
+// Heartbeat mocks base method.
+func (m *MockService) Heartbeat(ctx context.Context, token string, params heartbeatParams, clientIP netip.Addr) (HeartbeatResult, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Heartbeat", ctx, token, params, clientIP)
+	ret0, _ := ret[0].(HeartbeatResult)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// Heartbeat indicates an expected call of Heartbeat.
+func (mr *MockServiceMockRecorder) Heartbeat(ctx, token, params, clientIP any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Heartbeat", reflect.TypeOf((*MockService)(nil).Heartbeat), ctx, token, params, clientIP)
+}
+
 // Login mocks base method.
 func (m *MockService) Login(ctx context.Context, params loginParams, clientIP netip.Addr) (LoginResult, error) {
 	m.ctrl.T.Helper()
@@ -68,4 +83,19 @@ func (m *MockService) Logout(ctx context.Context, token string) error {
 func (mr *MockServiceMockRecorder) Logout(ctx, token any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Logout", reflect.TypeOf((*MockService)(nil).Logout), ctx, token)
+}
+
+// ValidateSession mocks base method.
+func (m *MockService) ValidateSession(ctx context.Context, token string) (ValidatedSession, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ValidateSession", ctx, token)
+	ret0, _ := ret[0].(ValidatedSession)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ValidateSession indicates an expected call of ValidateSession.
+func (mr *MockServiceMockRecorder) ValidateSession(ctx, token any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ValidateSession", reflect.TypeOf((*MockService)(nil).ValidateSession), ctx, token)
 }

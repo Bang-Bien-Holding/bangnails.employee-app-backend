@@ -22,25 +22,49 @@ import (
 var ErrInvalidCredentials = errors.New("invalid username or password")
 
 // ErrNoStoreMatch is returned by Login when username/password check out but
-// none of the Employee's Stores match on IP or Geofence (ADR-0013) — a
+// none of the Employee's Stores match on IP, Geofence, or MAC (ADR-0013) — a
 // distinct, non-generic error, unlike ErrInvalidCredentials, since the
 // caller has already proven who they are; what's missing is presence, not
 // identity.
 var ErrNoStoreMatch = errors.New("not at an authorized store")
 
-// loginParams is the body for POST /v1/auth/login. Latitude/Longitude are
+// ErrSessionNotFound is returned by ValidateSession for a bearer token that
+// names no currently-open Session — never valid, already logged out, or
+// expired. The admin-gating middleware (issue #25) maps it to 401.
+var ErrSessionNotFound = errors.New("session not found or expired")
+
+// devicePresenceParams is the presence-check input shared by Login and
+// Heartbeat (ADR-0013): GPS coordinates plus the optional, native-app-only
+// MAC/BSSID of the currently-connected Wi-Fi network. Latitude/Longitude are
 // pointers, not plain float64s, so an omitted field ("required" on a
 // pointer catches nil) is distinguishable from an explicit 0 — a real point
 // on the equator/prime meridian, not a sentinel for "not sent" (same
-// convention as stores.patchStoreParams' geofence fields). The
-// server-observed request IP is deliberately not a field here — ADR-0013:
-// "the app sends no IP field for this check" — Handler.Login supplies it
-// separately, read from the connection itself.
+// convention as stores.patchStoreParams' geofence fields). MACAddress needs
+// no pointer for the same "omitted vs. sent" reason: an empty string is
+// never a valid MAC, so it's already unambiguous (same convention as
+// stores.patchStoreParams' address slices). The server-observed request IP
+// is deliberately not a field here — ADR-0013: "the app sends no IP field
+// for this check" — Handler supplies it separately, read from the
+// connection itself.
+type devicePresenceParams struct {
+	Latitude   *float64 `json:"latitude" validate:"required,min=-90,max=90"`
+	Longitude  *float64 `json:"longitude" validate:"required,min=-180,max=180"`
+	MACAddress string   `json:"mac_address" validate:"omitempty,mac"`
+}
+
+// loginParams is the body for POST /v1/auth/login.
 type loginParams struct {
-	Username  string   `json:"username" validate:"required"`
-	Password  string   `json:"password" validate:"required"`
-	Latitude  *float64 `json:"latitude" validate:"required,min=-90,max=90"`
-	Longitude *float64 `json:"longitude" validate:"required,min=-180,max=180"`
+	Username string `json:"username" validate:"required"`
+	Password string `json:"password" validate:"required"`
+	devicePresenceParams
+}
+
+// heartbeatParams is the body for POST /v1/auth/heartbeat — the same
+// presence-check inputs Login takes, re-submitted every ~30s while a
+// non-Admin Session is open (ADR-0014). The session token itself travels in
+// the Authorization header, same as Logout, not in this body.
+type heartbeatParams struct {
+	devicePresenceParams
 }
 
 // LoginResult is Login's success return: the raw bearer token (which, like
@@ -52,6 +76,40 @@ type LoginResult struct {
 	Session repo.Session
 }
 
+// Heartbeat's forced-session-end reason codes (ADR-0014) — carried in
+// HeartbeatResult so the app can tell the Employee why, instead of a bare
+// "please log in again".
+const (
+	// ReasonLeftPremises means two consecutive presence rechecks failed.
+	ReasonLeftPremises = "left_premises"
+	// ReasonSessionExpired means the Session's absolute expiry passed, or
+	// no heartbeat (pass or fail) arrived for the 90s silence backstop.
+	ReasonSessionExpired = "session_expired"
+	// ReasonLoggedOutElsewhere means the submitted token no longer names an
+	// open Session — most commonly because a newer Login superseded it
+	// (ADR-0014's single-active-Session rule), but also the generic answer
+	// for any other token this query can't find (see
+	// repo.Querier.GetSessionByTokenHash's comment) — this ticket doesn't
+	// need to tell those cases apart from Heartbeat's caller's perspective.
+	ReasonLoggedOutElsewhere = "logged_out_elsewhere"
+)
+
+// HeartbeatResult is Heartbeat's return: Active reports whether the Session
+// is still open after this check; Reason is one of the Reason* constants
+// above, set only when Active is false.
+type HeartbeatResult struct {
+	Active bool
+	Reason string
+}
+
+// ValidatedSession is ValidateSession's return — just enough for the
+// admin-gating middleware (issue #25) to decide access: which Employee the
+// token belongs to, and whether they hold the Admin Position.
+type ValidatedSession struct {
+	EmployeeID int64
+	IsAdmin    bool
+}
+
 type Service interface {
 	Login(ctx context.Context, params loginParams, clientIP netip.Addr) (LoginResult, error)
 	// Logout ends the Session identified by token (the raw bearer value,
@@ -60,6 +118,17 @@ type Service interface {
 	// error — the end state Logout promises ("this token no longer opens a
 	// session") already holds.
 	Logout(ctx context.Context, token string) error
+	// Heartbeat reruns Login's presence check against token's Session's
+	// Store and reports whether the Session survived (ADR-0014). A no-op
+	// that always reports Active for an Admin Session (never
+	// Heartbeat-monitored, see ADR-0015) or a token this ticket can't
+	// resolve to an open Session (ReasonLoggedOutElsewhere).
+	Heartbeat(ctx context.Context, token string, params heartbeatParams, clientIP netip.Addr) (HeartbeatResult, error)
+	// ValidateSession resolves token to the Session it names, for both the
+	// admin-gating middleware (issue #25) and any handler that needs to
+	// know who's calling. ErrSessionNotFound covers a token naming no
+	// currently-open, unexpired Session.
+	ValidateSession(ctx context.Context, token string) (ValidatedSession, error)
 }
 
 // loginResponse is the JSON shape POST /v1/auth/login returns on success.
@@ -84,4 +153,16 @@ func pgInt8Ptr(i pgtype.Int8) *int64 {
 		return nil
 	}
 	return &i.Int64
+}
+
+// heartbeatResponse is the JSON shape POST /v1/auth/heartbeat returns.
+// Reason is omitted entirely when Active is true — there's nothing to
+// explain.
+type heartbeatResponse struct {
+	Active bool   `json:"active"`
+	Reason string `json:"reason,omitempty"`
+}
+
+func newHeartbeatResponse(result HeartbeatResult) heartbeatResponse {
+	return heartbeatResponse{Active: result.Active, Reason: result.Reason}
 }
