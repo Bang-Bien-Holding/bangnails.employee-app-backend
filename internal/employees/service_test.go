@@ -871,6 +871,12 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 					}).
 					Return(nil)
 				mockRepo.EXPECT().
+					InsertEmployeePositions(gomock.Any(), repo.InsertEmployeePositionsParams{
+						EmployeeID:  1,
+						PositionIds: []int64{},
+					}).
+					Return(nil)
+				mockRepo.EXPECT().
 					ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).
 					Return([]int64{}, nil)
 			},
@@ -1027,8 +1033,11 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 				return p
 			}(),
 			setupMock: func(mockRepo *mocks.MockQuerier) {
-				// No CountPositionsByIDs/InsertEmployeePositions expectation:
-				// an empty submitted set short-circuits both.
+				// No CountPositionsByIDs expectation: an empty submitted set
+				// short-circuits validatePositionIDs. InsertEmployeePositions
+				// still runs (dbx.DiffReplace always calls it) — the
+				// underlying sqlc INSERT...SELECT unnest([])...ON CONFLICT DO
+				// NOTHING is already a safe no-op over an empty set.
 				mockRepo.EXPECT().
 					GetEmployeeByID(gomock.Any(), int64(1)).
 					Return(repo.Employee{ID: 1, OdooEmployeeID: inputParams.OdooEmployeeID}, nil)
@@ -1042,6 +1051,12 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 					}, nil)
 				mockRepo.EXPECT().
 					DeleteEmployeePositionsNotIn(gomock.Any(), repo.DeleteEmployeePositionsNotInParams{
+						EmployeeID:  1,
+						PositionIds: []int64{},
+					}).
+					Return(nil)
+				mockRepo.EXPECT().
+					InsertEmployeePositions(gomock.Any(), repo.InsertEmployeePositionsParams{
 						EmployeeID:  1,
 						PositionIds: []int64{},
 					}).
@@ -1101,6 +1116,12 @@ func TestEmployeeService_UpdateEmployee(t *testing.T) {
 					Return(repo.Employee{ID: 1, OdooEmployeeID: 2}, nil)
 				mockRepo.EXPECT().
 					DeleteEmployeePositionsNotIn(gomock.Any(), repo.DeleteEmployeePositionsNotInParams{
+						EmployeeID:  1,
+						PositionIds: []int64{},
+					}).
+					Return(nil)
+				mockRepo.EXPECT().
+					InsertEmployeePositions(gomock.Any(), repo.InsertEmployeePositionsParams{
 						EmployeeID:  1,
 						PositionIds: []int64{},
 					}).
@@ -1284,6 +1305,9 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 					DeleteEmployeePositionsNotIn(gomock.Any(), gomock.Any()).
 					Return(nil)
 				mockRepo.EXPECT().
+					InsertEmployeePositions(gomock.Any(), gomock.Any()).
+					Return(nil)
+				mockRepo.EXPECT().
 					ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).
 					Return([]int64{}, nil)
 				mockRepo.EXPECT().SetEmployeePassword(gomock.Any(), gomock.Any()).Times(0)
@@ -1307,6 +1331,9 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 					Return(repo.Employee{ID: 1}, nil)
 				mockRepo.EXPECT().
 					DeleteEmployeePositionsNotIn(gomock.Any(), gomock.Any()).
+					Return(nil)
+				mockRepo.EXPECT().
+					InsertEmployeePositions(gomock.Any(), gomock.Any()).
 					Return(nil)
 				mockRepo.EXPECT().
 					ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).
@@ -1342,6 +1369,9 @@ func TestEmployeeService_UpdateEmployee_Password(t *testing.T) {
 					Return(repo.Employee{ID: 1}, nil)
 				mockRepo.EXPECT().
 					DeleteEmployeePositionsNotIn(gomock.Any(), gomock.Any()).
+					Return(nil)
+				mockRepo.EXPECT().
+					InsertEmployeePositions(gomock.Any(), gomock.Any()).
 					Return(nil)
 				// SetEmployeePassword now runs inside the same transaction as
 				// the rest of the update, before ListStoreIDsByEmployeeID —
@@ -2044,7 +2074,10 @@ func TestEmployeeService_SyncEmployees(t *testing.T) {
 		// Neither found employee reports any Odoo store (StoreIDs unset),
 		// but the diff still runs per employee with an empty set — clearing
 		// any stale employee_stores rows rather than skipping the batch
-		// entirely.
+		// entirely. InsertEmployeeStores still runs too (dbx.DiffReplace
+		// always calls it) — the underlying sqlc INSERT...SELECT
+		// unnest([])...ON CONFLICT DO NOTHING is already a safe no-op over
+		// an empty set.
 		mockRepo.EXPECT().
 			DeleteEmployeeStoresNotIn(gomock.Any(), repo.DeleteEmployeeStoresNotInParams{
 				EmployeeID: 1,
@@ -2052,7 +2085,19 @@ func TestEmployeeService_SyncEmployees(t *testing.T) {
 			}).
 			Return(nil)
 		mockRepo.EXPECT().
+			InsertEmployeeStores(gomock.Any(), repo.InsertEmployeeStoresParams{
+				EmployeeID: 1,
+				StoreIds:   []int64{},
+			}).
+			Return(nil)
+		mockRepo.EXPECT().
 			DeleteEmployeeStoresNotIn(gomock.Any(), repo.DeleteEmployeeStoresNotInParams{
+				EmployeeID: 2,
+				StoreIds:   []int64{},
+			}).
+			Return(nil)
+		mockRepo.EXPECT().
+			InsertEmployeeStores(gomock.Any(), repo.InsertEmployeeStoresParams{
 				EmployeeID: 2,
 				StoreIds:   []int64{},
 			}).

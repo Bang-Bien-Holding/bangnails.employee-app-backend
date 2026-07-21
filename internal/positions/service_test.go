@@ -368,12 +368,20 @@ func TestPositionService_SetPositionEmployees(t *testing.T) {
 			expectedIDs: []int64{10, 20},
 		},
 		{
-			name:        "TC-SET-02: Empty set clears every assignment without inserting",
+			name:        "TC-SET-02: Empty set clears every assignment",
 			inputID:     1,
 			inputParams: setPositionEmployeesParams{EmployeeIDs: nil},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().GetPositionByID(gomock.Any(), int64(1)).Return(repo.Position{ID: 1, Name: "Technician"}, nil)
 				mockRepo.EXPECT().DeleteEmployeePositionsByPositionIDNotIn(gomock.Any(), repo.DeleteEmployeePositionsByPositionIDNotInParams{
+					PositionID:  1,
+					EmployeeIds: []int64{},
+				}).Return(nil)
+				// InsertPositionEmployees still runs (dbx.DiffReplace always
+				// calls it) — the underlying sqlc INSERT...SELECT
+				// unnest([])...ON CONFLICT DO NOTHING is already a safe
+				// no-op over an empty set.
+				mockRepo.EXPECT().InsertPositionEmployees(gomock.Any(), repo.InsertPositionEmployeesParams{
 					PositionID:  1,
 					EmployeeIds: []int64{},
 				}).Return(nil)
