@@ -417,6 +417,92 @@ SELECT store_id FROM employee_stores
 WHERE employee_id = $1
 ORDER BY store_id;
 
+-- name: ListStoresForLoginByEmployeeID :many
+-- Every Store an Employee belongs to, each with its current IP whitelist —
+-- Login's (issue #21) candidate set for the IP/Geofence presence check
+-- (ADR-0013). Deliberately no MAC whitelist here (out of this ticket's
+-- scope, see issue #22) and ordered by store id, the deterministic
+-- tie-break auth.matchStore relies on when more than one Store could
+-- plausibly match. wifi_whitelist_enabled comes along on the embedded
+-- Store row so the caller can gate the IP tier per store without a second
+-- query; geofence columns are on the same row for the same reason.
+SELECT
+    sqlc.embed(s),
+    COALESCE(ip.ip_addresses, '{}')::inet[] AS ip_addresses
+FROM store s
+JOIN employee_stores es ON es.store_id = s.id
+LEFT JOIN LATERAL (
+    SELECT array_agg(ip_address ORDER BY id) AS ip_addresses
+    FROM store_wifi_ip
+    WHERE store_id = s.id
+) ip ON true
+WHERE es.employee_id = sqlc.arg(employee_id)
+ORDER BY s.id;
+
+-- name: RecordFailedLoginAttempt :one
+-- Atomically increments failed_login_attempts and, only once the new count
+-- reaches sqlc.arg(threshold), sets locked_until to sqlc.arg(locked_until)
+-- (computed in Go as now + the lockout duration, so the duration itself
+-- stays a Go constant, not a SQL literal — see auth.loginLockoutDuration).
+-- Callers (auth.Service.Login) only ever reach this query once they've
+-- already confirmed locked_until is unset or in the past — an
+-- Employee still inside an active lockout window never gets here. Given
+-- that, "consecutive" resets the moment a prior lockout has fully elapsed:
+-- if locked_until is already in the past, this failed attempt is attempt 1
+-- of a fresh run, not a continuation of the old count — otherwise a single
+-- failure right after a lockout expires would instantly re-lock the
+-- Employee instead of giving them a full new run of attempts.
+UPDATE employees e
+SET failed_login_attempts = calc.new_count,
+    locked_until = CASE
+        WHEN calc.new_count >= sqlc.arg(threshold)::int THEN sqlc.arg(locked_until)::timestamptz
+        ELSE NULL
+    END
+FROM (
+    SELECT emp.id,
+        CASE
+            WHEN emp.locked_until IS NOT NULL AND emp.locked_until <= now() THEN 1
+            ELSE emp.failed_login_attempts + 1
+        END AS new_count
+    FROM employees emp
+    WHERE emp.id = sqlc.arg(id)
+) AS calc
+WHERE e.id = calc.id
+RETURNING e.*;
+
+-- name: ResetFailedLoginAttempts :exec
+-- Clears an Employee's lockout state on a successful password check
+-- (Login), regardless of whether the subsequent presence check goes on to
+-- match a Store — a correct password is what "consecutive failed attempts"
+-- counts, not the presence outcome.
+UPDATE employees
+SET failed_login_attempts = 0,
+    locked_until = NULL
+WHERE id = sqlc.arg(id);
+
+-- name: UpsertSession :one
+-- Login's single-active-Session write (ADR-0014): inserts a new Session for
+-- employee_id, or, if one already exists (UNIQUE employee_id), atomically
+-- replaces it in place — the "a new Login invalidates any Session already
+-- open for that Employee" rule, in one round trip rather than a
+-- delete-then-insert.
+INSERT INTO sessions (employee_id, store_id, token_hash, expires_at)
+VALUES (sqlc.arg(employee_id), sqlc.arg(store_id), sqlc.arg(token_hash), sqlc.arg(expires_at))
+ON CONFLICT (employee_id) DO UPDATE
+SET store_id = EXCLUDED.store_id,
+    token_hash = EXCLUDED.token_hash,
+    issued_at = now(),
+    expires_at = EXCLUDED.expires_at
+RETURNING *;
+
+-- name: DeleteSessionByTokenHash :execrows
+-- Logout: ends the Session matching this bearer token's hash immediately,
+-- no re-authentication required. A hash matching no row (already logged
+-- out, expired and reaped, or never valid) still returns 0 rows rather than
+-- an error — Logout is idempotent, see auth.Service.Logout.
+DELETE FROM sessions
+WHERE token_hash = sqlc.arg(token_hash);
+
 -- name: ListStoreIDsByEmployeeIDs :many
 -- Bulk counterpart of ListStoreIDsByEmployeeID for ListEmployees — same
 -- plain row-per-pair shape as ListPositionIDsByEmployeeIDs, grouped

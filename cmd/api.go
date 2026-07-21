@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/auth"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/employees"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/env"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/mailer"
@@ -121,6 +122,11 @@ func (app *application) mount() http.Handler {
 				app.logger.Error("health handler: write response", "error", err)
 			}
 		})
+
+		authService := auth.NewService(app.db)
+		authHandler := auth.NewHandler(authService)
+		r.Post("/auth/login", authHandler.Login)
+		r.Post("/auth/logout", authHandler.Logout)
 
 		employeeService := employees.NewService(app.db, app.mailer, app.odoo)
 		employeeHandler := employees.NewHandler(employeeService)

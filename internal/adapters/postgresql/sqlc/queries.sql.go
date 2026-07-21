@@ -91,7 +91,7 @@ func (q *Queries) CountPositionsByIDs(ctx context.Context, ids []int64) (int64, 
 const createEmployee = `-- name: CreateEmployee :one
 INSERT INTO employees (odoo_employee_id, full_name, email, username)
 VALUES ($1, $2, $3, $4)
-RETURNING id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at
+RETURNING id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at, failed_login_attempts, locked_until
 `
 
 type CreateEmployeeParams struct {
@@ -119,6 +119,8 @@ func (q *Queries) CreateEmployee(ctx context.Context, arg CreateEmployeeParams) 
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.FailedLoginAttempts,
+		&i.LockedUntil,
 	)
 	return i, err
 }
@@ -270,6 +272,23 @@ WHERE id = ANY($1::bigint[])
 // an existence check itself.
 func (q *Queries) DeletePositions(ctx context.Context, ids []int64) (int64, error) {
 	result, err := q.db.Exec(ctx, deletePositions, ids)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteSessionByTokenHash = `-- name: DeleteSessionByTokenHash :execrows
+DELETE FROM sessions
+WHERE token_hash = $1
+`
+
+// Logout: ends the Session matching this bearer token's hash immediately,
+// no re-authentication required. A hash matching no row (already logged
+// out, expired and reaped, or never valid) still returns 0 rows rather than
+// an error — Logout is idempotent, see auth.Service.Logout.
+func (q *Queries) DeleteSessionByTokenHash(ctx context.Context, tokenHash string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSessionByTokenHash, tokenHash)
 	if err != nil {
 		return 0, err
 	}
@@ -438,7 +457,7 @@ func (q *Queries) FindStoresNotInOdoo(ctx context.Context, activeOdooStoreIds []
 }
 
 const getEmployeeByEmail = `-- name: GetEmployeeByEmail :one
-SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at FROM employees
+SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at, failed_login_attempts, locked_until FROM employees
 WHERE email = $1
 `
 
@@ -455,12 +474,14 @@ func (q *Queries) GetEmployeeByEmail(ctx context.Context, email string) (Employe
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.FailedLoginAttempts,
+		&i.LockedUntil,
 	)
 	return i, err
 }
 
 const getEmployeeByID = `-- name: GetEmployeeByID :one
-SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at FROM employees
+SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at, failed_login_attempts, locked_until FROM employees
 WHERE id = $1
 `
 
@@ -477,12 +498,14 @@ func (q *Queries) GetEmployeeByID(ctx context.Context, id int64) (Employee, erro
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.FailedLoginAttempts,
+		&i.LockedUntil,
 	)
 	return i, err
 }
 
 const getEmployeeByUsername = `-- name: GetEmployeeByUsername :one
-SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at FROM employees
+SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at, failed_login_attempts, locked_until FROM employees
 WHERE username = $1
 `
 
@@ -499,6 +522,8 @@ func (q *Queries) GetEmployeeByUsername(ctx context.Context, username string) (E
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.FailedLoginAttempts,
+		&i.LockedUntil,
 	)
 	return i, err
 }
@@ -711,7 +736,7 @@ func (q *Queries) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int6
 }
 
 const listEmployees = `-- name: ListEmployees :many
-SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at FROM employees
+SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at, failed_login_attempts, locked_until FROM employees
 ORDER BY id
 `
 
@@ -734,6 +759,8 @@ func (q *Queries) ListEmployees(ctx context.Context) ([]Employee, error) {
 			&i.IsActive,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.FailedLoginAttempts,
+			&i.LockedUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -746,7 +773,7 @@ func (q *Queries) ListEmployees(ctx context.Context) ([]Employee, error) {
 }
 
 const listEmployeesByPositionID = `-- name: ListEmployeesByPositionID :many
-SELECT e.id, e.odoo_employee_id, e.full_name, e.email, e.username, e.password, e.is_active, e.created_at, e.updated_at FROM employees e
+SELECT e.id, e.odoo_employee_id, e.full_name, e.email, e.username, e.password, e.is_active, e.created_at, e.updated_at, e.failed_login_attempts, e.locked_until FROM employees e
 JOIN employee_positions ep ON ep.employee_id = e.id
 WHERE ep.position_id = $1
 ORDER BY e.id
@@ -775,6 +802,8 @@ func (q *Queries) ListEmployeesByPositionID(ctx context.Context, positionID int6
 			&i.IsActive,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.FailedLoginAttempts,
+			&i.LockedUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -1079,6 +1108,123 @@ func (q *Queries) ListStoresByOdooStoreIDs(ctx context.Context, odooStoreIds []s
 	return items, nil
 }
 
+const listStoresForLoginByEmployeeID = `-- name: ListStoresForLoginByEmployeeID :many
+SELECT
+    s.id, s.odoo_store_id, s.store_name, s.city, s.latitude, s.longitude, s.radius_meters, s.wifi_whitelist_enabled, s.created_at, s.updated_at,
+    COALESCE(ip.ip_addresses, '{}')::inet[] AS ip_addresses
+FROM store s
+JOIN employee_stores es ON es.store_id = s.id
+LEFT JOIN LATERAL (
+    SELECT array_agg(ip_address ORDER BY id) AS ip_addresses
+    FROM store_wifi_ip
+    WHERE store_id = s.id
+) ip ON true
+WHERE es.employee_id = $1
+ORDER BY s.id
+`
+
+type ListStoresForLoginByEmployeeIDRow struct {
+	Store       Store        `json:"store"`
+	IpAddresses []netip.Addr `json:"ip_addresses"`
+}
+
+// Every Store an Employee belongs to, each with its current IP whitelist —
+// Login's (issue #21) candidate set for the IP/Geofence presence check
+// (ADR-0013). Deliberately no MAC whitelist here (out of this ticket's
+// scope, see issue #22) and ordered by store id, the deterministic
+// tie-break auth.matchStore relies on when more than one Store could
+// plausibly match. wifi_whitelist_enabled comes along on the embedded
+// Store row so the caller can gate the IP tier per store without a second
+// query; geofence columns are on the same row for the same reason.
+func (q *Queries) ListStoresForLoginByEmployeeID(ctx context.Context, employeeID int64) ([]ListStoresForLoginByEmployeeIDRow, error) {
+	rows, err := q.db.Query(ctx, listStoresForLoginByEmployeeID, employeeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStoresForLoginByEmployeeIDRow
+	for rows.Next() {
+		var i ListStoresForLoginByEmployeeIDRow
+		if err := rows.Scan(
+			&i.Store.ID,
+			&i.Store.OdooStoreID,
+			&i.Store.StoreName,
+			&i.Store.City,
+			&i.Store.Latitude,
+			&i.Store.Longitude,
+			&i.Store.RadiusMeters,
+			&i.Store.WifiWhitelistEnabled,
+			&i.Store.CreatedAt,
+			&i.Store.UpdatedAt,
+			&i.IpAddresses,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const recordFailedLoginAttempt = `-- name: RecordFailedLoginAttempt :one
+UPDATE employees e
+SET failed_login_attempts = calc.new_count,
+    locked_until = CASE
+        WHEN calc.new_count >= $1::int THEN $2::timestamptz
+        ELSE NULL
+    END
+FROM (
+    SELECT emp.id,
+        CASE
+            WHEN emp.locked_until IS NOT NULL AND emp.locked_until <= now() THEN 1
+            ELSE emp.failed_login_attempts + 1
+        END AS new_count
+    FROM employees emp
+    WHERE emp.id = $3
+) AS calc
+WHERE e.id = calc.id
+RETURNING e.id, e.odoo_employee_id, e.full_name, e.email, e.username, e.password, e.is_active, e.created_at, e.updated_at, e.failed_login_attempts, e.locked_until
+`
+
+type RecordFailedLoginAttemptParams struct {
+	Threshold   int32              `json:"threshold"`
+	LockedUntil pgtype.Timestamptz `json:"locked_until"`
+	ID          int64              `json:"id"`
+}
+
+// Atomically increments failed_login_attempts and, only once the new count
+// reaches sqlc.arg(threshold), sets locked_until to sqlc.arg(locked_until)
+// (computed in Go as now + the lockout duration, so the duration itself
+// stays a Go constant, not a SQL literal — see auth.loginLockoutDuration).
+// Callers (auth.Service.Login) only ever reach this query once they've
+// already confirmed locked_until is unset or in the past — an
+// Employee still inside an active lockout window never gets here. Given
+// that, "consecutive" resets the moment a prior lockout has fully elapsed:
+// if locked_until is already in the past, this failed attempt is attempt 1
+// of a fresh run, not a continuation of the old count — otherwise a single
+// failure right after a lockout expires would instantly re-lock the
+// Employee instead of giving them a full new run of attempts.
+func (q *Queries) RecordFailedLoginAttempt(ctx context.Context, arg RecordFailedLoginAttemptParams) (Employee, error) {
+	row := q.db.QueryRow(ctx, recordFailedLoginAttempt, arg.Threshold, arg.LockedUntil, arg.ID)
+	var i Employee
+	err := row.Scan(
+		&i.ID,
+		&i.OdooEmployeeID,
+		&i.FullName,
+		&i.Email,
+		&i.Username,
+		&i.Password,
+		&i.IsActive,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.FailedLoginAttempts,
+		&i.LockedUntil,
+	)
+	return i, err
+}
+
 const redeemPasswordResetToken = `-- name: RedeemPasswordResetToken :one
 UPDATE password_reset_tokens
 SET used_at = now()
@@ -1104,6 +1250,22 @@ func (q *Queries) RedeemPasswordResetToken(ctx context.Context, tokenHash string
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const resetFailedLoginAttempts = `-- name: ResetFailedLoginAttempts :exec
+UPDATE employees
+SET failed_login_attempts = 0,
+    locked_until = NULL
+WHERE id = $1
+`
+
+// Clears an Employee's lockout state on a successful password check
+// (Login), regardless of whether the subsequent presence check goes on to
+// match a Store — a correct password is what "consecutive failed attempts"
+// counts, not the presence outcome.
+func (q *Queries) ResetFailedLoginAttempts(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, resetFailedLoginAttempts, id)
+	return err
 }
 
 const setEmployeeActive = `-- name: SetEmployeeActive :execrows
@@ -1188,7 +1350,7 @@ SET odoo_employee_id = $2,
     username = $5,
     updated_at = now()
 WHERE id = $1
-RETURNING id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at
+RETURNING id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at, failed_login_attempts, locked_until
 `
 
 type UpdateEmployeeParams struct {
@@ -1218,6 +1380,8 @@ func (q *Queries) UpdateEmployee(ctx context.Context, arg UpdateEmployeeParams) 
 		&i.IsActive,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.FailedLoginAttempts,
+		&i.LockedUntil,
 	)
 	return i, err
 }
@@ -1356,6 +1520,48 @@ func (q *Queries) UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams
 		return nil, err
 	}
 	return items, nil
+}
+
+const upsertSession = `-- name: UpsertSession :one
+INSERT INTO sessions (employee_id, store_id, token_hash, expires_at)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (employee_id) DO UPDATE
+SET store_id = EXCLUDED.store_id,
+    token_hash = EXCLUDED.token_hash,
+    issued_at = now(),
+    expires_at = EXCLUDED.expires_at
+RETURNING id, employee_id, store_id, token_hash, issued_at, expires_at
+`
+
+type UpsertSessionParams struct {
+	EmployeeID int64              `json:"employee_id"`
+	StoreID    pgtype.Int8        `json:"store_id"`
+	TokenHash  string             `json:"token_hash"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+}
+
+// Login's single-active-Session write (ADR-0014): inserts a new Session for
+// employee_id, or, if one already exists (UNIQUE employee_id), atomically
+// replaces it in place — the "a new Login invalidates any Session already
+// open for that Employee" rule, in one round trip rather than a
+// delete-then-insert.
+func (q *Queries) UpsertSession(ctx context.Context, arg UpsertSessionParams) (Session, error) {
+	row := q.db.QueryRow(ctx, upsertSession,
+		arg.EmployeeID,
+		arg.StoreID,
+		arg.TokenHash,
+		arg.ExpiresAt,
+	)
+	var i Session
+	err := row.Scan(
+		&i.ID,
+		&i.EmployeeID,
+		&i.StoreID,
+		&i.TokenHash,
+		&i.IssuedAt,
+		&i.ExpiresAt,
+	)
+	return i, err
 }
 
 const upsertStores = `-- name: UpsertStores :many

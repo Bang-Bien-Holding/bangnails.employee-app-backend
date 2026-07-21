@@ -220,6 +220,21 @@ func (mr *MockQuerierMockRecorder) DeletePositions(ctx, ids any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePositions", reflect.TypeOf((*MockQuerier)(nil).DeletePositions), ctx, ids)
 }
 
+// DeleteSessionByTokenHash mocks base method.
+func (m *MockQuerier) DeleteSessionByTokenHash(ctx context.Context, tokenHash string) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteSessionByTokenHash", ctx, tokenHash)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteSessionByTokenHash indicates an expected call of DeleteSessionByTokenHash.
+func (mr *MockQuerierMockRecorder) DeleteSessionByTokenHash(ctx, tokenHash any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteSessionByTokenHash", reflect.TypeOf((*MockQuerier)(nil).DeleteSessionByTokenHash), ctx, tokenHash)
+}
+
 // DeleteStoreWifiIPsByValue mocks base method.
 func (m *MockQuerier) DeleteStoreWifiIPsByValue(ctx context.Context, arg repo.DeleteStoreWifiIPsByValueParams) ([]netip.Addr, error) {
 	m.ctrl.T.Helper()
@@ -648,6 +663,36 @@ func (mr *MockQuerierMockRecorder) ListStoresByOdooStoreIDs(ctx, odooStoreIds an
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStoresByOdooStoreIDs", reflect.TypeOf((*MockQuerier)(nil).ListStoresByOdooStoreIDs), ctx, odooStoreIds)
 }
 
+// ListStoresForLoginByEmployeeID mocks base method.
+func (m *MockQuerier) ListStoresForLoginByEmployeeID(ctx context.Context, employeeID int64) ([]repo.ListStoresForLoginByEmployeeIDRow, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ListStoresForLoginByEmployeeID", ctx, employeeID)
+	ret0, _ := ret[0].([]repo.ListStoresForLoginByEmployeeIDRow)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// ListStoresForLoginByEmployeeID indicates an expected call of ListStoresForLoginByEmployeeID.
+func (mr *MockQuerierMockRecorder) ListStoresForLoginByEmployeeID(ctx, employeeID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStoresForLoginByEmployeeID", reflect.TypeOf((*MockQuerier)(nil).ListStoresForLoginByEmployeeID), ctx, employeeID)
+}
+
+// RecordFailedLoginAttempt mocks base method.
+func (m *MockQuerier) RecordFailedLoginAttempt(ctx context.Context, arg repo.RecordFailedLoginAttemptParams) (repo.Employee, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RecordFailedLoginAttempt", ctx, arg)
+	ret0, _ := ret[0].(repo.Employee)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// RecordFailedLoginAttempt indicates an expected call of RecordFailedLoginAttempt.
+func (mr *MockQuerierMockRecorder) RecordFailedLoginAttempt(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordFailedLoginAttempt", reflect.TypeOf((*MockQuerier)(nil).RecordFailedLoginAttempt), ctx, arg)
+}
+
 // RedeemPasswordResetToken mocks base method.
 func (m *MockQuerier) RedeemPasswordResetToken(ctx context.Context, tokenHash string) (repo.PasswordResetToken, error) {
 	m.ctrl.T.Helper()
@@ -661,6 +706,20 @@ func (m *MockQuerier) RedeemPasswordResetToken(ctx context.Context, tokenHash st
 func (mr *MockQuerierMockRecorder) RedeemPasswordResetToken(ctx, tokenHash any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RedeemPasswordResetToken", reflect.TypeOf((*MockQuerier)(nil).RedeemPasswordResetToken), ctx, tokenHash)
+}
+
+// ResetFailedLoginAttempts mocks base method.
+func (m *MockQuerier) ResetFailedLoginAttempts(ctx context.Context, id int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "ResetFailedLoginAttempts", ctx, id)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// ResetFailedLoginAttempts indicates an expected call of ResetFailedLoginAttempts.
+func (mr *MockQuerierMockRecorder) ResetFailedLoginAttempts(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ResetFailedLoginAttempts", reflect.TypeOf((*MockQuerier)(nil).ResetFailedLoginAttempts), ctx, id)
 }
 
 // SetEmployeeActive mocks base method.
@@ -766,6 +825,21 @@ func (m *MockQuerier) UpsertEmployees(ctx context.Context, arg repo.UpsertEmploy
 func (mr *MockQuerierMockRecorder) UpsertEmployees(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpsertEmployees", reflect.TypeOf((*MockQuerier)(nil).UpsertEmployees), ctx, arg)
+}
+
+// UpsertSession mocks base method.
+func (m *MockQuerier) UpsertSession(ctx context.Context, arg repo.UpsertSessionParams) (repo.Session, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "UpsertSession", ctx, arg)
+	ret0, _ := ret[0].(repo.Session)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// UpsertSession indicates an expected call of UpsertSession.
+func (mr *MockQuerierMockRecorder) UpsertSession(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpsertSession", reflect.TypeOf((*MockQuerier)(nil).UpsertSession), ctx, arg)
 }
 
 // UpsertStores mocks base method.

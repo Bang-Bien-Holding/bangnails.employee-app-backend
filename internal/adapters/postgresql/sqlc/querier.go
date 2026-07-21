@@ -57,6 +57,11 @@ type Querier interface {
 	// only the "delete" half of an all-or-nothing count-check-then-delete, not
 	// an existence check itself.
 	DeletePositions(ctx context.Context, ids []int64) (int64, error)
+	// Logout: ends the Session matching this bearer token's hash immediately,
+	// no re-authentication required. A hash matching no row (already logged
+	// out, expired and reaped, or never valid) still returns 0 rows rather than
+	// an error — Logout is idempotent, see auth.Service.Logout.
+	DeleteSessionByTokenHash(ctx context.Context, tokenHash string) (int64, error)
 	// Deletes specific store_wifi_ip rows by value, not the table's internal id
 	// (see ADR-0003 — a value unambiguously identifies the row within a store
 	// thanks to the UNIQUE (store_id, ip_address) constraint) — the surgical
@@ -166,11 +171,38 @@ type Querier interface {
 	// odoo_store_id with no matching row is simply absent from the result; the
 	// caller (runSync) logs and skips those rather than failing the sync.
 	ListStoresByOdooStoreIDs(ctx context.Context, odooStoreIds []string) ([]ListStoresByOdooStoreIDsRow, error)
+	// Every Store an Employee belongs to, each with its current IP whitelist —
+	// Login's (issue #21) candidate set for the IP/Geofence presence check
+	// (ADR-0013). Deliberately no MAC whitelist here (out of this ticket's
+	// scope, see issue #22) and ordered by store id, the deterministic
+	// tie-break auth.matchStore relies on when more than one Store could
+	// plausibly match. wifi_whitelist_enabled comes along on the embedded
+	// Store row so the caller can gate the IP tier per store without a second
+	// query; geofence columns are on the same row for the same reason.
+	ListStoresForLoginByEmployeeID(ctx context.Context, employeeID int64) ([]ListStoresForLoginByEmployeeIDRow, error)
+	// Atomically increments failed_login_attempts and, only once the new count
+	// reaches sqlc.arg(threshold), sets locked_until to sqlc.arg(locked_until)
+	// (computed in Go as now + the lockout duration, so the duration itself
+	// stays a Go constant, not a SQL literal — see auth.loginLockoutDuration).
+	// Callers (auth.Service.Login) only ever reach this query once they've
+	// already confirmed locked_until is unset or in the past — an
+	// Employee still inside an active lockout window never gets here. Given
+	// that, "consecutive" resets the moment a prior lockout has fully elapsed:
+	// if locked_until is already in the past, this failed attempt is attempt 1
+	// of a fresh run, not a continuation of the old count — otherwise a single
+	// failure right after a lockout expires would instantly re-lock the
+	// Employee instead of giving them a full new run of attempts.
+	RecordFailedLoginAttempt(ctx context.Context, arg RecordFailedLoginAttemptParams) (Employee, error)
 	// Atomically claims a valid, unused token: the UPDATE's row lock ensures
 	// only one concurrent caller can match the WHERE clause and get a row back,
 	// so CompleteActivation can't be raced into redeeming the same token twice.
 	// Callers pass the SHA-256 digest of the bearer token, not the raw value.
 	RedeemPasswordResetToken(ctx context.Context, tokenHash string) (PasswordResetToken, error)
+	// Clears an Employee's lockout state on a successful password check
+	// (Login), regardless of whether the subsequent presence check goes on to
+	// match a Store — a correct password is what "consecutive failed attempts"
+	// counts, not the presence outcome.
+	ResetFailedLoginAttempts(ctx context.Context, id int64) error
 	SetEmployeeActive(ctx context.Context, arg SetEmployeeActiveParams) (int64, error)
 	SetEmployeePassword(ctx context.Context, arg SetEmployeePasswordParams) (int64, error)
 	// PATCH /v1/stores/{id}/wifi-whitelist-enabled's single query — same
@@ -207,6 +239,12 @@ type Querier interface {
 	// (re)create an employee row (which would otherwise need a placeholder,
 	// Odoo-blind username). Only CreateEmployee ever inserts a row.
 	UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams) ([]UpsertEmployeesRow, error)
+	// Login's single-active-Session write (ADR-0014): inserts a new Session for
+	// employee_id, or, if one already exists (UNIQUE employee_id), atomically
+	// replaces it in place — the "a new Login invalidates any Session already
+	// open for that Employee" rule, in one round trip rather than a
+	// delete-then-insert.
+	UpsertSession(ctx context.Context, arg UpsertSessionParams) (Session, error)
 	// Bulk-upserts one page of Odoo stores in a single round trip. "(xmax = 0)"
 	// is Postgres' standard trick for distinguishing an INSERT from an
 	// ON CONFLICT UPDATE in the same statement: xmax is only set by an UPDATE,
