@@ -4,11 +4,10 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/httpx"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/json"
-	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
 )
 
@@ -65,9 +64,8 @@ func (h *Handler) ListPositions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdatePosition(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil || id <= 0 {
-		http.Error(w, "invalid position id", http.StatusBadRequest)
+	id, ok := httpx.ParsePathID(w, r, "id", "position")
+	if !ok {
 		return
 	}
 
@@ -103,9 +101,8 @@ func (h *Handler) UpdatePosition(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeletePosition(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil || id <= 0 {
-		http.Error(w, "invalid position id", http.StatusBadRequest)
+	id, ok := httpx.ParsePathID(w, r, "id", "position")
+	if !ok {
 		return
 	}
 
@@ -125,9 +122,8 @@ func (h *Handler) DeletePosition(w http.ResponseWriter, r *http.Request) {
 // GetPositionEmployees handles GET /v1/positions/{id}/employees (ADR-0011) —
 // the read half of the position-first membership screen.
 func (h *Handler) GetPositionEmployees(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil || id <= 0 {
-		http.Error(w, "invalid position id", http.StatusBadRequest)
+	id, ok := httpx.ParsePathID(w, r, "id", "position")
+	if !ok {
 		return
 	}
 
@@ -152,9 +148,8 @@ func (h *Handler) GetPositionEmployees(w http.ResponseWriter, r *http.Request) {
 // PUT /v1/employees/{id}'s positionIds whole-set replace (ADR-0008) in the
 // other direction.
 func (h *Handler) SetPositionEmployees(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil || id <= 0 {
-		http.Error(w, "invalid position id", http.StatusBadRequest)
+	id, ok := httpx.ParsePathID(w, r, "id", "position")
+	if !ok {
 		return
 	}
 

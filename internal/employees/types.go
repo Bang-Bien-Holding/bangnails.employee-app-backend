@@ -55,7 +55,7 @@ type createEmployeeParams struct {
 	FullName       string  `json:"fullName" validate:"required"`
 	Email          string  `json:"email" validate:"required,email"`
 	Username       string  `json:"username" validate:"required"`
-	PositionIDs    []int64 `json:"positionIds" validate:"omitempty,unique,dive,required"`
+	PositionIDs    []int64 `json:"positionIds" validate:"omitempty,unique,dive,gt=0"`
 }
 
 // updateEmployeeParams.Password is optional (a *string, unlike
@@ -70,7 +70,7 @@ type updateEmployeeParams struct {
 	Email          string  `json:"email" validate:"required,email"`
 	Username       string  `json:"username" validate:"required"`
 	Password       *string `json:"password,omitempty" validate:"omitempty,min=8"`
-	PositionIDs    []int64 `json:"positionIds" validate:"omitempty,unique,dive,required"`
+	PositionIDs    []int64 `json:"positionIds" validate:"omitempty,unique,dive,gt=0"`
 }
 
 // setEmployeePasswordParams is the body for PATCH /employees/{id}/password —

@@ -64,6 +64,22 @@ func TestEmployeeHandler_GetEmployeeByID(t *testing.T) {
 			expectedCode: http.StatusBadRequest,
 		},
 		{
+			name:    "TS-HDL-17b: Zero id path param returns 400",
+			idParam: "0",
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "TS-HDL-17c: Negative id path param returns 400",
+			idParam: "-1",
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
 			name:    "TS-HDL-18: Unknown id maps ErrEmployeeNotFound to 404",
 			idParam: "999",
 			setupMock: func(mockSvc *MockService) {
@@ -157,11 +173,47 @@ func TestEmployeeHandler_UpdateEmployee(t *testing.T) {
 			expectedCode: http.StatusBadRequest,
 		},
 		{
+			name:        "TS-HDL-21b: Zero id path param returns 400",
+			idParam:     "0",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:        "TS-HDL-21c: Negative id path param returns 400",
+			idParam:     "-1",
+			bodyPayload: validParams,
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
 			name:    "TS-HDL-22: Update employee failed due to missing required fields",
 			idParam: "1",
 			bodyPayload: updateEmployeeParams{
 				Email: "invalid-email", // missing FullName/Username/Role, invalid email
 			},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called because validation happens at the Handler layer
+			},
+			expectedCode: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				if !bytes.Contains(rec.Body.Bytes(), []byte("validation")) {
+					t.Errorf("expected response to mention validation, got %q", rec.Body.String())
+				}
+			},
+		},
+		{
+			name:    "TS-HDL-22b: Negative position id in body fails validation",
+			idParam: "1",
+			bodyPayload: func() updateEmployeeParams {
+				p := validParams
+				p.PositionIDs = []int64{-1}
+				return p
+			}(),
 			setupMock: func(mockSvc *MockService) {
 				// Service should NOT be called because validation happens at the Handler layer
 			},
@@ -355,6 +407,24 @@ func TestEmployeeHandler_SetEmployeeActive(t *testing.T) {
 			expectedCode: http.StatusBadRequest,
 		},
 		{
+			name:        "TS-HDL-28b: Zero id path param returns 400",
+			idParam:     "0",
+			bodyPayload: setEmployeeActiveParams{IsActive: boolPtr(true)},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:        "TS-HDL-28c: Negative id path param returns 400",
+			idParam:     "-1",
+			bodyPayload: setEmployeeActiveParams{IsActive: boolPtr(true)},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
 			name:        "TS-HDL-29: Unknown id maps ErrEmployeeNotFound to 404",
 			idParam:     "999",
 			bodyPayload: setEmployeeActiveParams{IsActive: boolPtr(true)},
@@ -452,6 +522,24 @@ func TestEmployeeHandler_SetEmployeePassword(t *testing.T) {
 			expectedCode: http.StatusBadRequest,
 		},
 		{
+			name:        "TS-HDL-32b: Zero id path param returns 400",
+			idParam:     "0",
+			bodyPayload: setEmployeePasswordParams{Password: "supersecret"},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:        "TS-HDL-32c: Negative id path param returns 400",
+			idParam:     "-1",
+			bodyPayload: setEmployeePasswordParams{Password: "supersecret"},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
 			name:        "TS-HDL-33: Password shorter than 8 chars fails validation",
 			idParam:     "1",
 			bodyPayload: setEmployeePasswordParams{Password: "short"},
@@ -541,6 +629,22 @@ func TestEmployeeHandler_DeleteEmployee(t *testing.T) {
 			idParam: "not-a-number",
 			setupMock: func(mockSvc *MockService) {
 				// Service should NOT be called because parsing fails at the handler layer
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "TS-HDL-32b: Zero id path param returns 400",
+			idParam: "0",
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "TS-HDL-32c: Negative id path param returns 400",
+			idParam: "-1",
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called
 			},
 			expectedCode: http.StatusBadRequest,
 		},
@@ -962,6 +1066,23 @@ func TestEmployeeHandler_CreateEmployee(t *testing.T) {
 				OdooEmployeeID: 0, // missing required field
 				Email:          "invalid-email",
 			},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called because validation happens at the Handler layer
+			},
+			expectedCode: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				if !bytes.Contains(rec.Body.Bytes(), []byte("validation")) {
+					t.Errorf("expected response to mention validation, got %q", rec.Body.String())
+				}
+			},
+		},
+		{
+			name: "TS-HDL-02b: Negative position id in body fails validation",
+			bodyPayload: func() createEmployeeParams {
+				p := validParams
+				p.PositionIDs = []int64{-1}
+				return p
+			}(),
 			setupMock: func(mockSvc *MockService) {
 				// Service should NOT be called because validation happens at the Handler layer
 			},
