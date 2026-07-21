@@ -4,10 +4,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/httpx"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/json"
-	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
 )
 
@@ -50,9 +49,8 @@ func (h *Handler) CreateEmployee(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetEmployeeByID(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid employee id", http.StatusBadRequest)
+	id, ok := httpx.ParsePathID(w, r, "id", "employee")
+	if !ok {
 		return
 	}
 
@@ -70,9 +68,8 @@ func (h *Handler) GetEmployeeByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid employee id", http.StatusBadRequest)
+	id, ok := httpx.ParsePathID(w, r, "id", "employee")
+	if !ok {
 		return
 	}
 
@@ -108,9 +105,8 @@ func (h *Handler) UpdateEmployee(w http.ResponseWriter, r *http.Request) {
 // SetEmployeePassword lets an admin directly assign an employee's new
 // password, bypassing the token/email flow in CompleteActivation.
 func (h *Handler) SetEmployeePassword(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid employee id", http.StatusBadRequest)
+	id, ok := httpx.ParsePathID(w, r, "id", "employee")
+	if !ok {
 		return
 	}
 
@@ -138,9 +134,8 @@ func (h *Handler) SetEmployeePassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) SetEmployeeActive(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid employee id", http.StatusBadRequest)
+	id, ok := httpx.ParsePathID(w, r, "id", "employee")
+	if !ok {
 		return
 	}
 
@@ -168,9 +163,8 @@ func (h *Handler) SetEmployeeActive(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteEmployee(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid employee id", http.StatusBadRequest)
+	id, ok := httpx.ParsePathID(w, r, "id", "employee")
+	if !ok {
 		return
 	}
 

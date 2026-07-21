@@ -4,10 +4,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/httpx"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/json"
-	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
 )
 
@@ -53,9 +52,8 @@ func (h *Handler) SyncStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) GetStoreByID(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid store id", http.StatusBadRequest)
+	id, ok := httpx.ParsePathID(w, r, "id", "store")
+	if !ok {
 		return
 	}
 
@@ -83,9 +81,8 @@ func (h *Handler) ListStores(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) PatchStore(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid store id", http.StatusBadRequest)
+	id, ok := httpx.ParsePathID(w, r, "id", "store")
+	if !ok {
 		return
 	}
 
@@ -117,9 +114,8 @@ func (h *Handler) PatchStore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteWifiWhitelistEntries(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid store id", http.StatusBadRequest)
+	id, ok := httpx.ParsePathID(w, r, "id", "store")
+	if !ok {
 		return
 	}
 
@@ -158,9 +154,8 @@ func (h *Handler) DeleteWifiWhitelistEntries(w http.ResponseWriter, r *http.Requ
 // /v1/stores/{id}/wifi-whitelist-enabled — the list screen's per-row
 // Activate/Deactivate toggle (see ADR-0006).
 func (h *Handler) SetStoreWifiWhitelistEnabled(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.Error(w, "invalid store id", http.StatusBadRequest)
+	id, ok := httpx.ParsePathID(w, r, "id", "store")
+	if !ok {
 		return
 	}
 

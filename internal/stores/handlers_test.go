@@ -236,6 +236,22 @@ func TestStoreHandler_PatchStore(t *testing.T) {
 			expectedCode: http.StatusBadRequest,
 		},
 		{
+			name:    "zero id path param returns 400, service not called",
+			idParam: "0",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z"}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "negative id path param returns 400, service not called",
+			idParam: "-1",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z"}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
 			name:    "unknown store id maps ErrStoreNotFound to 404",
 			idParam: "999",
 			body:    `{"updated_at":"2026-07-14T10:00:00Z"}`,
@@ -493,6 +509,22 @@ func TestStoreHandler_DeleteWifiWhitelistEntries(t *testing.T) {
 			expectedCode: http.StatusBadRequest,
 		},
 		{
+			name:    "zero id path param returns 400, service not called",
+			idParam: "0",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":["138.101.10.1"]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "negative id path param returns 400, service not called",
+			idParam: "-1",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":["138.101.10.1"]}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
 			name:    "unknown store id maps ErrStoreNotFound to 404",
 			idParam: "999",
 			body:    `{"updated_at":"2026-07-14T10:00:00Z","ip_addresses":["138.101.10.1"]}`,
@@ -744,6 +776,22 @@ func TestStoreHandler_GetStoreByID(t *testing.T) {
 			expectedCode: http.StatusBadRequest,
 		},
 		{
+			name:    "zero id path param returns 400",
+			idParam: "0",
+			setupMock: func(mockSvc *MockService) {
+				// Service must not be called
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "negative id path param returns 400",
+			idParam: "-1",
+			setupMock: func(mockSvc *MockService) {
+				// Service must not be called
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
 			name:    "unknown store id maps ErrStoreNotFound to 404",
 			idParam: "999",
 			setupMock: func(mockSvc *MockService) {
@@ -833,6 +881,22 @@ func TestStoreHandler_SetStoreWifiWhitelistEnabled(t *testing.T) {
 		{
 			name:    "non-numeric id path param returns 400, service not called",
 			idParam: "not-a-number",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","wifi_whitelist_enabled":true}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "zero id path param returns 400, service not called",
+			idParam: "0",
+			body:    `{"updated_at":"2026-07-14T10:00:00Z","wifi_whitelist_enabled":true}`,
+			setupMock: func(mockSvc *MockService) {
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:    "negative id path param returns 400, service not called",
+			idParam: "-1",
 			body:    `{"updated_at":"2026-07-14T10:00:00Z","wifi_whitelist_enabled":true}`,
 			setupMock: func(mockSvc *MockService) {
 			},
