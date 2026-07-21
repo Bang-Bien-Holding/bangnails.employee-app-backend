@@ -760,9 +760,8 @@ func TestHaversineMeters(t *testing.T) {
 // format error instantly instead of paying its usual cost, silently
 // reopening the timing side-channel the constant exists to close.
 func TestDummyPasswordHash(t *testing.T) {
-	if err := bcrypt.CompareHashAndPassword([]byte(dummyPasswordHash), []byte("anything")); err == nil {
-		t.Fatal("expected the comparison to fail (wrong password), but not error out on a malformed hash")
-	} else if errors.Is(err, bcrypt.ErrHashTooShort) {
-		t.Fatalf("dummyPasswordHash is not a valid bcrypt hash: %v", err)
+	err := bcrypt.CompareHashAndPassword([]byte(dummyPasswordHash), []byte("anything"))
+	if !errors.Is(err, bcrypt.ErrMismatchedHashAndPassword) {
+		t.Fatalf("err = %v, want %v (a malformed dummyPasswordHash would fail with a different error, e.g. ErrHashTooShort)", err, bcrypt.ErrMismatchedHashAndPassword)
 	}
 }

@@ -25,4 +25,4 @@ There is no session/auth mechanism anywhere in this codebase today — the close
 
 - Every authenticated request (non-Admin) needs a `sessions` row lookup — this is the point, not an incidental cost.
 - The app must implement a background heartbeat loop, and must treat a heartbeat response telling it to discard its Session (reason code) as a first-class case, not an error path.
-- Killing an Employee's Session in response to a lost device or security incident is a single row update — no token-expiry waiting period.
+- Killing an Employee's Session in response to a lost device or security incident is a single-row update — no token-expiry waiting period.

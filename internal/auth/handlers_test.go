@@ -307,7 +307,7 @@ func TestAuthHandler_Heartbeat(t *testing.T) {
 
 			h := NewHandler(mockSvc)
 
-			req := httptest.NewRequest(http.MethodPost, "/v1/auth/heartbeat", bytes.NewBufferString(tt.body))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/heartbeat", bytes.NewBufferString(tt.body))
 			req.RemoteAddr = tt.remoteAddr
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
@@ -389,7 +389,7 @@ func TestAdminOnly(t *testing.T) {
 			var called bool
 			handler := AdminOnly(mockSvc)(nextCalled(&called))
 
-			req := httptest.NewRequest(http.MethodGet, "/v1/employees", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/employees", nil)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
