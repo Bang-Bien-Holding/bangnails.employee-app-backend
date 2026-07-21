@@ -8,19 +8,19 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
-	"sync"
 	"time"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/dbx"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/syncx"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // storeSyncTimeout bounds SyncStores' detached goroutine so a stalled Odoo
-// or database call can't leave s.syncing stuck true indefinitely — mirrors
+// or database call can't leave syncGuard stuck held indefinitely — mirrors
 // employees.employeeSyncTimeout.
 const storeSyncTimeout = 5 * time.Minute
 
@@ -35,8 +35,7 @@ type service struct {
 	withTx func(ctx context.Context, fn func(repo.Querier) error) error
 	odoo   odoo.Client
 
-	mu      sync.Mutex
-	syncing bool
+	syncGuard syncx.Guard
 }
 
 func NewService(pool *pgxpool.Pool, odooClient odoo.Client) Service {
@@ -487,14 +486,14 @@ func parseAddresses[T any](values []string, parse func(string) (T, error)) ([]T,
 // time; a concurrent call is rejected with ErrSyncInProgress rather than
 // queued or run in parallel.
 func (s *service) SyncStores(ctx context.Context) error {
-	if !s.tryLock() {
+	if !s.syncGuard.TryStart() {
 		return ErrSyncInProgress
 	}
 
 	// Detached from ctx: the HTTP handler's request context is canceled the
 	// moment it returns, which would race with (and likely abort) this
 	// goroutine if it inherited that cancellation. Still bounded by
-	// storeSyncTimeout so a stalled Odoo/database call can't hold s.syncing
+	// storeSyncTimeout so a stalled Odoo/database call can't hold the guard
 	// true forever; runSync owns cancel and releases it when it returns.
 	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), storeSyncTimeout)
 	go s.runSync(syncCtx, cancel)
@@ -506,9 +505,7 @@ func (s *service) SyncStores(ctx context.Context) error {
 // still running, so the frontend can poll it to keep its trigger button
 // disabled for the duration.
 func (s *service) SyncStatus(ctx context.Context) SyncStatus {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return SyncStatus{Syncing: s.syncing}
+	return SyncStatus{Syncing: s.syncGuard.Syncing()}
 }
 
 // runSync does the actual work: fetch every store from Odoo in a single call
@@ -521,7 +518,7 @@ func (s *service) SyncStatus(ctx context.Context) SyncStatus {
 // to its caller.
 func (s *service) runSync(ctx context.Context, cancel context.CancelFunc) {
 	defer cancel()
-	defer s.unlock()
+	defer s.syncGuard.Finish()
 
 	odooStores, err := s.odoo.FetchStores(ctx)
 	if err != nil {
@@ -574,20 +571,4 @@ func (s *service) runSync(ctx context.Context, cancel context.CancelFunc) {
 	}
 
 	slog.Info("stores: sync completed", "inserted", inserted, "updated", updated, "deleted", deleted)
-}
-
-func (s *service) tryLock() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.syncing {
-		return false
-	}
-	s.syncing = true
-	return true
-}
-
-func (s *service) unlock() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.syncing = false
 }

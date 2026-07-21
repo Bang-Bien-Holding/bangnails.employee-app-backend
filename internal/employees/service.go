@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"sort"
 	"strconv"
-	"sync"
 	"time"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
@@ -19,6 +18,7 @@ import (
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/mailer"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/pgerr"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/syncx"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -51,7 +51,7 @@ const activationTokenTTL = 30 * time.Minute
 const employeeSyncBatchSize = 50
 
 // employeeSyncTimeout bounds runSync's detached goroutine so a stalled Odoo
-// or database call can't leave s.syncing stuck true indefinitely — the
+// or database call can't leave syncGuard stuck held indefinitely — the
 // goroutine deliberately outlives the triggering request's context, but
 // still needs its own deadline.
 const employeeSyncTimeout = 5 * time.Minute
@@ -67,8 +67,7 @@ type service struct {
 	mailer mailer.Client
 	odoo   odoo.Client
 
-	mu      sync.Mutex
-	syncing bool
+	syncGuard syncx.Guard
 }
 
 func NewService(pool *pgxpool.Pool, m mailer.Client, o odoo.Client) Service {
@@ -492,23 +491,23 @@ func (s *service) BulkSendPasswordResetLinks(ctx context.Context, ids []int64) [
 // spec) instead of waiting on Odoo/DB latency. An id with no matching row is
 // silently dropped by ListEmployeeIDsByIDs rather than failing the request.
 // Only one sync runs at a time — a concurrent call is rejected with
-// ErrSyncInProgress rather than queued or run in parallel, guarded by mu
-// (the "2 admins click the button" special case).
+// ErrSyncInProgress rather than queued or run in parallel, guarded by
+// syncGuard (the "2 admins click the button" special case).
 func (s *service) SyncEmployees(ctx context.Context, ids []int64) error {
-	if !s.tryLock() {
+	if !s.syncGuard.TryStart() {
 		return ErrSyncInProgress
 	}
 
 	odooEmployeeIDs, err := s.repo.ListEmployeeIDsByIDs(ctx, ids)
 	if err != nil {
-		s.unlock()
+		s.syncGuard.Finish()
 		return err
 	}
 
 	// Detached from ctx: the HTTP handler's request context is canceled the
 	// moment it returns, which would race with (and likely abort) this
 	// goroutine if it inherited that cancellation. Still bounded by
-	// employeeSyncTimeout so a stalled Odoo/DB call can't hold s.syncing
+	// employeeSyncTimeout so a stalled Odoo/DB call can't hold the guard
 	// true forever; runSync owns cancel and releases it when it returns.
 	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), employeeSyncTimeout)
 	go s.runSync(syncCtx, cancel, odooEmployeeIDs)
@@ -520,9 +519,7 @@ func (s *service) SyncEmployees(ctx context.Context, ids []int64) error {
 // still running, so the frontend can poll it to keep its trigger button
 // disabled for the duration.
 func (s *service) SyncStatus(ctx context.Context) SyncStatus {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return SyncStatus{Syncing: s.syncing}
+	return SyncStatus{Syncing: s.syncGuard.Syncing()}
 }
 
 // runSync does the actual Odoo fetch + bulk upsert (Steps 4-5), paging
@@ -533,7 +530,7 @@ func (s *service) SyncStatus(ctx context.Context) SyncStatus {
 // rather than skipping past them.
 func (s *service) runSync(ctx context.Context, cancel context.CancelFunc, ids []int64) {
 	defer cancel()
-	defer s.unlock()
+	defer s.syncGuard.Finish()
 
 	var notFound []int64
 	var skippedStoreIDs []int
@@ -698,22 +695,6 @@ func (s *service) syncEmployeeStores(ctx context.Context, employees []odoo.Emplo
 	}
 
 	return skipped
-}
-
-func (s *service) tryLock() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.syncing {
-		return false
-	}
-	s.syncing = true
-	return true
-}
-
-func (s *service) unlock() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.syncing = false
 }
 
 // sendActivationEmail generates a password-reset/activation token and emails
