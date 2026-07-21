@@ -306,6 +306,15 @@ RETURNING *;
 DELETE FROM positions
 WHERE id = $1;
 
+-- name: DeletePositions :execrows
+-- Bulk-delete counterpart of DeletePosition (see issue #13) — deletes every
+-- submitted id in one statement. BulkDeletePositions pre-checks all ids
+-- exist via CountPositionsByIDs inside the same transaction, so this is
+-- only the "delete" half of an all-or-nothing count-check-then-delete, not
+-- an existence check itself.
+DELETE FROM positions
+WHERE id = ANY(sqlc.arg(ids)::bigint[]);
+
 -- name: CountPositionsByIDs :one
 -- Used to validate a submitted set of position ids in one round trip: if the
 -- count of matching rows is less than the count of distinct submitted ids,
@@ -313,6 +322,13 @@ WHERE id = $1;
 -- must be a clear client error, not a raw FK-violation 500).
 SELECT count(*) FROM positions
 WHERE id = ANY(sqlc.arg(ids)::bigint[]);
+
+-- name: GetPositionByID :one
+-- Existence check for the position-first endpoints (ADR-0011) — GET/PUT
+-- /positions/{id}/employees both need to 404 on an unknown position id
+-- before touching employee_positions.
+SELECT * FROM positions
+WHERE id = $1;
 
 -- name: ListPositionIDsByEmployeeID :many
 SELECT position_id FROM employee_positions
@@ -346,6 +362,44 @@ WHERE employee_id = sqlc.arg(employee_id)
 -- reinserted.
 INSERT INTO employee_positions (employee_id, position_id)
 SELECT sqlc.arg(employee_id), unnest(sqlc.arg(position_ids)::bigint[])
+ON CONFLICT (employee_id, position_id) DO NOTHING;
+
+-- name: CountEmployeesByIDs :one
+-- Position-first counterpart of CountPositionsByIDs: validates a submitted
+-- set of employee ids in one round trip for PUT /positions/{id}/employees
+-- (see ADR-0011) — a count short of the distinct submitted ids means at
+-- least one id isn't a real employee.
+SELECT count(*) FROM employees
+WHERE id = ANY(sqlc.arg(ids)::bigint[]);
+
+-- name: ListEmployeesByPositionID :many
+-- Position-first counterpart of ListPositionIDsByEmployeeID, for
+-- GET/PUT /positions/{id}/employees — returns full employee rows (not just
+-- ids) so the position package can build the same employeeResponse shape
+-- GET /employees already returns (see issue #13).
+SELECT e.* FROM employees e
+JOIN employee_positions ep ON ep.employee_id = e.id
+WHERE ep.position_id = $1
+ORDER BY e.id;
+
+-- name: DeleteEmployeePositionsByPositionIDNotIn :exec
+-- Position-first half of the "replace this position's employee set to match
+-- employee_ids exactly" diff (paired with InsertPositionEmployees, see
+-- ADR-0011) — deletes whatever's currently assigned but no longer
+-- submitted. Same "!= ALL(...) over empty is vacuously true" behavior as
+-- DeleteEmployeePositionsNotIn: submitting [] clears the position's entire
+-- employee set rather than being a no-op.
+DELETE FROM employee_positions
+WHERE position_id = sqlc.arg(position_id)
+  AND employee_id != ALL(sqlc.arg(employee_ids)::bigint[]);
+
+-- name: InsertPositionEmployees :exec
+-- Position-first half of the replace diff: inserts whatever's newly
+-- submitted. ON CONFLICT DO NOTHING is what makes assignments already
+-- present in both the old and new set stay untouched rather than being
+-- deleted and reinserted.
+INSERT INTO employee_positions (employee_id, position_id)
+SELECT unnest(sqlc.arg(employee_ids)::bigint[]), sqlc.arg(position_id)
 ON CONFLICT (employee_id, position_id) DO NOTHING;
 
 -- name: ListStoresByOdooStoreIDs :many

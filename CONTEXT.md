@@ -13,7 +13,7 @@ A person who works at one or more Stores. Identified internally by `id` (the sta
 _Avoid_: Staff, worker, user
 
 **Position**:
-A local, admin-managed job title (e.g. "Technician", "Manager") an Employee can hold. An Employee can hold zero, one, or many Positions at once — never sourced from or synced with Odoo.
+A local, admin-managed job title (e.g. "Technician", "Manager") an Employee can hold. An Employee can hold zero, one, or many Positions at once — never sourced from or synced with Odoo. Membership between Employee and Position is settable from either side — an Employee's full Position set, or a Position's full Employee set — always as a whole-set replacement via diff, never a single add/remove.
 _Avoid_: Role, job title
 
 **Wifi Whitelist**:

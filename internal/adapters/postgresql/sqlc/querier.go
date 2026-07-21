@@ -16,6 +16,11 @@ type Querier interface {
 	// RETURNING fresh state for every affected store so the handler can build
 	// the success response without a follow-up fetch.
 	BulkSetStoreWifiWhitelistEnabled(ctx context.Context, arg BulkSetStoreWifiWhitelistEnabledParams) ([]BulkSetStoreWifiWhitelistEnabledRow, error)
+	// Position-first counterpart of CountPositionsByIDs: validates a submitted
+	// set of employee ids in one round trip for PUT /positions/{id}/employees
+	// (see ADR-0011) — a count short of the distinct submitted ids means at
+	// least one id isn't a real employee.
+	CountEmployeesByIDs(ctx context.Context, ids []int64) (int64, error)
 	// Used to validate a submitted set of position ids in one round trip: if the
 	// count of matching rows is less than the count of distinct submitted ids,
 	// at least one id doesn't reference a real position (see ADR-0008 — this
@@ -25,6 +30,13 @@ type Querier interface {
 	CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) (PasswordResetToken, error)
 	CreatePosition(ctx context.Context, name string) (Position, error)
 	DeleteEmployee(ctx context.Context, id int64) (int64, error)
+	// Position-first half of the "replace this position's employee set to match
+	// employee_ids exactly" diff (paired with InsertPositionEmployees, see
+	// ADR-0011) — deletes whatever's currently assigned but no longer
+	// submitted. Same "!= ALL(...) over empty is vacuously true" behavior as
+	// DeleteEmployeePositionsNotIn: submitting [] clears the position's entire
+	// employee set rather than being a no-op.
+	DeleteEmployeePositionsByPositionIDNotIn(ctx context.Context, arg DeleteEmployeePositionsByPositionIDNotInParams) error
 	// Half of the "replace this employee's position set to match position_ids
 	// exactly" diff (paired with InsertEmployeePositions) — deletes whatever's
 	// currently assigned but no longer submitted. "!= ALL(...)" over an empty
@@ -39,6 +51,12 @@ type Querier interface {
 	// membership is Odoo-owned, never admin-writable (see ADR-0009).
 	DeleteEmployeeStoresNotIn(ctx context.Context, arg DeleteEmployeeStoresNotInParams) error
 	DeletePosition(ctx context.Context, id int64) (int64, error)
+	// Bulk-delete counterpart of DeletePosition (see issue #13) — deletes every
+	// submitted id in one statement. BulkDeletePositions pre-checks all ids
+	// exist via CountPositionsByIDs inside the same transaction, so this is
+	// only the "delete" half of an all-or-nothing count-check-then-delete, not
+	// an existence check itself.
+	DeletePositions(ctx context.Context, ids []int64) (int64, error)
 	// Deletes specific store_wifi_ip rows by value, not the table's internal id
 	// (see ADR-0003 — a value unambiguously identifies the row within a store
 	// thanks to the UNIQUE (store_id, ip_address) constraint) — the surgical
@@ -74,6 +92,10 @@ type Querier interface {
 	GetEmployeeByEmail(ctx context.Context, email string) (Employee, error)
 	GetEmployeeByID(ctx context.Context, id int64) (Employee, error)
 	GetEmployeeByUsername(ctx context.Context, username string) (Employee, error)
+	// Existence check for the position-first endpoints (ADR-0011) — GET/PUT
+	// /positions/{id}/employees both need to 404 on an unknown position id
+	// before touching employee_positions.
+	GetPositionByID(ctx context.Context, id int64) (Position, error)
 	// No wifi_whitelist_enabled filter — see ADR-0001/ADR-0004, it's a normal
 	// editable field, not a soft-delete tombstone, so a wifi-disabled store is
 	// still a normal fetch here, not a 404.
@@ -95,6 +117,11 @@ type Querier interface {
 	// the old and new set stay untouched rather than being deleted and
 	// reinserted.
 	InsertEmployeeStores(ctx context.Context, arg InsertEmployeeStoresParams) error
+	// Position-first half of the replace diff: inserts whatever's newly
+	// submitted. ON CONFLICT DO NOTHING is what makes assignments already
+	// present in both the old and new set stay untouched rather than being
+	// deleted and reinserted.
+	InsertPositionEmployees(ctx context.Context, arg InsertPositionEmployeesParams) error
 	// Other half of the replace diff: inserts whatever's newly submitted.
 	// ON CONFLICT DO NOTHING is what makes values already present in both the
 	// old and new set stay untouched rather than being deleted and reinserted.
@@ -106,6 +133,11 @@ type Querier interface {
 	// with no matching row is silently omitted from the result.
 	ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int64, error)
 	ListEmployees(ctx context.Context) ([]Employee, error)
+	// Position-first counterpart of ListPositionIDsByEmployeeID, for
+	// GET/PUT /positions/{id}/employees — returns full employee rows (not just
+	// ids) so the position package can build the same employeeResponse shape
+	// GET /employees already returns (see issue #13).
+	ListEmployeesByPositionID(ctx context.Context, positionID int64) ([]Employee, error)
 	ListPositionIDsByEmployeeID(ctx context.Context, employeeID int64) ([]int64, error)
 	// Bulk counterpart of ListPositionIDsByEmployeeID for ListEmployees — one
 	// round trip for every employee's position ids, grouped client-side by

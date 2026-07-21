@@ -41,6 +41,20 @@ func (m *MockService) EXPECT() *MockServiceMockRecorder {
 	return m.recorder
 }
 
+// BulkDeletePositions mocks base method.
+func (m *MockService) BulkDeletePositions(ctx context.Context, ids []int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "BulkDeletePositions", ctx, ids)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// BulkDeletePositions indicates an expected call of BulkDeletePositions.
+func (mr *MockServiceMockRecorder) BulkDeletePositions(ctx, ids any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "BulkDeletePositions", reflect.TypeOf((*MockService)(nil).BulkDeletePositions), ctx, ids)
+}
+
 // CreatePosition mocks base method.
 func (m *MockService) CreatePosition(ctx context.Context, params createPositionParams) (repo.Position, error) {
 	m.ctrl.T.Helper()
@@ -70,6 +84,21 @@ func (mr *MockServiceMockRecorder) DeletePosition(ctx, id any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePosition", reflect.TypeOf((*MockService)(nil).DeletePosition), ctx, id)
 }
 
+// GetPositionEmployees mocks base method.
+func (m *MockService) GetPositionEmployees(ctx context.Context, id int64) ([]EmployeeDetail, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetPositionEmployees", ctx, id)
+	ret0, _ := ret[0].([]EmployeeDetail)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetPositionEmployees indicates an expected call of GetPositionEmployees.
+func (mr *MockServiceMockRecorder) GetPositionEmployees(ctx, id any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPositionEmployees", reflect.TypeOf((*MockService)(nil).GetPositionEmployees), ctx, id)
+}
+
 // ListPositions mocks base method.
 func (m *MockService) ListPositions(ctx context.Context) ([]repo.Position, error) {
 	m.ctrl.T.Helper()
@@ -83,6 +112,21 @@ func (m *MockService) ListPositions(ctx context.Context) ([]repo.Position, error
 func (mr *MockServiceMockRecorder) ListPositions(ctx any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListPositions", reflect.TypeOf((*MockService)(nil).ListPositions), ctx)
+}
+
+// SetPositionEmployees mocks base method.
+func (m *MockService) SetPositionEmployees(ctx context.Context, id int64, params setPositionEmployeesParams) ([]EmployeeDetail, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "SetPositionEmployees", ctx, id, params)
+	ret0, _ := ret[0].([]EmployeeDetail)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// SetPositionEmployees indicates an expected call of SetPositionEmployees.
+func (mr *MockServiceMockRecorder) SetPositionEmployees(ctx, id, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetPositionEmployees", reflect.TypeOf((*MockService)(nil).SetPositionEmployees), ctx, id, params)
 }
 
 // UpdatePosition mocks base method.
