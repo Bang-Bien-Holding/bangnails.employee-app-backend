@@ -13,6 +13,7 @@ import (
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
 	odoomocks "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo/mocks"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/pgerr"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/tokenx"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -1839,7 +1840,7 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 func TestEmployeeService_CompleteActivation(t *testing.T) {
 	ctx := context.Background()
 
-	validToken := repo.PasswordResetToken{ID: 5, EmployeeID: 1, TokenHash: hashToken("sometoken")}
+	validToken := repo.PasswordResetToken{ID: 5, EmployeeID: 1, TokenHash: tokenx.Hash("sometoken")}
 	dbErr := errors.New("connection refused")
 
 	tests := []struct {
@@ -1852,7 +1853,7 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 			name:        "TC-ACTIVATE-01: Completes activation successfully",
 			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
-				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), hashToken("sometoken")).Return(validToken, nil)
+				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(validToken, nil)
 				mockRepo.EXPECT().
 					SetEmployeePassword(gomock.Any(), gomock.Any()).
 					DoAndReturn(func(_ context.Context, arg repo.SetEmployeePasswordParams) (int64, error) {
@@ -1871,7 +1872,7 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 			name:        "TC-ACTIVATE-02: Unknown/expired/used token translates to ErrInvalidOrExpiredToken",
 			inputParams: completeActivationParams{Token: "badtoken", Password: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
-				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), hashToken("badtoken")).Return(repo.PasswordResetToken{}, pgx.ErrNoRows)
+				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("badtoken")).Return(repo.PasswordResetToken{}, pgx.ErrNoRows)
 			},
 			expectedErr: ErrInvalidOrExpiredToken,
 		},
@@ -1879,7 +1880,7 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 			name:        "TC-ACTIVATE-03: Fails on database error redeeming the token",
 			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
-				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), hashToken("sometoken")).Return(repo.PasswordResetToken{}, dbErr)
+				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(repo.PasswordResetToken{}, dbErr)
 			},
 			expectedErr: dbErr,
 		},
@@ -1887,7 +1888,7 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 			name:        "TC-ACTIVATE-04: Fails on database error setting the password",
 			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
-				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), hashToken("sometoken")).Return(validToken, nil)
+				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(validToken, nil)
 				mockRepo.EXPECT().SetEmployeePassword(gomock.Any(), gomock.Any()).Return(int64(0), dbErr)
 			},
 			expectedErr: dbErr,

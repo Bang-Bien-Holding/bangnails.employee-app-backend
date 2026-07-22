@@ -2,9 +2,6 @@ package employees
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,6 +16,7 @@ import (
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/odoo"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/pgerr"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/syncx"
+	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/tokenx"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -43,6 +41,10 @@ const employeePositionsPositionIDFkeyConstraint = "employee_positions_position_i
 // activationTokenTTL matches the existing password-reset scope (30 minutes),
 // per feat-007's explicit choice over a longer first-activation-specific TTL.
 const activationTokenTTL = 30 * time.Minute
+
+// activationTokenBytes is issuePasswordResetToken's raw token length before
+// hex encoding (see tokenx.Generate).
+const activationTokenBytes = 32
 
 // employeeSyncBatchSize is how many ids runSync sends to
 // odoo.FetchEmployeesByEmployeeIDs per call — a SyncEmployees request isn't
@@ -392,7 +394,7 @@ func (s *service) BulkDeleteEmployees(ctx context.Context, ids []int64) []BulkAc
 // means only one concurrent caller can redeem a given token, so the password
 // update below only ever runs after that caller has exclusively claimed it.
 func (s *service) CompleteActivation(ctx context.Context, params completeActivationParams) error {
-	resetToken, err := s.repo.RedeemPasswordResetToken(ctx, hashToken(params.Token))
+	resetToken, err := s.repo.RedeemPasswordResetToken(ctx, tokenx.Hash(params.Token))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInvalidOrExpiredToken
@@ -733,14 +735,14 @@ func (s *service) sendActivationEmail(ctx context.Context, employee repo.Employe
 // frontend, though both consume the same password_reset_tokens row via
 // feat-008's completion endpoint.
 func (s *service) issuePasswordResetToken(ctx context.Context, employee repo.Employee, linkPath string) (string, error) {
-	token, err := generateActivationToken()
+	token, err := tokenx.Generate(activationTokenBytes)
 	if err != nil {
 		return "", err
 	}
 
 	_, err = s.repo.CreatePasswordResetToken(ctx, repo.CreatePasswordResetTokenParams{
 		EmployeeID: employee.ID,
-		TokenHash:  hashToken(token),
+		TokenHash:  tokenx.Hash(token),
 		ExpiresAt:  pgtype.Timestamptz{Time: time.Now().Add(activationTokenTTL), Valid: true},
 	})
 	if err != nil {
@@ -748,23 +750,6 @@ func (s *service) issuePasswordResetToken(ctx context.Context, employee repo.Emp
 	}
 
 	return fmt.Sprintf("%s%s?token=%s", env.GetString("APP_URL", "http://localhost:3000"), linkPath, token), nil
-}
-
-// generateActivationToken returns a random hex-encoded token for the
-// password_reset_tokens table.
-func generateActivationToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
-}
-
-// hashToken returns the hex-encoded SHA-256 digest of a bearer token, as
-// stored in and looked up from password_reset_tokens.token_hash.
-func hashToken(token string) string {
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:])
 }
 
 // translateEmployeeUniqueViolation maps known Postgres unique-violation

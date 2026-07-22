@@ -57,6 +57,12 @@ type Querier interface {
 	// only the "delete" half of an all-or-nothing count-check-then-delete, not
 	// an existence check itself.
 	DeletePositions(ctx context.Context, ids []int64) (int64, error)
+	// Logout: ends the Session matching this bearer token's hash immediately,
+	// no re-authentication required. A hash matching no row (already logged
+	// out, expired and reaped, or never valid) still returns 0 rows rather than
+	// an error — Logout is idempotent, see auth.Service.Logout. Also reused by
+	// Heartbeat (issue #23) to end a Session on expiry/silence/left_premises.
+	DeleteSessionByTokenHash(ctx context.Context, tokenHash string) (int64, error)
 	// Deletes specific store_wifi_ip rows by value, not the table's internal id
 	// (see ADR-0003 — a value unambiguously identifies the row within a store
 	// thanks to the UNIQUE (store_id, ip_address) constraint) — the surgical
@@ -96,6 +102,15 @@ type Querier interface {
 	// /positions/{id}/employees both need to 404 on an unknown position id
 	// before touching employee_positions.
 	GetPositionByID(ctx context.Context, id int64) (Position, error)
+	// Heartbeat's (issue #23) and ValidateSession's (issue #25) lookup of the
+	// Session a bearer token currently names. A hash matching no row — never
+	// valid, already logged out/expired-and-ended, or (for a stale token still
+	// held by a device) superseded by a newer Login's UpsertSession overwriting
+	// the same employee_id row in place — is pgx.ErrNoRows; the caller can't
+	// distinguish those cases from this query alone, which is why Heartbeat
+	// reports the generic logged_out_elsewhere reason for all of them (see
+	// auth.Service.Heartbeat).
+	GetSessionByTokenHash(ctx context.Context, tokenHash string) (Session, error)
 	// No wifi_whitelist_enabled filter — see ADR-0001/ADR-0004, it's a normal
 	// editable field, not a soft-delete tombstone, so a wifi-disabled store is
 	// still a normal fetch here, not a 404.
@@ -128,6 +143,12 @@ type Querier interface {
 	InsertStoreWifiIPs(ctx context.Context, arg InsertStoreWifiIPsParams) error
 	// MAC-address counterpart of InsertStoreWifiIPs.
 	InsertStoreWifiMacs(ctx context.Context, arg InsertStoreWifiMacsParams) error
+	// The single centralized "does this Employee hold the Admin Position" check
+	// ADR-0015 calls for — an exact, case-insensitive match on the Position
+	// name "Admin", not a pattern. Shared by Login's presence-check bypass
+	// (issue #24) and the admin-gating middleware (issue #25); no other call
+	// site should reimplement this comparison.
+	IsEmployeeAdmin(ctx context.Context, employeeID int64) (bool, error)
 	// Translates the internal ids a SyncEmployees caller supplies into the
 	// Odoo-facing odoo_employee_id values runSync actually sends to Odoo. An id
 	// with no matching row is silently omitted from the result.
@@ -166,11 +187,49 @@ type Querier interface {
 	// odoo_store_id with no matching row is simply absent from the result; the
 	// caller (runSync) logs and skips those rather than failing the sync.
 	ListStoresByOdooStoreIDs(ctx context.Context, odooStoreIds []string) ([]ListStoresByOdooStoreIDsRow, error)
+	// Every Store an Employee belongs to, each with its current IP and MAC
+	// whitelists — Login's (issues #21/#22) candidate set for the IP/Geofence/MAC
+	// presence check (ADR-0013). Ordered by store id, the deterministic
+	// tie-break auth.matchStore relies on when more than one Store could
+	// plausibly match. wifi_whitelist_enabled comes along on the embedded
+	// Store row so the caller can gate the IP/MAC tiers per store without a
+	// second query; geofence columns are on the same row for the same reason.
+	ListStoresForLoginByEmployeeID(ctx context.Context, employeeID int64) ([]ListStoresForLoginByEmployeeIDRow, error)
+	// Atomically increments failed_login_attempts and, only once the new count
+	// reaches sqlc.arg(threshold), sets locked_until to sqlc.arg(locked_until)
+	// (computed in Go as now + the lockout duration, so the duration itself
+	// stays a Go constant, not a SQL literal — see auth.loginLockoutDuration).
+	// Callers (auth.Service.Login) only ever reach this query once they've
+	// already confirmed locked_until is unset or in the past — an
+	// Employee still inside an active lockout window never gets here. Given
+	// that, "consecutive" resets the moment a prior lockout has fully elapsed:
+	// if locked_until is already in the past, this failed attempt is attempt 1
+	// of a fresh run, not a continuation of the old count — otherwise a single
+	// failure right after a lockout expires would instantly re-lock the
+	// Employee instead of giving them a full new run of attempts.
+	RecordFailedLoginAttempt(ctx context.Context, arg RecordFailedLoginAttemptParams) (Employee, error)
+	// A Heartbeat (issue #23) whose presence recheck did not match the Session's
+	// Store: still refreshes last_heartbeat_at (a failed check is still a check
+	// that arrived — only true silence should trip the 90s backstop) and
+	// increments consecutive_failures by one. The caller (auth.Service.Heartbeat)
+	// ends the Session once the returned count reaches 2.
+	RecordHeartbeatFailure(ctx context.Context, tokenHash string) (Session, error)
+	// A Heartbeat (issue #23) whose presence recheck matched the Session's Store:
+	// resets consecutive_failures to 0 (a pass between failures forgives them,
+	// per ADR-0014) and refreshes last_heartbeat_at so the 90s silence backstop's
+	// clock restarts. Does not touch expires_at — the 12-hour cap is absolute,
+	// not extended by a passing Heartbeat.
+	RecordHeartbeatSuccess(ctx context.Context, tokenHash string) (Session, error)
 	// Atomically claims a valid, unused token: the UPDATE's row lock ensures
 	// only one concurrent caller can match the WHERE clause and get a row back,
 	// so CompleteActivation can't be raced into redeeming the same token twice.
 	// Callers pass the SHA-256 digest of the bearer token, not the raw value.
 	RedeemPasswordResetToken(ctx context.Context, tokenHash string) (PasswordResetToken, error)
+	// Clears an Employee's lockout state on a successful password check
+	// (Login), regardless of whether the subsequent presence check goes on to
+	// match a Store — a correct password is what "consecutive failed attempts"
+	// counts, not the presence outcome.
+	ResetFailedLoginAttempts(ctx context.Context, id int64) error
 	SetEmployeeActive(ctx context.Context, arg SetEmployeeActiveParams) (int64, error)
 	SetEmployeePassword(ctx context.Context, arg SetEmployeePasswordParams) (int64, error)
 	// PATCH /v1/stores/{id}/wifi-whitelist-enabled's single query — same
@@ -207,6 +266,16 @@ type Querier interface {
 	// (re)create an employee row (which would otherwise need a placeholder,
 	// Odoo-blind username). Only CreateEmployee ever inserts a row.
 	UpsertEmployees(ctx context.Context, arg UpsertEmployeesParams) ([]UpsertEmployeesRow, error)
+	// Login's single-active-Session write (ADR-0014): inserts a new Session for
+	// employee_id, or, if one already exists (UNIQUE employee_id), atomically
+	// replaces it in place — the "a new Login invalidates any Session already
+	// open for that Employee" rule, in one round trip rather than a
+	// delete-then-insert. On the DO UPDATE path, last_heartbeat_at/
+	// consecutive_failures are reset explicitly (the INSERT path already gets
+	// them from the column defaults) — a re-issued Session for an Employee who
+	// had one open before starts Heartbeat's silence/failure tracking clean,
+	// not carrying over the old Session's state (issue #23).
+	UpsertSession(ctx context.Context, arg UpsertSessionParams) (Session, error)
 	// Bulk-upserts one page of Odoo stores in a single round trip. "(xmax = 0)"
 	// is Postgres' standard trick for distinguishing an INSERT from an
 	// ON CONFLICT UPDATE in the same statement: xmax is only set by an UPDATE,

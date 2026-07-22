@@ -417,6 +417,154 @@ SELECT store_id FROM employee_stores
 WHERE employee_id = $1
 ORDER BY store_id;
 
+-- name: ListStoresForLoginByEmployeeID :many
+-- Every Store an Employee belongs to, each with its current IP and MAC
+-- whitelists — Login's (issues #21/#22) candidate set for the IP/Geofence/MAC
+-- presence check (ADR-0013). Ordered by store id, the deterministic
+-- tie-break auth.matchStore relies on when more than one Store could
+-- plausibly match. wifi_whitelist_enabled comes along on the embedded
+-- Store row so the caller can gate the IP/MAC tiers per store without a
+-- second query; geofence columns are on the same row for the same reason.
+SELECT
+    sqlc.embed(s),
+    COALESCE(ip.ip_addresses, '{}')::inet[] AS ip_addresses,
+    COALESCE(mac.mac_addresses, '{}')::macaddr[] AS mac_addresses
+FROM store s
+JOIN employee_stores es ON es.store_id = s.id
+LEFT JOIN LATERAL (
+    SELECT array_agg(ip_address ORDER BY id) AS ip_addresses
+    FROM store_wifi_ip
+    WHERE store_id = s.id
+) ip ON true
+LEFT JOIN LATERAL (
+    SELECT array_agg(mac_address ORDER BY id) AS mac_addresses
+    FROM store_wifi_mac
+    WHERE store_id = s.id
+) mac ON true
+WHERE es.employee_id = sqlc.arg(employee_id)
+ORDER BY s.id;
+
+-- name: RecordFailedLoginAttempt :one
+-- Atomically increments failed_login_attempts and, only once the new count
+-- reaches sqlc.arg(threshold), sets locked_until to sqlc.arg(locked_until)
+-- (computed in Go as now + the lockout duration, so the duration itself
+-- stays a Go constant, not a SQL literal — see auth.loginLockoutDuration).
+-- Callers (auth.Service.Login) only ever reach this query once they've
+-- already confirmed locked_until is unset or in the past — an
+-- Employee still inside an active lockout window never gets here. Given
+-- that, "consecutive" resets the moment a prior lockout has fully elapsed:
+-- if locked_until is already in the past, this failed attempt is attempt 1
+-- of a fresh run, not a continuation of the old count — otherwise a single
+-- failure right after a lockout expires would instantly re-lock the
+-- Employee instead of giving them a full new run of attempts.
+UPDATE employees e
+SET failed_login_attempts = calc.new_count,
+    locked_until = CASE
+        WHEN calc.new_count >= sqlc.arg(threshold)::int THEN sqlc.arg(locked_until)::timestamptz
+        ELSE NULL
+    END
+FROM (
+    SELECT emp.id,
+        CASE
+            WHEN emp.locked_until IS NOT NULL AND emp.locked_until <= now() THEN 1
+            ELSE emp.failed_login_attempts + 1
+        END AS new_count
+    FROM employees emp
+    WHERE emp.id = sqlc.arg(id)
+) AS calc
+WHERE e.id = calc.id
+RETURNING e.*;
+
+-- name: ResetFailedLoginAttempts :exec
+-- Clears an Employee's lockout state on a successful password check
+-- (Login), regardless of whether the subsequent presence check goes on to
+-- match a Store — a correct password is what "consecutive failed attempts"
+-- counts, not the presence outcome.
+UPDATE employees
+SET failed_login_attempts = 0,
+    locked_until = NULL
+WHERE id = sqlc.arg(id);
+
+-- name: UpsertSession :one
+-- Login's single-active-Session write (ADR-0014): inserts a new Session for
+-- employee_id, or, if one already exists (UNIQUE employee_id), atomically
+-- replaces it in place — the "a new Login invalidates any Session already
+-- open for that Employee" rule, in one round trip rather than a
+-- delete-then-insert. On the DO UPDATE path, last_heartbeat_at/
+-- consecutive_failures are reset explicitly (the INSERT path already gets
+-- them from the column defaults) — a re-issued Session for an Employee who
+-- had one open before starts Heartbeat's silence/failure tracking clean,
+-- not carrying over the old Session's state (issue #23).
+INSERT INTO sessions (employee_id, store_id, token_hash, expires_at)
+VALUES (sqlc.arg(employee_id), sqlc.arg(store_id), sqlc.arg(token_hash), sqlc.arg(expires_at))
+ON CONFLICT (employee_id) DO UPDATE
+SET store_id = EXCLUDED.store_id,
+    token_hash = EXCLUDED.token_hash,
+    issued_at = now(),
+    expires_at = EXCLUDED.expires_at,
+    last_heartbeat_at = now(),
+    consecutive_failures = 0
+RETURNING *;
+
+-- name: DeleteSessionByTokenHash :execrows
+-- Logout: ends the Session matching this bearer token's hash immediately,
+-- no re-authentication required. A hash matching no row (already logged
+-- out, expired and reaped, or never valid) still returns 0 rows rather than
+-- an error — Logout is idempotent, see auth.Service.Logout. Also reused by
+-- Heartbeat (issue #23) to end a Session on expiry/silence/left_premises.
+DELETE FROM sessions
+WHERE token_hash = sqlc.arg(token_hash);
+
+-- name: GetSessionByTokenHash :one
+-- Heartbeat's (issue #23) and ValidateSession's (issue #25) lookup of the
+-- Session a bearer token currently names. A hash matching no row — never
+-- valid, already logged out/expired-and-ended, or (for a stale token still
+-- held by a device) superseded by a newer Login's UpsertSession overwriting
+-- the same employee_id row in place — is pgx.ErrNoRows; the caller can't
+-- distinguish those cases from this query alone, which is why Heartbeat
+-- reports the generic logged_out_elsewhere reason for all of them (see
+-- auth.Service.Heartbeat).
+SELECT * FROM sessions
+WHERE token_hash = sqlc.arg(token_hash);
+
+-- name: RecordHeartbeatSuccess :one
+-- A Heartbeat (issue #23) whose presence recheck matched the Session's Store:
+-- resets consecutive_failures to 0 (a pass between failures forgives them,
+-- per ADR-0014) and refreshes last_heartbeat_at so the 90s silence backstop's
+-- clock restarts. Does not touch expires_at — the 12-hour cap is absolute,
+-- not extended by a passing Heartbeat.
+UPDATE sessions
+SET last_heartbeat_at = now(),
+    consecutive_failures = 0
+WHERE token_hash = sqlc.arg(token_hash)
+RETURNING *;
+
+-- name: RecordHeartbeatFailure :one
+-- A Heartbeat (issue #23) whose presence recheck did not match the Session's
+-- Store: still refreshes last_heartbeat_at (a failed check is still a check
+-- that arrived — only true silence should trip the 90s backstop) and
+-- increments consecutive_failures by one. The caller (auth.Service.Heartbeat)
+-- ends the Session once the returned count reaches 2.
+UPDATE sessions
+SET last_heartbeat_at = now(),
+    consecutive_failures = consecutive_failures + 1
+WHERE token_hash = sqlc.arg(token_hash)
+RETURNING *;
+
+-- name: IsEmployeeAdmin :one
+-- The single centralized "does this Employee hold the Admin Position" check
+-- ADR-0015 calls for — an exact, case-insensitive match on the Position
+-- name "Admin", not a pattern. Shared by Login's presence-check bypass
+-- (issue #24) and the admin-gating middleware (issue #25); no other call
+-- site should reimplement this comparison.
+SELECT EXISTS (
+    SELECT 1
+    FROM employee_positions ep
+    JOIN positions p ON p.id = ep.position_id
+    WHERE ep.employee_id = sqlc.arg(employee_id)
+    AND LOWER(p.name) = 'admin'
+);
+
 -- name: ListStoreIDsByEmployeeIDs :many
 -- Bulk counterpart of ListStoreIDsByEmployeeID for ListEmployees — same
 -- plain row-per-pair shape as ListPositionIDsByEmployeeIDs, grouped

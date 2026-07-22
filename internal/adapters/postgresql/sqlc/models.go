@@ -12,15 +12,17 @@ import (
 )
 
 type Employee struct {
-	ID             int64              `json:"id"`
-	OdooEmployeeID int64              `json:"odoo_employee_id"`
-	FullName       string             `json:"full_name"`
-	Email          string             `json:"email"`
-	Username       string             `json:"username"`
-	Password       []byte             `json:"password"`
-	IsActive       bool               `json:"is_active"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+	ID                  int64              `json:"id"`
+	OdooEmployeeID      int64              `json:"odoo_employee_id"`
+	FullName            string             `json:"full_name"`
+	Email               string             `json:"email"`
+	Username            string             `json:"username"`
+	Password            []byte             `json:"password"`
+	IsActive            bool               `json:"is_active"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	FailedLoginAttempts int32              `json:"failed_login_attempts"`
+	LockedUntil         pgtype.Timestamptz `json:"locked_until"`
 }
 
 type EmployeePosition struct {
@@ -47,6 +49,17 @@ type Position struct {
 	Name      string             `json:"name"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Session struct {
+	ID                  int64              `json:"id"`
+	EmployeeID          int64              `json:"employee_id"`
+	StoreID             pgtype.Int8        `json:"store_id"`
+	TokenHash           string             `json:"token_hash"`
+	IssuedAt            pgtype.Timestamptz `json:"issued_at"`
+	ExpiresAt           pgtype.Timestamptz `json:"expires_at"`
+	LastHeartbeatAt     pgtype.Timestamptz `json:"last_heartbeat_at"`
+	ConsecutiveFailures int32              `json:"consecutive_failures"`
 }
 
 type Store struct {
