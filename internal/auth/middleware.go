@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 )
 
@@ -23,11 +24,12 @@ func AdminOnly(service Service) func(http.Handler) http.Handler {
 
 			session, err := service.ValidateSession(r.Context(), token)
 			if err != nil {
-				status := http.StatusInternalServerError
 				if errors.Is(err, ErrSessionNotFound) {
-					status = http.StatusUnauthorized
+					http.Error(w, err.Error(), http.StatusUnauthorized)
+					return
 				}
-				http.Error(w, err.Error(), status)
+				slog.Error("auth: validate session", "error", err)
+				http.Error(w, "internal server error", http.StatusInternalServerError)
 				return
 			}
 			if !session.IsAdmin {

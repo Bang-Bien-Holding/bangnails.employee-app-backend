@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -44,16 +45,17 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.service.Login(r.Context(), params, clientIP)
 	if err != nil {
-		status := http.StatusInternalServerError
 		switch {
 		case errors.Is(err, ErrInvalidCredentials):
-			status = http.StatusUnauthorized
+			http.Error(w, err.Error(), http.StatusUnauthorized)
 		case errors.Is(err, ErrAccountNotActivated):
-			status = http.StatusForbidden
+			http.Error(w, err.Error(), http.StatusForbidden)
 		case errors.Is(err, ErrNoStoreMatch):
-			status = http.StatusForbidden
+			http.Error(w, err.Error(), http.StatusForbidden)
+		default:
+			slog.Error("auth: login", "error", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
 		}
-		http.Error(w, err.Error(), status)
 		return
 	}
 
@@ -109,7 +111,8 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.service.Heartbeat(r.Context(), token, params, clientIP)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		slog.Error("auth: heartbeat", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
