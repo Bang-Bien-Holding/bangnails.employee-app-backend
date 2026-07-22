@@ -131,7 +131,7 @@ func TestAuthHandler_Login(t *testing.T) {
 
 			h := NewHandler(mockSvc)
 
-			req := httptest.NewRequest(http.MethodPost, "/v1/auth/login", bytes.NewBufferString(tt.body))
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/login", bytes.NewBufferString(tt.body))
 			req.RemoteAddr = tt.remoteAddr
 			rec := serveWithClientIP(h.Login, req)
 
@@ -196,7 +196,7 @@ func TestAuthHandler_Logout(t *testing.T) {
 
 			h := NewHandler(mockSvc)
 
-			req := httptest.NewRequest(http.MethodPost, "/v1/auth/logout", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/auth/logout", nil)
 			if tt.authHeader != "" {
 				req.Header.Set("Authorization", tt.authHeader)
 			}
