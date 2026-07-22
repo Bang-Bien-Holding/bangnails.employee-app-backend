@@ -25,9 +25,7 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -76,55 +74,6 @@ func e2eSetup(t *testing.T) (*http.Client, string) {
 	t.Cleanup(server.Close)
 
 	return server.Client(), server.URL + "/v1"
-}
-
-type apiResponse struct {
-	status int
-	raw    []byte
-}
-
-func (r apiResponse) decode(t *testing.T, v any) {
-	t.Helper()
-	if len(r.raw) == 0 {
-		return
-	}
-	if err := json.Unmarshal(r.raw, v); err != nil {
-		t.Fatalf("decode response body %q: %v", r.raw, err)
-	}
-}
-
-func e2eRequest(t *testing.T, client *http.Client, method, url string, body any) apiResponse {
-	t.Helper()
-
-	var reqBody io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			t.Fatalf("marshal request body: %v", err)
-		}
-		reqBody = bytes.NewReader(b)
-	}
-
-	req, err := http.NewRequestWithContext(t.Context(), method, url, reqBody)
-	if err != nil {
-		t.Fatalf("build request: %v", err)
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("%s %s: %v", method, url, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read response body: %v", err)
-	}
-
-	return apiResponse{status: resp.StatusCode, raw: raw}
 }
 
 // e2eWaitForSyncDone polls a {syncing bool} status endpoint until it
@@ -212,11 +161,6 @@ func e2eGetEmployee(t *testing.T, client *http.Client, base string, id int64) e2
 	var employee e2eEmployee
 	resp.decode(t, &employee)
 	return employee
-}
-
-func e2eUnique(t *testing.T, label string) string {
-	t.Helper()
-	return fmt.Sprintf("e2e-%s-%d", label, time.Now().UnixNano())
 }
 
 // TestE2E_TokenAuthAndStoreSync exercises issue #9's first two acceptance
