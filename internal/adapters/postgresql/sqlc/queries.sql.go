@@ -789,11 +789,42 @@ func (q *Queries) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int6
 
 const listEmployees = `-- name: ListEmployees :many
 SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at, failed_login_attempts, locked_until FROM employees
-ORDER BY id
+WHERE ($1::text IS NULL OR full_name ILIKE '%' || $1::text || '%' OR email ILIKE '%' || $1::text || '%')
+  AND ($2::bigint[] IS NULL OR id IN (SELECT employee_id FROM employee_positions WHERE position_id = ANY($2::bigint[])))
+  AND ($3::bigint[] IS NULL OR id IN (SELECT employee_id FROM employee_stores WHERE store_id = ANY($3::bigint[])))
+  AND ($4::bigint[] IS NULL OR odoo_employee_id = ANY($4::bigint[]))
+  AND ($5::bool IS NULL OR is_active = $5::bool)
+ORDER BY lower(full_name) ASC
 `
 
-func (q *Queries) ListEmployees(ctx context.Context) ([]Employee, error) {
-	rows, err := q.db.Query(ctx, listEmployees)
+type ListEmployeesParams struct {
+	Q               pgtype.Text `json:"q"`
+	PositionIds     []int64     `json:"position_ids"`
+	StoreIds        []int64     `json:"store_ids"`
+	OdooEmployeeIds []int64     `json:"odoo_employee_ids"`
+	IsActive        pgtype.Bool `json:"is_active"`
+}
+
+// Optional-filter search for issue #28: every sqlc.narg(...) IS NULL check
+// skips that facet entirely when the caller omitted the corresponding query
+// parameter (employees.ListEmployeesFilter's zero value) — the standard
+// "$n IS NULL means skip this filter" static-SQL pattern (sqlc requires
+// compile-time SQL, so filters can't be built by string concatenation).
+// position_ids and store_ids are independent, OR-within/AND-across facets —
+// never paired (ADR-0008, ADR-0009; issue #28 user story 7) — and each is
+// matched via a sub-SELECT against its join table rather than a JOIN, so an
+// employee with zero positions/stores still matches when that facet's
+// filter is omitted (user stories 8-9). Sorted case-insensitively by
+// full_name (user story 10) since Postgres' default collation is
+// case-sensitive.
+func (q *Queries) ListEmployees(ctx context.Context, arg ListEmployeesParams) ([]Employee, error) {
+	rows, err := q.db.Query(ctx, listEmployees,
+		arg.Q,
+		arg.PositionIds,
+		arg.StoreIds,
+		arg.OdooEmployeeIds,
+		arg.IsActive,
+	)
 	if err != nil {
 		return nil, err
 	}

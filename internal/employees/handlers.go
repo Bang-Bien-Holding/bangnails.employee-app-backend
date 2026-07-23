@@ -2,8 +2,11 @@ package employees
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/httpx"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/json"
@@ -242,14 +245,82 @@ func (h *Handler) CompleteActivation(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ListEmployees handles GET /employees' optional search/filter query
+// parameters (issue #28): q, position_ids, store_ids, odoo_employee_ids,
+// is_active — see parseListEmployeesFilter for how each is read.
 func (h *Handler) ListEmployees(w http.ResponseWriter, r *http.Request) {
-	employees, err := h.service.ListEmployees(r.Context())
+	filter, err := parseListEmployeesFilter(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	employees, err := h.service.ListEmployees(r.Context(), filter)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	json.Write(w, http.StatusOK, newEmployeeResponses(employees))
+}
+
+// parseListEmployeesFilter reads ListEmployees' query parameters into a
+// ListEmployeesFilter. Every field defaults to "don't filter on this facet"
+// when its query parameter is absent or empty — the only failure mode is a
+// list parameter (position_ids/store_ids/odoo_employee_ids) containing a
+// non-numeric entry, or is_active holding something ParseBool doesn't
+// recognize (issue #28 user story 11). A well-formed but nonexistent id is
+// not this function's concern — that's a query-time "matches nothing" case
+// (user story 12), handled by the SQL, not rejected here.
+func parseListEmployeesFilter(r *http.Request) (ListEmployeesFilter, error) {
+	var filter ListEmployeesFilter
+
+	if q := r.URL.Query().Get("q"); q != "" {
+		filter.Q = &q
+	}
+
+	var err error
+	if filter.PositionIDs, err = parseInt64ListQueryParam(r, "position_ids"); err != nil {
+		return ListEmployeesFilter{}, err
+	}
+	if filter.StoreIDs, err = parseInt64ListQueryParam(r, "store_ids"); err != nil {
+		return ListEmployeesFilter{}, err
+	}
+	if filter.OdooEmployeeIDs, err = parseInt64ListQueryParam(r, "odoo_employee_ids"); err != nil {
+		return ListEmployeesFilter{}, err
+	}
+
+	if raw := r.URL.Query().Get("is_active"); raw != "" {
+		isActive, err := strconv.ParseBool(raw)
+		if err != nil {
+			return ListEmployeesFilter{}, fmt.Errorf("invalid is_active: %q is not a valid boolean", raw)
+		}
+		filter.IsActive = &isActive
+	}
+
+	return filter, nil
+}
+
+// parseInt64ListQueryParam parses name's comma-separated query parameter
+// (e.g. "store_ids=1,2,3") into a []int64. Returns (nil, nil) when the
+// parameter is absent or empty, so the caller can tell "not filtering on
+// this facet" apart from "filter to nothing" further down.
+func parseInt64ListQueryParam(r *http.Request, name string) ([]int64, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil, nil
+	}
+
+	parts := strings.Split(raw, ",")
+	ids := make([]int64, len(parts))
+	for i, p := range parts {
+		id, err := strconv.ParseInt(strings.TrimSpace(p), 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid %s: %q is not a valid integer", name, p)
+		}
+		ids[i] = id
+	}
+	return ids, nil
 }
 
 type syncEmployeesResponse struct {

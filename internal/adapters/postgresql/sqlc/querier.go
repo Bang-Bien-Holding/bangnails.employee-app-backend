@@ -153,7 +153,19 @@ type Querier interface {
 	// Odoo-facing odoo_employee_id values runSync actually sends to Odoo. An id
 	// with no matching row is silently omitted from the result.
 	ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int64, error)
-	ListEmployees(ctx context.Context) ([]Employee, error)
+	// Optional-filter search for issue #28: every sqlc.narg(...) IS NULL check
+	// skips that facet entirely when the caller omitted the corresponding query
+	// parameter (employees.ListEmployeesFilter's zero value) — the standard
+	// "$n IS NULL means skip this filter" static-SQL pattern (sqlc requires
+	// compile-time SQL, so filters can't be built by string concatenation).
+	// position_ids and store_ids are independent, OR-within/AND-across facets —
+	// never paired (ADR-0008, ADR-0009; issue #28 user story 7) — and each is
+	// matched via a sub-SELECT against its join table rather than a JOIN, so an
+	// employee with zero positions/stores still matches when that facet's
+	// filter is omitted (user stories 8-9). Sorted case-insensitively by
+	// full_name (user story 10) since Postgres' default collation is
+	// case-sensitive.
+	ListEmployees(ctx context.Context, arg ListEmployeesParams) ([]Employee, error)
 	// Position-first counterpart of ListPositionIDsByEmployeeID, for
 	// GET/PUT /positions/{id}/employees — returns full employee rows (not just
 	// ids) so the position package can build the same employeeResponse shape

@@ -125,6 +125,17 @@ jobs:
       - name: Run login e2e tests
         env:
           DATABASE_DSN: "host=localhost user=postgres password=postgres dbname=employees sslmode=disable"
+          # buildApplication always constructs an odoo.Client, even though
+          # this suite (build tag "dbe2e") never calls it — odoo.Config.validate
+          # rejects an empty BaseURL/ClientID/ClientSecret/Username/Password/
+          # Database before the app is usable at all, so these must be
+          # present, but their values are otherwise unused here.
+          ODOO_BASE_URL: "http://localhost:1"
+          ODOO_CLIENT_ID: "dbe2e-unused"
+          ODOO_CLIENT_SECRET: "dbe2e-unused"
+          ODOO_USERNAME: "dbe2e-unused"
+          ODOO_PASSWORD: "dbe2e-unused"
+          ODOO_DATABASE: "dbe2e-unused"
         run: go test -tags dbe2e -race -count=1 ./cmd/...
 
   security:

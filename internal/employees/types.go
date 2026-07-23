@@ -90,6 +90,25 @@ type setEmployeeActiveParams struct {
 	IsActive *bool `json:"isActive" validate:"required"`
 }
 
+// ListEmployeesFilter holds GET /employees' optional search/filter query
+// parameters (issue #28). Every field's zero value (nil) means "don't
+// filter on this facet" — an omitted or empty query parameter, not an
+// explicit empty-match. PositionIDs and StoreIDs are independent,
+// OR-within/AND-across facets: "holds Position X anywhere AND is assigned
+// to Store Y anywhere", never "holds Position X specifically at Store Y"
+// (ADR-0008, ADR-0009; user story 7).
+type ListEmployeesFilter struct {
+	// Q is a case-insensitive substring match against full_name OR email.
+	Q *string
+	// PositionIDs, StoreIDs, and OdooEmployeeIDs are each OR'd within
+	// themselves — any employee matching at least one id in the list
+	// qualifies for that facet.
+	PositionIDs     []int64
+	StoreIDs        []int64
+	OdooEmployeeIDs []int64
+	IsActive        *bool
+}
+
 // bulkDeleteEmployeesParams is the body for DELETE /employees (bulk).
 type bulkDeleteEmployeesParams struct {
 	IDs []int64 `json:"ids" validate:"required,min=1"`
@@ -197,7 +216,7 @@ func newEmployeeResponses(details []EmployeeDetail) []employeeResponse {
 
 type Service interface {
 	CreateEmployee(ctx context.Context, params createEmployeeParams) (EmployeeDetail, error)
-	ListEmployees(ctx context.Context) ([]EmployeeDetail, error)
+	ListEmployees(ctx context.Context, filter ListEmployeesFilter) ([]EmployeeDetail, error)
 	GetEmployeeByID(ctx context.Context, id int64) (EmployeeDetail, error)
 	UpdateEmployee(ctx context.Context, id int64, params updateEmployeeParams) (EmployeeDetail, error)
 	SetEmployeePassword(ctx context.Context, id int64, password string) error

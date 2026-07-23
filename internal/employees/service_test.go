@@ -565,7 +565,7 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 			name: "TC-LIST-01: List employees successfully",
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
-					ListEmployees(gomock.Any()).
+					ListEmployees(gomock.Any(), gomock.Any()).
 					Return([]repo.Employee{
 						{ID: 1, OdooEmployeeID: 30, FullName: "Nguyen Van A"},
 						{ID: 2, OdooEmployeeID: 31, FullName: "Tran Thi B"},
@@ -588,7 +588,7 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 			name: "TC-LIST-02: List employees returns an empty slice when there are none",
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
-					ListEmployees(gomock.Any()).
+					ListEmployees(gomock.Any(), gomock.Any()).
 					Return([]repo.Employee{}, nil)
 				mockRepo.EXPECT().
 					ListPositionIDsByEmployeeIDs(gomock.Any(), []int64{}).
@@ -608,7 +608,7 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 			name: "TC-LIST-03: List employees fails on database error",
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
-					ListEmployees(gomock.Any()).
+					ListEmployees(gomock.Any(), gomock.Any()).
 					Return(nil, dbErr)
 			},
 			expectedErr: dbErr,
@@ -622,7 +622,7 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 			name: "TC-LIST-04: Includes each employee's own position ids, non-nil when empty",
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().
-					ListEmployees(gomock.Any()).
+					ListEmployees(gomock.Any(), gomock.Any()).
 					Return([]repo.Employee{
 						{ID: 1, OdooEmployeeID: 30, FullName: "Nguyen Van A"},
 						{ID: 2, OdooEmployeeID: 31, FullName: "Tran Thi B"},
@@ -665,7 +665,7 @@ func TestEmployeeService_ListEmployees(t *testing.T) {
 
 			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
-			details, err := svc.ListEmployees(ctx)
+			details, err := svc.ListEmployees(ctx, ListEmployeesFilter{})
 
 			if tc.expectedErr != nil {
 				if err == nil {
