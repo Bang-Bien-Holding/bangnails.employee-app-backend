@@ -3,6 +3,7 @@ package employees
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -1813,6 +1814,80 @@ func TestEmployeeService_IssuePasswordResetToken_InvalidationFails(t *testing.T)
 
 	if _, err := svc.issuePasswordResetToken(ctx, employee, "/activate"); !errors.Is(err, dbErr) {
 		t.Errorf("expected error %v, got %v", dbErr, err)
+	}
+}
+
+// concurrentTokenStoreQuerier is a minimal, stateful stand-in for
+// repo.Querier that mimics Postgres' read-committed semantics for
+// InvalidatePasswordResetTokensByEmployeeID/CreatePasswordResetToken: each
+// call takes its own lock rather than the pair being atomic, so it
+// reproduces the invalidate-then-insert race an unlocked
+// issuePasswordResetToken is exposed to. Every other repo.Querier method is
+// left nil and would panic if called — none are expected here.
+type concurrentTokenStoreQuerier struct {
+	repo.Querier
+	mu     sync.Mutex
+	unused map[int64]int // employee id -> count of still-redeemable tokens
+}
+
+func (f *concurrentTokenStoreQuerier) InvalidatePasswordResetTokensByEmployeeID(ctx context.Context, employeeID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unused[employeeID] = 0
+	return nil
+}
+
+func (f *concurrentTokenStoreQuerier) CreatePasswordResetToken(ctx context.Context, arg repo.CreatePasswordResetTokenParams) (repo.PasswordResetToken, error) {
+	// Widen the race window between the two statements (unguarded, like the
+	// real invalidate-then-insert gap) so an unlocked caller reliably
+	// interleaves instead of only occasionally.
+	time.Sleep(time.Millisecond)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unused[arg.EmployeeID]++
+	return repo.PasswordResetToken{EmployeeID: arg.EmployeeID}, nil
+}
+
+// TestEmployeeService_IssuePasswordResetToken_SerializesConcurrentRequests
+// covers issue #37 follow-up: two simultaneous issuance requests for the
+// same Employee (e.g. two admins clicking "resend" at once) must serialize
+// around invalidate-then-insert, or both can invalidate the prior token
+// before either inserts its new one, leaving more than one redeemable
+// token. Different Employees must not be serialized against each other.
+func TestEmployeeService_IssuePasswordResetToken_SerializesConcurrentRequests(t *testing.T) {
+	ctx := context.Background()
+	employeeA := repo.Employee{ID: 7, FullName: "Nguyen Van A", Email: "van-a@example.com"}
+	employeeB := repo.Employee{ID: 8, FullName: "Tran Thi B", Email: "tran-b@example.com"}
+
+	store := &concurrentTokenStoreQuerier{unused: map[int64]int{}}
+	svc := newTestService(store, nil, nil)
+
+	const attemptsPerEmployee = 10
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(2 * attemptsPerEmployee)
+	for _, employee := range []repo.Employee{employeeA, employeeB} {
+		for range attemptsPerEmployee {
+			go func(employee repo.Employee) {
+				defer wg.Done()
+				<-start
+				if _, err := svc.issuePasswordResetToken(ctx, employee, "/activate"); err != nil {
+					t.Errorf("employee %d: unexpected error: %v", employee.ID, err)
+				}
+			}(employee)
+		}
+	}
+	close(start)
+	wg.Wait()
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if got := store.unused[employeeA.ID]; got != 1 {
+		t.Errorf("employee A: expected exactly 1 redeemable token after concurrent issuance, got %d", got)
+	}
+	if got := store.unused[employeeB.ID]; got != 1 {
+		t.Errorf("employee B: expected exactly 1 redeemable token after concurrent issuance, got %d", got)
 	}
 }
 

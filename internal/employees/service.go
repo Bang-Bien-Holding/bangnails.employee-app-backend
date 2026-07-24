@@ -70,6 +70,10 @@ type service struct {
 	odoo   odoo.Client
 
 	syncGuard syncx.Guard
+
+	// passwordResetLocks serializes issuePasswordResetToken per Employee —
+	// see the lock/defer unlock there for why.
+	passwordResetLocks syncx.KeyedMutex[int64]
 }
 
 func NewService(pool *pgxpool.Pool, m mailer.Client, o odoo.Client) Service {
@@ -745,6 +749,14 @@ func (s *service) issuePasswordResetToken(ctx context.Context, employee repo.Emp
 	if err != nil {
 		return "", err
 	}
+
+	// Concurrent issuance for the same Employee (e.g. two admins clicking
+	// "resend" at once) must serialize around invalidate-then-insert:
+	// without this lock, both requests could invalidate the prior token
+	// before either inserts its new one, leaving two redeemable tokens.
+	// Different Employees never contend for the same lock.
+	unlock := s.passwordResetLocks.Lock(employee.ID)
+	defer unlock()
 
 	// Invalidating prior tokens and inserting the new one run in the same
 	// transaction so a failure between the two never leaves the Employee
