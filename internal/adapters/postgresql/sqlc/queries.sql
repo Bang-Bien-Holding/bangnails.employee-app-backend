@@ -645,3 +645,24 @@ WHERE employee_id = sqlc.arg(employee_id)
 INSERT INTO employee_stores (employee_id, store_id)
 SELECT sqlc.arg(employee_id), unnest(sqlc.arg(store_ids)::bigint[])
 ON CONFLICT (employee_id, store_id) DO NOTHING;
+
+-- name: DeletePasswordResetRequestsOlderThan :execrows
+-- Opportunistic cleanup (issue #39): run before the count checks on every
+-- password-reset request so the table never accumulates rows outside the
+-- rate-limit window, with no separate cleanup job needed.
+DELETE FROM password_reset_requests
+WHERE created_at < sqlc.arg(cutoff);
+
+-- name: CountPasswordResetRequestsByEmail :one
+SELECT count(*) FROM password_reset_requests
+WHERE email = sqlc.arg(email)
+  AND created_at >= sqlc.arg(since);
+
+-- name: CountPasswordResetRequestsByIPAddress :one
+SELECT count(*) FROM password_reset_requests
+WHERE ip_address = sqlc.arg(ip_address)
+  AND created_at >= sqlc.arg(since);
+
+-- name: CreatePasswordResetRequest :exec
+INSERT INTO password_reset_requests (ip_address, email)
+VALUES (sqlc.arg(ip_address), sqlc.arg(email));

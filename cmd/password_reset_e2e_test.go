@@ -42,6 +42,14 @@ import (
 
 func TestPasswordResetE2E(t *testing.T) {
 	client, fixtures := loginE2ESetup(t)
+	// Every request this suite makes shares loginE2ELoopbackIP (see the file
+	// doc comment), and password_reset_requests rows outlive a single test
+	// run for up to passwordResetRequestWindow (15m) — without this, a
+	// second run within that window (routine when iterating locally) starts
+	// with a partially-consumed IP budget left over from the previous run's
+	// throttling subtests below, silently throttling earlier subtests that
+	// assert an email actually arrives.
+	fixtures.ClearPasswordResetRequestLog(t)
 
 	t.Run("active employee: request, activate, login with new password", func(t *testing.T) {
 		employee := fixtures.Employee(t, employeeSeed{Activated: true})
@@ -185,6 +193,134 @@ func TestPasswordResetE2E(t *testing.T) {
 			t.Errorf("expected locked_until to be cleared after completing the reset, got %v", lock.LockedUntil)
 		}
 	})
+
+	t.Run("repeated requests for the same email are throttled after the per-email limit", func(t *testing.T) {
+		fixtures.ClearPasswordResetRequestLog(t)
+		employee := fixtures.Employee(t, employeeSeed{Activated: true})
+
+		// passwordResetRequestEmailLimit (internal/employees/ratelimit.go) is
+		// 3: the 4th request for the same email must be throttled — still 200
+		// (no observable difference, issue #39), but no new email sent.
+		const emailLimit = 3
+		for i := 0; i < emailLimit; i++ {
+			resp := client.RequestPasswordReset(t, employee.Email)
+			if resp.status != http.StatusOK {
+				t.Fatalf("POST /password-reset-requests (call %d): expected 200, got %d: %s", i+1, resp.status, resp.raw)
+			}
+		}
+
+		assertPasswordResetThrottled(t, client, employee.Email)
+	})
+
+	t.Run("repeated requests across distinct emails from the same IP are throttled after the per-IP limit", func(t *testing.T) {
+		fixtures.ClearPasswordResetRequestLog(t)
+
+		// passwordResetRequestIPLimit (internal/employees/ratelimit.go) is
+		// 10: the 11th request from this suite's shared loopback source IP
+		// must be throttled, even though every request below uses a distinct,
+		// otherwise-under-the-email-limit address.
+		const ipLimit = 10
+		for i := 0; i < ipLimit; i++ {
+			employee := fixtures.Employee(t, employeeSeed{Activated: true})
+			resp := client.RequestPasswordReset(t, employee.Email)
+			if resp.status != http.StatusOK {
+				t.Fatalf("POST /password-reset-requests (call %d): expected 200, got %d: %s", i+1, resp.status, resp.raw)
+			}
+		}
+
+		throttled := fixtures.Employee(t, employeeSeed{Activated: true})
+		assertPasswordResetThrottled(t, client, throttled.Email)
+	})
+
+	t.Run("requests outside the rate-limit window are excluded from the count and cleaned up", func(t *testing.T) {
+		fixtures.ClearPasswordResetRequestLog(t)
+		employee := fixtures.Employee(t, employeeSeed{Activated: true})
+
+		// Seed passwordResetRequestEmailLimit (3) rows already outside the
+		// 15-minute window (internal/employees/ratelimit.go). If the count
+		// query's "created_at >= since" boundary were wrong (e.g. missing
+		// the window filter entirely, or an off-by-one letting stale rows
+		// in), these would wrongly count toward the limit and the request
+		// below would be throttled instead of succeeding.
+		const emailLimit = 3
+		outsideWindow := time.Now().Add(-16 * time.Minute)
+		for i := 0; i < emailLimit; i++ {
+			fixtures.SeedPasswordResetRequestAt(t, employee.Email, outsideWindow)
+		}
+
+		resp := client.RequestPasswordReset(t, employee.Email)
+		if resp.status != http.StatusOK {
+			t.Fatalf("POST /password-reset-requests: expected 200, got %d: %s", resp.status, resp.raw)
+		}
+		if n := fixtures.UnusedPasswordResetTokenCount(t, employee.ID); n != 1 {
+			t.Errorf("expected the out-of-window rows to not count toward the limit, so this request should have gone through and issued a token; got %d unused tokens", n)
+		}
+
+		// DeletePasswordResetRequestsOlderThan runs before the count checks
+		// on every request, so the 3 seeded rows should be gone, leaving
+		// only the row this request itself just wrote.
+		if n := fixtures.PasswordResetRequestCount(t, employee.Email); n != 1 {
+			t.Errorf("expected the out-of-window rows to have been cleaned up, leaving only this request's own row; got %d rows", n)
+		}
+	})
+
+	t.Run("requests just inside the rate-limit window still count toward the limit", func(t *testing.T) {
+		fixtures.ClearPasswordResetRequestLog(t)
+		employee := fixtures.Employee(t, employeeSeed{Activated: true})
+
+		// Seed passwordResetRequestEmailLimit (3) rows comfortably inside
+		// the window: old enough to be clearly distinct from "just sent",
+		// but well short of the 15-minute cutoff, so they must still count.
+		const emailLimit = 3
+		insideWindow := time.Now().Add(-14 * time.Minute)
+		for i := 0; i < emailLimit; i++ {
+			fixtures.SeedPasswordResetRequestAt(t, employee.Email, insideWindow)
+		}
+
+		assertPasswordResetThrottled(t, client, employee.Email)
+
+		// The 3 seeded rows must have survived cleanup (they're inside the
+		// window) plus the throttled request's own unconditional write.
+		if n := fixtures.PasswordResetRequestCount(t, employee.Email); n != emailLimit+1 {
+			t.Errorf("expected the in-window rows to survive cleanup, got %d rows", n)
+		}
+	})
+}
+
+// assertPasswordResetThrottled sends one more RequestPasswordReset for to,
+// asserts it still returns the generic 200 (issue #39's no-observable-
+// difference requirement), and then asserts no new mail arrives for it — the
+// mailbox may already hold messages from earlier, non-throttled requests to
+// the same address, so this compares the message count immediately before
+// the call against the count after a short poll window, rather than merely
+// checking whether any message exists.
+func assertPasswordResetThrottled(t *testing.T, client *loginE2EClient, to string) {
+	t.Helper()
+
+	before := mailpitMessageCount(t, to)
+
+	resp := client.RequestPasswordReset(t, to)
+	if resp.status != http.StatusOK {
+		t.Fatalf("throttled request: expected 200, got %d: %s", resp.status, resp.raw)
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if n := mailpitMessageCount(t, to); n != before {
+			t.Fatalf("expected no new mailpit message for %s once throttled, mailbox went from %d to %d", to, before, n)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// mailpitMessageCount returns how many messages Mailpit currently has for
+// to.
+func mailpitMessageCount(t *testing.T, to string) int {
+	t.Helper()
+
+	var search mailpitSearchResponse
+	mailpitGET(t, "/api/v1/search?query="+url.QueryEscape("to:"+to), &search)
+	return len(search.Messages)
 }
 
 // mailpitAPIBase is Mailpit's HTTP API — docker-compose's "mailpit" service

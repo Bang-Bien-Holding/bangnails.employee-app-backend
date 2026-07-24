@@ -324,6 +324,49 @@ func (f *loginE2EFixtures) SetSessionLastHeartbeatAt(t *testing.T, token string,
 	}
 }
 
+// ClearPasswordResetRequestLog deletes every password_reset_requests row
+// recorded for loginE2ELoopbackIP — the shared source IP every request in
+// this test binary is seen from (httptest.NewServer listens on 127.0.0.1),
+// so the throttling subtests in cmd/password_reset_e2e_test.go must reset
+// this log before they run, or an earlier subtest's requests (or a prior
+// run's leftovers) would already have consumed some of the IP-dimension
+// budget (issue #39).
+func (f *loginE2EFixtures) ClearPasswordResetRequestLog(t *testing.T) {
+	t.Helper()
+	if _, err := f.pool.Exec(t.Context(), `DELETE FROM password_reset_requests WHERE ip_address = $1`, netip.MustParseAddr(loginE2ELoopbackIP)); err != nil {
+		t.Fatalf("clear password_reset_requests log: %v", err)
+	}
+}
+
+// SeedPasswordResetRequestAt inserts a password_reset_requests row for email
+// at loginE2ELoopbackIP with an explicit created_at — the time-travel
+// primitive (same idea as SetLockedUntil/SetSessionExpiresAt) the
+// window-boundary throttling subtest uses to place a row just inside or just
+// outside the 15-minute rate-limit window (internal/employees/ratelimit.go)
+// without an actual wait.
+func (f *loginE2EFixtures) SeedPasswordResetRequestAt(t *testing.T, email string, createdAt time.Time) {
+	t.Helper()
+	if _, err := f.pool.Exec(t.Context(),
+		`INSERT INTO password_reset_requests (ip_address, email, created_at) VALUES ($1, $2, $3)`,
+		netip.MustParseAddr(loginE2ELoopbackIP), email, createdAt,
+	); err != nil {
+		t.Fatalf("seed password_reset_requests row: %v", err)
+	}
+}
+
+// PasswordResetRequestCount returns how many password_reset_requests rows
+// currently exist for email — used to confirm DeletePasswordResetRequestsOlderThan
+// actually cleaned up rows seeded outside the rate-limit window, rather than
+// only inferring it indirectly from whether the next request was throttled.
+func (f *loginE2EFixtures) PasswordResetRequestCount(t *testing.T, email string) int {
+	t.Helper()
+	var n int
+	if err := f.pool.QueryRow(t.Context(), `SELECT COUNT(*) FROM password_reset_requests WHERE email = $1`, email).Scan(&n); err != nil {
+		t.Fatalf("count password_reset_requests for %s: %v", email, err)
+	}
+	return n
+}
+
 // loginE2ELockState is EmployeeLockState's result.
 type loginE2ELockState struct {
 	FailedAttempts int32

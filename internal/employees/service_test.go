@@ -3,6 +3,7 @@ package employees
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -2001,6 +2002,7 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 func TestEmployeeService_RequestPasswordReset(t *testing.T) {
 	ctx := context.Background()
 	dbErr := errors.New("connection refused")
+	clientIP := netip.MustParseAddr("203.0.113.7")
 
 	activeWithPassword := repo.Employee{ID: 1, FullName: "Nguyen Van A", Email: "van-a@example.com", IsActive: true, Password: []byte("hashed")}
 	activeNoPassword := repo.Employee{ID: 2, FullName: "Tran Thi B", Email: "tran-b@example.com", IsActive: true, Password: nil}
@@ -2079,13 +2081,21 @@ func TestEmployeeService_RequestPasswordReset(t *testing.T) {
 			mockMailer := mailermocks.NewMockClient(ctrl)
 			mockOdoo := odoomocks.NewMockClient(ctrl)
 
+			// allowPasswordResetRequest (issue #39) always runs first and is
+			// covered on its own in ratelimit_test.go — here it's always
+			// under both limits so every branch below still gets exercised.
+			mockRepo.EXPECT().DeletePasswordResetRequestsOlderThan(gomock.Any(), gomock.Any()).Return(int64(0), nil)
+			mockRepo.EXPECT().CountPasswordResetRequestsByEmail(gomock.Any(), gomock.Any()).Return(int64(0), nil)
+			mockRepo.EXPECT().CountPasswordResetRequestsByIPAddress(gomock.Any(), gomock.Any()).Return(int64(0), nil)
+			mockRepo.EXPECT().CreatePasswordResetRequest(gomock.Any(), gomock.Any()).Return(nil)
+
 			tc.setupMock(mockRepo, mockMailer)
 
 			svc := newTestService(mockRepo, mockMailer, mockOdoo)
 
 			// No error return to assert on (see service.go) — ctrl itself
 			// fails the test if an unexpected/missing mock call happened.
-			svc.RequestPasswordReset(ctx, tc.email)
+			svc.RequestPasswordReset(ctx, tc.email, clientIP)
 		})
 	}
 }

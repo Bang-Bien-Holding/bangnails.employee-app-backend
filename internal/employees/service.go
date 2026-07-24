@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"sort"
 	"strconv"
 	"time"
@@ -459,7 +460,9 @@ func (s *service) CompleteActivation(ctx context.Context, params completeActivat
 // caller distinguish "unknown email" (fails fast, no DB error) from "known
 // email, transient failure" (same generic response either way) by
 // timing/behavior, which is exactly the enumeration signal this endpoint
-// must not leak.
+// must not leak. The same applies to rate limiting (issue #39):
+// allowPasswordResetRequest's decision, and any error it returns, are both
+// treated as "don't send" with no observable difference to the caller.
 //
 // Branches by Employee state at request time (see issue #36's spec):
 //   - unknown email, or found but is_active = false: no email sent.
@@ -467,7 +470,16 @@ func (s *service) CompleteActivation(ctx context.Context, params completeActivat
 //     activation email instead of a reset email — mirrors
 //     auth.Service.Login's notActivated check (len(Password) == 0).
 //   - found, active, password already set: send the password-reset email.
-func (s *service) RequestPasswordReset(ctx context.Context, email string) {
+func (s *service) RequestPasswordReset(ctx context.Context, email string, clientIP netip.Addr) {
+	allow, err := s.allowPasswordResetRequest(ctx, email, clientIP)
+	if err != nil {
+		slog.Error("employees: request password reset rate limit", "error", err)
+		return
+	}
+	if !allow {
+		return
+	}
+
 	employee, err := s.repo.GetEmployeeByEmail(ctx, email)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {

@@ -72,6 +72,42 @@ func (q *Queries) CountEmployeesByIDs(ctx context.Context, ids []int64) (int64, 
 	return count, err
 }
 
+const countPasswordResetRequestsByEmail = `-- name: CountPasswordResetRequestsByEmail :one
+SELECT count(*) FROM password_reset_requests
+WHERE email = $1
+  AND created_at >= $2
+`
+
+type CountPasswordResetRequestsByEmailParams struct {
+	Email string             `json:"email"`
+	Since pgtype.Timestamptz `json:"since"`
+}
+
+func (q *Queries) CountPasswordResetRequestsByEmail(ctx context.Context, arg CountPasswordResetRequestsByEmailParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPasswordResetRequestsByEmail, arg.Email, arg.Since)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPasswordResetRequestsByIPAddress = `-- name: CountPasswordResetRequestsByIPAddress :one
+SELECT count(*) FROM password_reset_requests
+WHERE ip_address = $1
+  AND created_at >= $2
+`
+
+type CountPasswordResetRequestsByIPAddressParams struct {
+	IpAddress netip.Addr         `json:"ip_address"`
+	Since     pgtype.Timestamptz `json:"since"`
+}
+
+func (q *Queries) CountPasswordResetRequestsByIPAddress(ctx context.Context, arg CountPasswordResetRequestsByIPAddressParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPasswordResetRequestsByIPAddress, arg.IpAddress, arg.Since)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPositionsByIDs = `-- name: CountPositionsByIDs :one
 SELECT count(*) FROM positions
 WHERE id = ANY($1::bigint[])
@@ -123,6 +159,21 @@ func (q *Queries) CreateEmployee(ctx context.Context, arg CreateEmployeeParams) 
 		&i.LockedUntil,
 	)
 	return i, err
+}
+
+const createPasswordResetRequest = `-- name: CreatePasswordResetRequest :exec
+INSERT INTO password_reset_requests (ip_address, email)
+VALUES ($1, $2)
+`
+
+type CreatePasswordResetRequestParams struct {
+	IpAddress netip.Addr `json:"ip_address"`
+	Email     string     `json:"email"`
+}
+
+func (q *Queries) CreatePasswordResetRequest(ctx context.Context, arg CreatePasswordResetRequestParams) error {
+	_, err := q.db.Exec(ctx, createPasswordResetRequest, arg.IpAddress, arg.Email)
+	return err
 }
 
 const createPasswordResetToken = `-- name: CreatePasswordResetToken :one
@@ -245,6 +296,22 @@ type DeleteEmployeeStoresNotInParams struct {
 func (q *Queries) DeleteEmployeeStoresNotIn(ctx context.Context, arg DeleteEmployeeStoresNotInParams) error {
 	_, err := q.db.Exec(ctx, deleteEmployeeStoresNotIn, arg.EmployeeID, arg.StoreIds)
 	return err
+}
+
+const deletePasswordResetRequestsOlderThan = `-- name: DeletePasswordResetRequestsOlderThan :execrows
+DELETE FROM password_reset_requests
+WHERE created_at < $1
+`
+
+// Opportunistic cleanup (issue #39): run before the count checks on every
+// password-reset request so the table never accumulates rows outside the
+// rate-limit window, with no separate cleanup job needed.
+func (q *Queries) DeletePasswordResetRequestsOlderThan(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePasswordResetRequestsOlderThan, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deletePosition = `-- name: DeletePosition :execrows

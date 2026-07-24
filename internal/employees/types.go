@@ -5,6 +5,7 @@ package employees
 import (
 	"context"
 	"errors"
+	"net/netip"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -149,8 +150,9 @@ type completeActivationParams struct {
 // requestPasswordResetParams is the body for the public
 // POST /password-reset-requests endpoint (issue #38) — an Employee submits
 // their own email, with no admin involvement. The handler's response is
-// always the same generic 200 regardless of what RequestPasswordReset finds
-// (see Handler.RequestPasswordReset) — malformed email syntax is the one
+// always the same generic 200 regardless of what RequestPasswordReset finds,
+// including whether issue #39's rate limit throttled it (see
+// Handler.RequestPasswordReset) — malformed email syntax is the one
 // exception, rejected by this validate:"email" tag before the service is
 // ever called, since it reveals nothing about account existence.
 type requestPasswordResetParams struct {
@@ -240,7 +242,7 @@ type Service interface {
 	BulkDeleteEmployees(ctx context.Context, ids []int64) []BulkActionResult
 	BulkSendPasswordResetLinks(ctx context.Context, ids []int64) []BulkActionResult
 	CompleteActivation(ctx context.Context, params completeActivationParams) error
-	RequestPasswordReset(ctx context.Context, email string)
+	RequestPasswordReset(ctx context.Context, email string, clientIP netip.Addr)
 	SyncEmployees(ctx context.Context, ids []int64) error
 	SyncStatus(ctx context.Context) SyncStatus
 }

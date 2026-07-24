@@ -11,6 +11,7 @@ package employees
 
 import (
 	context "context"
+	netip "net/netip"
 	reflect "reflect"
 
 	gomock "go.uber.org/mock/gomock"
@@ -142,15 +143,15 @@ func (mr *MockServiceMockRecorder) ListEmployees(ctx, filter any) *gomock.Call {
 }
 
 // RequestPasswordReset mocks base method.
-func (m *MockService) RequestPasswordReset(ctx context.Context, email string) {
+func (m *MockService) RequestPasswordReset(ctx context.Context, email string, clientIP netip.Addr) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "RequestPasswordReset", ctx, email)
+	m.ctrl.Call(m, "RequestPasswordReset", ctx, email, clientIP)
 }
 
 // RequestPasswordReset indicates an expected call of RequestPasswordReset.
-func (mr *MockServiceMockRecorder) RequestPasswordReset(ctx, email any) *gomock.Call {
+func (mr *MockServiceMockRecorder) RequestPasswordReset(ctx, email, clientIP any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestPasswordReset", reflect.TypeOf((*MockService)(nil).RequestPasswordReset), ctx, email)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestPasswordReset", reflect.TypeOf((*MockService)(nil).RequestPasswordReset), ctx, email, clientIP)
 }
 
 // SetEmployeeActive mocks base method.

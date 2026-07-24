@@ -16,6 +16,7 @@ import (
 	reflect "reflect"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
+	pgtype "github.com/jackc/pgx/v5/pgtype"
 	gomock "go.uber.org/mock/gomock"
 )
 
@@ -73,6 +74,36 @@ func (mr *MockQuerierMockRecorder) CountEmployeesByIDs(ctx, ids any) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountEmployeesByIDs", reflect.TypeOf((*MockQuerier)(nil).CountEmployeesByIDs), ctx, ids)
 }
 
+// CountPasswordResetRequestsByEmail mocks base method.
+func (m *MockQuerier) CountPasswordResetRequestsByEmail(ctx context.Context, arg repo.CountPasswordResetRequestsByEmailParams) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CountPasswordResetRequestsByEmail", ctx, arg)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CountPasswordResetRequestsByEmail indicates an expected call of CountPasswordResetRequestsByEmail.
+func (mr *MockQuerierMockRecorder) CountPasswordResetRequestsByEmail(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountPasswordResetRequestsByEmail", reflect.TypeOf((*MockQuerier)(nil).CountPasswordResetRequestsByEmail), ctx, arg)
+}
+
+// CountPasswordResetRequestsByIPAddress mocks base method.
+func (m *MockQuerier) CountPasswordResetRequestsByIPAddress(ctx context.Context, arg repo.CountPasswordResetRequestsByIPAddressParams) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CountPasswordResetRequestsByIPAddress", ctx, arg)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// CountPasswordResetRequestsByIPAddress indicates an expected call of CountPasswordResetRequestsByIPAddress.
+func (mr *MockQuerierMockRecorder) CountPasswordResetRequestsByIPAddress(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CountPasswordResetRequestsByIPAddress", reflect.TypeOf((*MockQuerier)(nil).CountPasswordResetRequestsByIPAddress), ctx, arg)
+}
+
 // CountPositionsByIDs mocks base method.
 func (m *MockQuerier) CountPositionsByIDs(ctx context.Context, ids []int64) (int64, error) {
 	m.ctrl.T.Helper()
@@ -101,6 +132,20 @@ func (m *MockQuerier) CreateEmployee(ctx context.Context, arg repo.CreateEmploye
 func (mr *MockQuerierMockRecorder) CreateEmployee(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreateEmployee", reflect.TypeOf((*MockQuerier)(nil).CreateEmployee), ctx, arg)
+}
+
+// CreatePasswordResetRequest mocks base method.
+func (m *MockQuerier) CreatePasswordResetRequest(ctx context.Context, arg repo.CreatePasswordResetRequestParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "CreatePasswordResetRequest", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// CreatePasswordResetRequest indicates an expected call of CreatePasswordResetRequest.
+func (mr *MockQuerierMockRecorder) CreatePasswordResetRequest(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "CreatePasswordResetRequest", reflect.TypeOf((*MockQuerier)(nil).CreatePasswordResetRequest), ctx, arg)
 }
 
 // CreatePasswordResetToken mocks base method.
@@ -188,6 +233,21 @@ func (m *MockQuerier) DeleteEmployeeStoresNotIn(ctx context.Context, arg repo.De
 func (mr *MockQuerierMockRecorder) DeleteEmployeeStoresNotIn(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteEmployeeStoresNotIn", reflect.TypeOf((*MockQuerier)(nil).DeleteEmployeeStoresNotIn), ctx, arg)
+}
+
+// DeletePasswordResetRequestsOlderThan mocks base method.
+func (m *MockQuerier) DeletePasswordResetRequestsOlderThan(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeletePasswordResetRequestsOlderThan", ctx, cutoff)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeletePasswordResetRequestsOlderThan indicates an expected call of DeletePasswordResetRequestsOlderThan.
+func (mr *MockQuerierMockRecorder) DeletePasswordResetRequestsOlderThan(ctx, cutoff any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePasswordResetRequestsOlderThan", reflect.TypeOf((*MockQuerier)(nil).DeletePasswordResetRequestsOlderThan), ctx, cutoff)
 }
 
 // DeletePosition mocks base method.

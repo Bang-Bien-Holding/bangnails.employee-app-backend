@@ -7,10 +7,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"go.uber.org/mock/gomock"
 )
 
@@ -22,6 +24,18 @@ func withURLParam(r *http.Request, key, value string) *http.Request {
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(key, value)
 	return r.WithContext(context.WithValue(r.Context(), chi.RouteCtxKey, rctx))
+}
+
+// serveWithClientIP runs req through middleware.ClientIPFromRemoteAddr
+// before handler — the same middleware cmd/api.go installs globally — so
+// Handler.RequestPasswordReset's middleware.GetClientIPAddr call sees a
+// value the same way it would through the real router (mirrors
+// auth.serveWithClientIP). req.RemoteAddr must already be set by the
+// caller.
+func serveWithClientIP(handler http.HandlerFunc, req *http.Request) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	middleware.ClientIPFromRemoteAddr(handler).ServeHTTP(rec, req)
+	return rec
 }
 
 func boolPtr(b bool) *bool {
@@ -954,6 +968,7 @@ func TestEmployeeHandler_RequestPasswordReset(t *testing.T) {
 	tests := []struct {
 		name          string
 		bodyPayload   any
+		remoteAddr    string
 		setupMock     func(mockSvc *MockService)
 		expectedCode  int
 		checkResponse func(t *testing.T, rec *httptest.ResponseRecorder)
@@ -961,8 +976,9 @@ func TestEmployeeHandler_RequestPasswordReset(t *testing.T) {
 		{
 			name:        "TS-HDL-44: Valid email always returns the generic 200 message",
 			bodyPayload: requestPasswordResetParams{Email: "van-a@example.com"},
+			remoteAddr:  "203.0.113.5:54321",
 			setupMock: func(mockSvc *MockService) {
-				mockSvc.EXPECT().RequestPasswordReset(gomock.Any(), "van-a@example.com")
+				mockSvc.EXPECT().RequestPasswordReset(gomock.Any(), "van-a@example.com", netip.MustParseAddr("203.0.113.5"))
 			},
 			expectedCode: http.StatusOK,
 			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
@@ -978,6 +994,7 @@ func TestEmployeeHandler_RequestPasswordReset(t *testing.T) {
 		{
 			name:        "TS-HDL-45: Malformed email returns 400 without calling the service",
 			bodyPayload: requestPasswordResetParams{Email: "not-an-email"},
+			remoteAddr:  "203.0.113.5:54321",
 			setupMock: func(mockSvc *MockService) {
 				// Service should NOT be called — validation happens at the Handler layer.
 			},
@@ -991,6 +1008,7 @@ func TestEmployeeHandler_RequestPasswordReset(t *testing.T) {
 		{
 			name:        "TS-HDL-46: Missing email returns 400 without calling the service",
 			bodyPayload: requestPasswordResetParams{},
+			remoteAddr:  "203.0.113.5:54321",
 			setupMock: func(mockSvc *MockService) {
 				// Service should NOT be called — validation happens at the Handler layer.
 			},
@@ -999,8 +1017,9 @@ func TestEmployeeHandler_RequestPasswordReset(t *testing.T) {
 		{
 			name:        "TS-HDL-47: Unknown/inactive/pending-activation employees still get the generic 200 (anti-enumeration)",
 			bodyPayload: requestPasswordResetParams{Email: "unknown@example.com"},
+			remoteAddr:  "203.0.113.5:54321",
 			setupMock: func(mockSvc *MockService) {
-				mockSvc.EXPECT().RequestPasswordReset(gomock.Any(), "unknown@example.com")
+				mockSvc.EXPECT().RequestPasswordReset(gomock.Any(), "unknown@example.com", netip.MustParseAddr("203.0.113.5"))
 			},
 			expectedCode: http.StatusOK,
 			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
@@ -1012,6 +1031,15 @@ func TestEmployeeHandler_RequestPasswordReset(t *testing.T) {
 					t.Errorf("expected generic message %q, got %q", requestPasswordResetGenericMessage, resp.Message)
 				}
 			},
+		},
+		{
+			name:        "TS-HDL-48: An unparseable RemoteAddr with no client IP available returns 500 without calling the service",
+			bodyPayload: requestPasswordResetParams{Email: "van-a@example.com"},
+			remoteAddr:  "not-an-ip-or-host-port",
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called — clientIP resolution fails before it.
+			},
+			expectedCode: http.StatusInternalServerError,
 		},
 	}
 
@@ -1029,9 +1057,9 @@ func TestEmployeeHandler_RequestPasswordReset(t *testing.T) {
 				t.Fatalf("failed to marshal request body: %v", err)
 			}
 			req := httptest.NewRequest(http.MethodPost, "/password-reset-requests", bytes.NewReader(jsonBody))
-			rec := httptest.NewRecorder()
+			req.RemoteAddr = tc.remoteAddr
 
-			h.RequestPasswordReset(rec, req)
+			rec := serveWithClientIP(h.RequestPasswordReset, req)
 
 			if rec.Code != tc.expectedCode {
 				t.Errorf("expected status %d, got %d", tc.expectedCode, rec.Code)
