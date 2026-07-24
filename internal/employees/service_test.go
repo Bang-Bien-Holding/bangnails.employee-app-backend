@@ -2149,18 +2149,17 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 			expectedErr: dbErr,
 		},
 		{
-			name:        "TC-ACTIVATE-05: Session deletion failure is logged but does not fail activation",
+			name:        "TC-ACTIVATE-05: Session deletion failure fails activation and rolls back the password change",
 			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(validToken, nil)
 				mockRepo.EXPECT().SetEmployeePassword(gomock.Any(), gomock.Any()).Return(int64(1), nil)
 				mockRepo.EXPECT().DeleteSessionByEmployeeID(gomock.Any(), validToken.EmployeeID).Return(int64(0), dbErr)
-				mockRepo.EXPECT().ResetFailedLoginAttempts(gomock.Any(), validToken.EmployeeID).Return(nil)
 			},
-			expectedErr: nil,
+			expectedErr: dbErr,
 		},
 		{
-			name:        "TC-ACTIVATE-06: Failed-login-attempts reset failure is logged but does not fail activation",
+			name:        "TC-ACTIVATE-06: Failed-login-attempts reset failure fails activation and rolls back the password change",
 			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(validToken, nil)
@@ -2168,7 +2167,7 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 				mockRepo.EXPECT().DeleteSessionByEmployeeID(gomock.Any(), validToken.EmployeeID).Return(int64(1), nil)
 				mockRepo.EXPECT().ResetFailedLoginAttempts(gomock.Any(), validToken.EmployeeID).Return(dbErr)
 			},
-			expectedErr: nil,
+			expectedErr: dbErr,
 		},
 	}
 

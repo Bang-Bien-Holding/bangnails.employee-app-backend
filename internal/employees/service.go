@@ -396,49 +396,55 @@ func (s *service) BulkDeleteEmployees(ctx context.Context, ids []int64) []BulkAc
 	return results
 }
 
-// CompleteActivation redeems the token (unexpired, unused) and sets the
-// employee's password (bcrypt-hashed). Serves first-time activation, an
-// admin-triggered reset, and a self-service reset (issue #38) alike — all
-// three send the employee the same kind of token, and completing any of them
-// is the same operation from the DB's point of view. RedeemPasswordResetToken's
-// UPDATE...RETURNING is atomic: its row lock means only one concurrent caller
-// can redeem a given token, so the password update below only ever runs
-// after that caller has exclusively claimed it.
+// CompleteActivation redeems the token (unexpired, unused), sets the
+// employee's password (bcrypt-hashed), deletes their existing Session (if
+// any), and clears their failed-login-attempt count/lockout, all within one
+// transaction. Serves first-time activation, an admin-triggered reset, and a
+// self-service reset (issue #38) alike — all three send the employee the
+// same kind of token, and completing any of them is the same operation from
+// the DB's point of view. RedeemPasswordResetToken's UPDATE...RETURNING is
+// atomic: its row lock means only one concurrent caller can redeem a given
+// token, so the rest of the transaction only ever runs after that caller has
+// exclusively claimed it.
 //
-// On success (issue #38), the employee's existing Session (if any) is
-// deleted and their failed-login-attempt count/lockout is cleared, so they
-// can log in immediately with the new password on any device, and a stale
-// lockout from before the reset doesn't block that first login. Both are
-// best-effort cleanup of state that's meaningless once the password has
-// already changed, so a failure here is logged rather than failing the
-// activation/reset itself — the employee's password is already set at this
-// point.
+// The session deletion and lockout reset (issue #38) exist so the employee
+// can log in immediately with the new password on any device, without a
+// stale session or lockout from before the reset getting in the way; a
+// session left behind by a failed delete would also mean the reset didn't
+// actually revoke whatever access that session held, defeating the point of
+// resetting the password. So unlike the mailer-facing branches elsewhere in
+// this file, a failure in either is propagated and rolls back the whole
+// transaction (including the password change) rather than being swallowed.
 func (s *service) CompleteActivation(ctx context.Context, params completeActivationParams) error {
-	resetToken, err := s.repo.RedeemPasswordResetToken(ctx, tokenx.Hash(params.Token))
+	err := s.withTx(ctx, func(q repo.Querier) error {
+		resetToken, err := q.RedeemPasswordResetToken(ctx, tokenx.Hash(params.Token))
+		if err != nil {
+			return err
+		}
+
+		hashed, err := bcrypt.GenerateFromPassword([]byte(params.Password), bcrypt.DefaultCost)
+		if err != nil {
+			return err
+		}
+
+		if _, err := q.SetEmployeePassword(ctx, repo.SetEmployeePasswordParams{
+			ID:       resetToken.EmployeeID,
+			Password: hashed,
+		}); err != nil {
+			return err
+		}
+
+		if _, err := q.DeleteSessionByEmployeeID(ctx, resetToken.EmployeeID); err != nil {
+			return err
+		}
+
+		return q.ResetFailedLoginAttempts(ctx, resetToken.EmployeeID)
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInvalidOrExpiredToken
 		}
 		return err
-	}
-
-	hashed, err := bcrypt.GenerateFromPassword([]byte(params.Password), bcrypt.DefaultCost)
-	if err != nil {
-		return err
-	}
-
-	if _, err := s.repo.SetEmployeePassword(ctx, repo.SetEmployeePasswordParams{
-		ID:       resetToken.EmployeeID,
-		Password: hashed,
-	}); err != nil {
-		return err
-	}
-
-	if _, err := s.repo.DeleteSessionByEmployeeID(ctx, resetToken.EmployeeID); err != nil {
-		slog.Error("employees: delete session on activation/reset", "employee_id", resetToken.EmployeeID, "error", err)
-	}
-	if err := s.repo.ResetFailedLoginAttempts(ctx, resetToken.EmployeeID); err != nil {
-		slog.Error("employees: reset failed login attempts on activation/reset", "employee_id", resetToken.EmployeeID, "error", err)
 	}
 
 	return nil
