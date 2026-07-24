@@ -19,6 +19,16 @@ const (
 	passwordResetRequestIPLimit    = 10
 )
 
+// Issue #42: LockPasswordResetRequestKey's classid namespaces the email and
+// IP advisory-lock spaces apart so a hashtext collision between an email
+// string and an IP string can never let the two dimensions lock each other
+// out. These values have no meaning beyond distinguishing the two spaces —
+// they aren't shared with any other lock user in this codebase yet.
+const (
+	passwordResetLockClassEmail int32 = 1
+	passwordResetLockClassIP    int32 = 2
+)
+
 // allowPasswordResetRequest records this attempt in password_reset_requests
 // and reports whether RequestPasswordReset should actually go on to send an
 // email. The row is written unconditionally — even once a caller is over
@@ -30,10 +40,16 @@ const (
 // false, which RequestPasswordReset must treat identically to "over limit"
 // (no email, no observable difference to the caller).
 //
-// Known limitation (issue #42): cleanup/count/insert are separate
-// round trips with no transaction or row lock, so a true concurrent burst
-// for the same email/IP can let more than the limit through before any
-// request's insert commits. Deferred — see the issue for why.
+// Issue #42: the whole cleanup/count/insert sequence runs inside one
+// transaction, guarded by two Postgres advisory locks (email, then IP, in
+// that fixed order — see LockPasswordResetRequestKey) taken before any of
+// it. Both locks are transaction-scoped (pg_advisory_xact_lock), so they
+// release automatically on commit or rollback; a concurrent request for the
+// same email or IP blocks at the lock rather than reading a pre-insert
+// count, closing the TOCTOU race a plain READ COMMITTED transaction alone
+// wouldn't (see the issue for why READ COMMITTED isn't sufficient on its
+// own). Concurrent requests for unrelated emails/IPs still proceed in
+// parallel, since each pair of locks is keyed independently.
 func (s *service) allowPasswordResetRequest(ctx context.Context, email string, clientIP netip.Addr) (bool, error) {
 	// employees.email is CITEXT (case-insensitive); password_reset_requests.email
 	// is plain TEXT, so this table must be lowercased on the way in — otherwise
@@ -43,32 +59,55 @@ func (s *service) allowPasswordResetRequest(ctx context.Context, email string, c
 
 	since := pgtype.Timestamptz{Time: time.Now().Add(-passwordResetRequestWindow), Valid: true}
 
-	if _, err := s.repo.DeletePasswordResetRequestsOlderThan(ctx, since); err != nil {
-		return false, err
-	}
+	var allow bool
+	err := s.withTx(ctx, func(q repo.Querier) error {
+		if err := q.LockPasswordResetRequestKey(ctx, repo.LockPasswordResetRequestKeyParams{
+			Classid: passwordResetLockClassEmail,
+			Key:     email,
+		}); err != nil {
+			return err
+		}
 
-	emailCount, err := s.repo.CountPasswordResetRequestsByEmail(ctx, repo.CountPasswordResetRequestsByEmailParams{
-		Email: email,
-		Since: since,
+		if err := q.LockPasswordResetRequestKey(ctx, repo.LockPasswordResetRequestKeyParams{
+			Classid: passwordResetLockClassIP,
+			Key:     clientIP.String(),
+		}); err != nil {
+			return err
+		}
+
+		if _, err := q.DeletePasswordResetRequestsOlderThan(ctx, since); err != nil {
+			return err
+		}
+
+		emailCount, err := q.CountPasswordResetRequestsByEmail(ctx, repo.CountPasswordResetRequestsByEmailParams{
+			Email: email,
+			Since: since,
+		})
+		if err != nil {
+			return err
+		}
+
+		ipCount, err := q.CountPasswordResetRequestsByIPAddress(ctx, repo.CountPasswordResetRequestsByIPAddressParams{
+			IpAddress: clientIP,
+			Since:     since,
+		})
+		if err != nil {
+			return err
+		}
+
+		if err := q.CreatePasswordResetRequest(ctx, repo.CreatePasswordResetRequestParams{
+			IpAddress: clientIP,
+			Email:     email,
+		}); err != nil {
+			return err
+		}
+
+		allow = emailCount < passwordResetRequestEmailLimit && ipCount < passwordResetRequestIPLimit
+		return nil
 	})
 	if err != nil {
 		return false, err
 	}
 
-	ipCount, err := s.repo.CountPasswordResetRequestsByIPAddress(ctx, repo.CountPasswordResetRequestsByIPAddressParams{
-		IpAddress: clientIP,
-		Since:     since,
-	})
-	if err != nil {
-		return false, err
-	}
-
-	if err := s.repo.CreatePasswordResetRequest(ctx, repo.CreatePasswordResetRequestParams{
-		IpAddress: clientIP,
-		Email:     email,
-	}); err != nil {
-		return false, err
-	}
-
-	return emailCount < passwordResetRequestEmailLimit && ipCount < passwordResetRequestIPLimit, nil
+	return allow, nil
 }

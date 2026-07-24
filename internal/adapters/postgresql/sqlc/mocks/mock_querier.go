@@ -797,6 +797,20 @@ func (mr *MockQuerierMockRecorder) ListStoresForLoginByEmployeeID(ctx, employeeI
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStoresForLoginByEmployeeID", reflect.TypeOf((*MockQuerier)(nil).ListStoresForLoginByEmployeeID), ctx, employeeID)
 }
 
+// LockPasswordResetRequestKey mocks base method.
+func (m *MockQuerier) LockPasswordResetRequestKey(ctx context.Context, arg repo.LockPasswordResetRequestKeyParams) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "LockPasswordResetRequestKey", ctx, arg)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// LockPasswordResetRequestKey indicates an expected call of LockPasswordResetRequestKey.
+func (mr *MockQuerierMockRecorder) LockPasswordResetRequestKey(ctx, arg any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "LockPasswordResetRequestKey", reflect.TypeOf((*MockQuerier)(nil).LockPasswordResetRequestKey), ctx, arg)
+}
+
 // RecordFailedLoginAttempt mocks base method.
 func (m *MockQuerier) RecordFailedLoginAttempt(ctx context.Context, arg repo.RecordFailedLoginAttemptParams) (repo.Employee, error) {
 	m.ctrl.T.Helper()

@@ -2081,9 +2081,11 @@ func TestEmployeeService_RequestPasswordReset(t *testing.T) {
 			mockMailer := mailermocks.NewMockClient(ctrl)
 			mockOdoo := odoomocks.NewMockClient(ctrl)
 
-			// allowPasswordResetRequest (issue #39) always runs first and is
-			// covered on its own in ratelimit_test.go — here it's always
-			// under both limits so every branch below still gets exercised.
+			// allowPasswordResetRequest (issue #39, locking added for #42) always
+			// runs first and is covered on its own in ratelimit_test.go — here
+			// it's always under both limits so every branch below still gets
+			// exercised.
+			mockRepo.EXPECT().LockPasswordResetRequestKey(gomock.Any(), gomock.Any()).Return(nil).Times(2)
 			mockRepo.EXPECT().DeletePasswordResetRequestsOlderThan(gomock.Any(), gomock.Any()).Return(int64(0), nil)
 			mockRepo.EXPECT().CountPasswordResetRequestsByEmail(gomock.Any(), gomock.Any()).Return(int64(0), nil)
 			mockRepo.EXPECT().CountPasswordResetRequestsByIPAddress(gomock.Any(), gomock.Any()).Return(int64(0), nil)

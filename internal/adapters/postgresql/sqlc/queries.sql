@@ -666,3 +666,15 @@ WHERE ip_address = sqlc.arg(ip_address)
 -- name: CreatePasswordResetRequest :exec
 INSERT INTO password_reset_requests (ip_address, email)
 VALUES (sqlc.arg(ip_address), sqlc.arg(email));
+
+-- name: LockPasswordResetRequestKey :exec
+-- Closes issue #42's TOCTOU race: a transaction-scoped Postgres advisory
+-- lock (pg_advisory_xact_lock), released automatically on commit/rollback,
+-- taken around the whole cleanup/count/insert sequence in
+-- allowPasswordResetRequest. classid namespaces the lock space so the
+-- email dimension and the IP dimension can never collide on the same key
+-- by coincidence (hashtext is 32-bit); callers must always acquire the
+-- email lock before the IP lock, in that fixed order, so two concurrent
+-- requests can never deadlock by acquiring the two dimensions in opposite
+-- order.
+SELECT pg_advisory_xact_lock(sqlc.arg(classid)::int, hashtext(sqlc.arg(key)::text));

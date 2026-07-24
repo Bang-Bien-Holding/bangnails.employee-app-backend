@@ -17,12 +17,26 @@ import (
 // TestEmployeeService_AllowPasswordResetRequest covers issue #39's rate
 // limiter: cleanup always runs first, the write is unconditional, and the
 // allow/deny decision is gated independently on both the email and IP
-// dimensions with a limit-minus-one/at-limit boundary on each.
+// dimensions with a limit-minus-one/at-limit boundary on each. It also
+// covers issue #42: the two advisory locks are acquired (email, then IP)
+// before cleanup/count/insert, and an error from either lock call aborts
+// the rest exactly like an error from any other step.
 func TestEmployeeService_AllowPasswordResetRequest(t *testing.T) {
 	ctx := context.Background()
 	clientIP := netip.MustParseAddr("203.0.113.7")
 	email := "van-a@example.com"
 	dbErr := errors.New("connection refused")
+
+	expectLocks := func(mockRepo *mocks.MockQuerier) {
+		mockRepo.EXPECT().LockPasswordResetRequestKey(gomock.Any(), repo.LockPasswordResetRequestKeyParams{
+			Classid: passwordResetLockClassEmail,
+			Key:     email,
+		}).Return(nil)
+		mockRepo.EXPECT().LockPasswordResetRequestKey(gomock.Any(), repo.LockPasswordResetRequestKeyParams{
+			Classid: passwordResetLockClassIP,
+			Key:     clientIP.String(),
+		}).Return(nil)
+	}
 
 	tests := []struct {
 		name        string
@@ -33,6 +47,7 @@ func TestEmployeeService_AllowPasswordResetRequest(t *testing.T) {
 		{
 			name: "TC-RATELIMIT-01: below both limits allows and still writes the row",
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				expectLocks(mockRepo)
 				mockRepo.EXPECT().DeletePasswordResetRequestsOlderThan(gomock.Any(), gomock.Any()).Return(int64(0), nil)
 				mockRepo.EXPECT().CountPasswordResetRequestsByEmail(gomock.Any(), gomock.Any()).Return(int64(passwordResetRequestEmailLimit-1), nil)
 				mockRepo.EXPECT().CountPasswordResetRequestsByIPAddress(gomock.Any(), gomock.Any()).Return(int64(passwordResetRequestIPLimit-1), nil)
@@ -43,6 +58,7 @@ func TestEmployeeService_AllowPasswordResetRequest(t *testing.T) {
 		{
 			name: "TC-RATELIMIT-02: email count at limit blocks but still writes the row",
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				expectLocks(mockRepo)
 				mockRepo.EXPECT().DeletePasswordResetRequestsOlderThan(gomock.Any(), gomock.Any()).Return(int64(0), nil)
 				mockRepo.EXPECT().CountPasswordResetRequestsByEmail(gomock.Any(), gomock.Any()).Return(int64(passwordResetRequestEmailLimit), nil)
 				mockRepo.EXPECT().CountPasswordResetRequestsByIPAddress(gomock.Any(), gomock.Any()).Return(int64(0), nil)
@@ -53,6 +69,7 @@ func TestEmployeeService_AllowPasswordResetRequest(t *testing.T) {
 		{
 			name: "TC-RATELIMIT-03: IP count at limit blocks but still writes the row",
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				expectLocks(mockRepo)
 				mockRepo.EXPECT().DeletePasswordResetRequestsOlderThan(gomock.Any(), gomock.Any()).Return(int64(0), nil)
 				mockRepo.EXPECT().CountPasswordResetRequestsByEmail(gomock.Any(), gomock.Any()).Return(int64(0), nil)
 				mockRepo.EXPECT().CountPasswordResetRequestsByIPAddress(gomock.Any(), gomock.Any()).Return(int64(passwordResetRequestIPLimit), nil)
@@ -61,16 +78,44 @@ func TestEmployeeService_AllowPasswordResetRequest(t *testing.T) {
 			expectAllow: false,
 		},
 		{
-			name: "TC-RATELIMIT-04: cleanup error propagates and skips everything else",
+			name: "TC-RATELIMIT-04: email lock error propagates and skips everything else",
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().LockPasswordResetRequestKey(gomock.Any(), repo.LockPasswordResetRequestKeyParams{
+					Classid: passwordResetLockClassEmail,
+					Key:     email,
+				}).Return(dbErr)
+			},
+			expectAllow: false,
+			expectErr:   dbErr,
+		},
+		{
+			name: "TC-RATELIMIT-05: IP lock error propagates and skips cleanup",
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().LockPasswordResetRequestKey(gomock.Any(), repo.LockPasswordResetRequestKeyParams{
+					Classid: passwordResetLockClassEmail,
+					Key:     email,
+				}).Return(nil)
+				mockRepo.EXPECT().LockPasswordResetRequestKey(gomock.Any(), repo.LockPasswordResetRequestKeyParams{
+					Classid: passwordResetLockClassIP,
+					Key:     clientIP.String(),
+				}).Return(dbErr)
+			},
+			expectAllow: false,
+			expectErr:   dbErr,
+		},
+		{
+			name: "TC-RATELIMIT-06: cleanup error propagates and skips everything else",
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				expectLocks(mockRepo)
 				mockRepo.EXPECT().DeletePasswordResetRequestsOlderThan(gomock.Any(), gomock.Any()).Return(int64(0), dbErr)
 			},
 			expectAllow: false,
 			expectErr:   dbErr,
 		},
 		{
-			name: "TC-RATELIMIT-05: email count error propagates and skips the rest",
+			name: "TC-RATELIMIT-07: email count error propagates and skips the rest",
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				expectLocks(mockRepo)
 				mockRepo.EXPECT().DeletePasswordResetRequestsOlderThan(gomock.Any(), gomock.Any()).Return(int64(0), nil)
 				mockRepo.EXPECT().CountPasswordResetRequestsByEmail(gomock.Any(), gomock.Any()).Return(int64(0), dbErr)
 			},
@@ -78,8 +123,9 @@ func TestEmployeeService_AllowPasswordResetRequest(t *testing.T) {
 			expectErr:   dbErr,
 		},
 		{
-			name: "TC-RATELIMIT-06: IP count error propagates and skips the insert",
+			name: "TC-RATELIMIT-08: IP count error propagates and skips the insert",
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				expectLocks(mockRepo)
 				mockRepo.EXPECT().DeletePasswordResetRequestsOlderThan(gomock.Any(), gomock.Any()).Return(int64(0), nil)
 				mockRepo.EXPECT().CountPasswordResetRequestsByEmail(gomock.Any(), gomock.Any()).Return(int64(0), nil)
 				mockRepo.EXPECT().CountPasswordResetRequestsByIPAddress(gomock.Any(), gomock.Any()).Return(int64(0), dbErr)
@@ -88,8 +134,9 @@ func TestEmployeeService_AllowPasswordResetRequest(t *testing.T) {
 			expectErr:   dbErr,
 		},
 		{
-			name: "TC-RATELIMIT-07: insert error propagates even though the caller was allowed",
+			name: "TC-RATELIMIT-09: insert error propagates even though the caller was allowed",
 			setupMock: func(mockRepo *mocks.MockQuerier) {
+				expectLocks(mockRepo)
 				mockRepo.EXPECT().DeletePasswordResetRequestsOlderThan(gomock.Any(), gomock.Any()).Return(int64(0), nil)
 				mockRepo.EXPECT().CountPasswordResetRequestsByEmail(gomock.Any(), gomock.Any()).Return(int64(0), nil)
 				mockRepo.EXPECT().CountPasswordResetRequestsByIPAddress(gomock.Any(), gomock.Any()).Return(int64(0), nil)
@@ -141,6 +188,17 @@ func TestEmployeeService_AllowPasswordResetRequest_CutoffArguments(t *testing.T)
 	mockOdoo := odoomocks.NewMockClient(ctrl)
 
 	var cleanupCutoff, emailSince, ipSince pgtype.Timestamptz
+
+	gomock.InOrder(
+		mockRepo.EXPECT().LockPasswordResetRequestKey(gomock.Any(), repo.LockPasswordResetRequestKeyParams{
+			Classid: passwordResetLockClassEmail,
+			Key:     email,
+		}).Return(nil),
+		mockRepo.EXPECT().LockPasswordResetRequestKey(gomock.Any(), repo.LockPasswordResetRequestKeyParams{
+			Classid: passwordResetLockClassIP,
+			Key:     clientIP.String(),
+		}).Return(nil),
+	)
 
 	mockRepo.EXPECT().DeletePasswordResetRequestsOlderThan(gomock.Any(), gomock.Any()).
 		DoAndReturn(func(_ context.Context, cutoff pgtype.Timestamptz) (int64, error) {

@@ -1389,6 +1389,29 @@ func (q *Queries) ListStoresForLoginByEmployeeID(ctx context.Context, employeeID
 	return items, nil
 }
 
+const lockPasswordResetRequestKey = `-- name: LockPasswordResetRequestKey :exec
+SELECT pg_advisory_xact_lock($1::int, hashtext($2::text))
+`
+
+type LockPasswordResetRequestKeyParams struct {
+	Classid int32  `json:"classid"`
+	Key     string `json:"key"`
+}
+
+// Closes issue #42's TOCTOU race: a transaction-scoped Postgres advisory
+// lock (pg_advisory_xact_lock), released automatically on commit/rollback,
+// taken around the whole cleanup/count/insert sequence in
+// allowPasswordResetRequest. classid namespaces the lock space so the
+// email dimension and the IP dimension can never collide on the same key
+// by coincidence (hashtext is 32-bit); callers must always acquire the
+// email lock before the IP lock, in that fixed order, so two concurrent
+// requests can never deadlock by acquiring the two dimensions in opposite
+// order.
+func (q *Queries) LockPasswordResetRequestKey(ctx context.Context, arg LockPasswordResetRequestKeyParams) error {
+	_, err := q.db.Exec(ctx, lockPasswordResetRequestKey, arg.Classid, arg.Key)
+	return err
+}
+
 const recordFailedLoginAttempt = `-- name: RecordFailedLoginAttempt :one
 UPDATE employees e
 SET failed_login_attempts = calc.new_count,
