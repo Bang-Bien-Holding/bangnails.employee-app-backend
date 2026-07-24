@@ -116,15 +116,24 @@ func TestPasswordResetE2E(t *testing.T) {
 	t.Run("repeated requests invalidate the prior unused token, leaving exactly one live", func(t *testing.T) {
 		employee := fixtures.Employee(t, employeeSeed{Activated: true})
 
+		var firstToken string
 		for i := 0; i < 3; i++ {
 			resp := client.RequestPasswordReset(t, employee.Email)
 			if resp.status != http.StatusOK {
 				t.Fatalf("POST /password-reset-requests (call %d): expected 200, got %d: %s", i+1, resp.status, resp.raw)
 			}
+			if i == 0 {
+				firstToken = passwordResetTokenFromMailpit(t, employee.Email)
+			}
 		}
 
 		if n := fixtures.UnusedPasswordResetTokenCount(t, employee.ID); n != 1 {
 			t.Errorf("expected exactly 1 unused password reset token to survive 3 repeated requests, got %d", n)
+		}
+
+		stale := client.RawActivate(t, firstToken, "stale-token-password-1", "stale-token-password-1")
+		if stale.status != http.StatusBadRequest {
+			t.Errorf("expected 400 activating with the invalidated first token, got %d: %s", stale.status, stale.raw)
 		}
 	})
 
