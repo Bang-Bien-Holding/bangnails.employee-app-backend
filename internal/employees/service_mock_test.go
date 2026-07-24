@@ -127,18 +127,18 @@ func (mr *MockServiceMockRecorder) GetEmployeeByID(ctx, id any) *gomock.Call {
 }
 
 // ListEmployees mocks base method.
-func (m *MockService) ListEmployees(ctx context.Context) ([]EmployeeDetail, error) {
+func (m *MockService) ListEmployees(ctx context.Context, filter ListEmployeesFilter) ([]EmployeeDetail, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListEmployees", ctx)
+	ret := m.ctrl.Call(m, "ListEmployees", ctx, filter)
 	ret0, _ := ret[0].([]EmployeeDetail)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListEmployees indicates an expected call of ListEmployees.
-func (mr *MockServiceMockRecorder) ListEmployees(ctx any) *gomock.Call {
+func (mr *MockServiceMockRecorder) ListEmployees(ctx, filter any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEmployees", reflect.TypeOf((*MockService)(nil).ListEmployees), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEmployees", reflect.TypeOf((*MockService)(nil).ListEmployees), ctx, filter)
 }
 
 // SetEmployeeActive mocks base method.

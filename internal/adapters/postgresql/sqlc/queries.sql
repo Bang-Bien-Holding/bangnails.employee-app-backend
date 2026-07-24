@@ -16,8 +16,25 @@ SELECT * FROM employees
 WHERE username = $1;
 
 -- name: ListEmployees :many
+-- Optional-filter search for issue #28: every sqlc.narg(...) IS NULL check
+-- skips that facet entirely when the caller omitted the corresponding query
+-- parameter (employees.ListEmployeesFilter's zero value) — the standard
+-- "$n IS NULL means skip this filter" static-SQL pattern (sqlc requires
+-- compile-time SQL, so filters can't be built by string concatenation).
+-- position_ids and store_ids are independent, OR-within/AND-across facets —
+-- never paired (ADR-0008, ADR-0009; issue #28 user story 7) — and each is
+-- matched via a sub-SELECT against its join table rather than a JOIN, so an
+-- employee with zero positions/stores still matches when that facet's
+-- filter is omitted (user stories 8-9). Sorted case-insensitively by
+-- full_name (user story 10) since Postgres' default collation is
+-- case-sensitive.
 SELECT * FROM employees
-ORDER BY id;
+WHERE (sqlc.narg(q)::text IS NULL OR full_name ILIKE '%' || replace(replace(replace(sqlc.narg(q)::text, '\', '\\'), '%', '\%'), '_', '\_') || '%' OR email ILIKE '%' || replace(replace(replace(sqlc.narg(q)::text, '\', '\\'), '%', '\%'), '_', '\_') || '%')
+  AND (sqlc.narg(position_ids)::bigint[] IS NULL OR id IN (SELECT employee_id FROM employee_positions WHERE position_id = ANY(sqlc.narg(position_ids)::bigint[])))
+  AND (sqlc.narg(store_ids)::bigint[] IS NULL OR id IN (SELECT employee_id FROM employee_stores WHERE store_id = ANY(sqlc.narg(store_ids)::bigint[])))
+  AND (sqlc.narg(odoo_employee_ids)::bigint[] IS NULL OR odoo_employee_id = ANY(sqlc.narg(odoo_employee_ids)::bigint[]))
+  AND (sqlc.narg(is_active)::bool IS NULL OR is_active = sqlc.narg(is_active)::bool)
+ORDER BY lower(full_name) ASC;
 
 -- name: UpdateEmployee :one
 UPDATE employees

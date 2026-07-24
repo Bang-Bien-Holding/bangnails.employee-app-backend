@@ -180,8 +180,14 @@ func (s *service) CreateEmployee(ctx context.Context, params createEmployeeParam
 	return detail, nil
 }
 
-func (s *service) ListEmployees(ctx context.Context) ([]EmployeeDetail, error) {
-	employees, err := s.repo.ListEmployees(ctx)
+func (s *service) ListEmployees(ctx context.Context, filter ListEmployeesFilter) ([]EmployeeDetail, error) {
+	employees, err := s.repo.ListEmployees(ctx, repo.ListEmployeesParams{
+		Q:               textPtrToText(filter.Q),
+		PositionIds:     filter.PositionIDs,
+		StoreIds:        filter.StoreIDs,
+		OdooEmployeeIds: filter.OdooEmployeeIDs,
+		IsActive:        boolPtrToBool(filter.IsActive),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -750,6 +756,25 @@ func (s *service) issuePasswordResetToken(ctx context.Context, employee repo.Emp
 	}
 
 	return fmt.Sprintf("%s%s?token=%s", env.GetString("APP_URL", "http://localhost:3000"), linkPath, token), nil
+}
+
+// textPtrToText converts an optional filter field to the nullable
+// pgtype.Text ListEmployees' query expects — nil means "don't filter on
+// this facet" (mirrors internal/stores/service.go's float64PtrToNumeric).
+func textPtrToText(s *string) pgtype.Text {
+	if s == nil {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: *s, Valid: true}
+}
+
+// boolPtrToBool converts an optional filter field to the nullable
+// pgtype.Bool ListEmployees' query expects — see textPtrToText.
+func boolPtrToBool(b *bool) pgtype.Bool {
+	if b == nil {
+		return pgtype.Bool{}
+	}
+	return pgtype.Bool{Bool: *b, Valid: true}
 }
 
 // translateEmployeeUniqueViolation maps known Postgres unique-violation

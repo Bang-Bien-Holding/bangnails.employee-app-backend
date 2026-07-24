@@ -529,18 +529,18 @@ func (mr *MockQuerierMockRecorder) ListEmployeeIDsByIDs(ctx, ids any) *gomock.Ca
 }
 
 // ListEmployees mocks base method.
-func (m *MockQuerier) ListEmployees(ctx context.Context) ([]repo.Employee, error) {
+func (m *MockQuerier) ListEmployees(ctx context.Context, arg repo.ListEmployeesParams) ([]repo.Employee, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListEmployees", ctx)
+	ret := m.ctrl.Call(m, "ListEmployees", ctx, arg)
 	ret0, _ := ret[0].([]repo.Employee)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListEmployees indicates an expected call of ListEmployees.
-func (mr *MockQuerierMockRecorder) ListEmployees(ctx any) *gomock.Call {
+func (mr *MockQuerierMockRecorder) ListEmployees(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEmployees", reflect.TypeOf((*MockQuerier)(nil).ListEmployees), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEmployees", reflect.TypeOf((*MockQuerier)(nil).ListEmployees), ctx, arg)
 }
 
 // ListEmployeesByPositionID mocks base method.

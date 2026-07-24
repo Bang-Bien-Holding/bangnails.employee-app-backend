@@ -948,7 +948,7 @@ func TestEmployeeHandler_ListEmployees(t *testing.T) {
 			name: "TS-HDL-13: List employees successfully",
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
-					ListEmployees(gomock.Any()).
+					ListEmployees(gomock.Any(), gomock.Any()).
 					Return([]EmployeeDetail{
 						{Employee: repo.Employee{ID: 1, OdooEmployeeID: 30, FullName: "Nguyen Van A"}},
 						{Employee: repo.Employee{ID: 2, OdooEmployeeID: 31, FullName: "Tran Thi B"}},
@@ -969,7 +969,7 @@ func TestEmployeeHandler_ListEmployees(t *testing.T) {
 			name: "TS-HDL-14: List employees returns an empty array when there are none",
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
-					ListEmployees(gomock.Any()).
+					ListEmployees(gomock.Any(), gomock.Any()).
 					Return([]EmployeeDetail{}, nil)
 			},
 			expectedCode: http.StatusOK,
@@ -987,7 +987,7 @@ func TestEmployeeHandler_ListEmployees(t *testing.T) {
 			name: "TS-HDL-15: Map internal server error on database failure",
 			setupMock: func(mockSvc *MockService) {
 				mockSvc.EXPECT().
-					ListEmployees(gomock.Any()).
+					ListEmployees(gomock.Any(), gomock.Any()).
 					Return(nil, errors.New("connection refused"))
 			},
 			expectedCode: http.StatusInternalServerError,
@@ -1274,7 +1274,7 @@ func TestEmployeeHandler_ResponseOmitsPasswordHash(t *testing.T) {
 	t.Run("ListEmployees", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockSvc := NewMockService(ctrl)
-		mockSvc.EXPECT().ListEmployees(gomock.Any()).Return([]EmployeeDetail{detailWithHash}, nil)
+		mockSvc.EXPECT().ListEmployees(gomock.Any(), gomock.Any()).Return([]EmployeeDetail{detailWithHash}, nil)
 
 		h := NewHandler(mockSvc)
 		req := httptest.NewRequest(http.MethodGet, "/employees", nil)

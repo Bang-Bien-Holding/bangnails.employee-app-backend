@@ -82,13 +82,14 @@ jobs:
         run: go test -race -count=1 ./...
 
   login-e2e:
-    name: Login E2E Tests
+    name: Command E2E Tests
     runs-on: ubuntu-latest
     needs: lint
     # Login/Logout/Heartbeat/Activate (cmd/login_e2e_test.go, build tag
-    # "dbe2e") touch zero Odoo — unlike cmd/e2e_test.go's Odoo suite (build
-    # tag "e2e", still local-only, see that file's doc comment), this one
-    # only needs a real Postgres, so it runs here on every PR.
+    # "dbe2e") and employees search (cmd/employees_search_e2e_test.go, same
+    # tag) touch zero Odoo — unlike cmd/e2e_test.go's Odoo suite (build tag
+    # "e2e", still local-only, see that file's doc comment), these only need
+    # a real Postgres, so they run here on every PR.
     services:
       postgres:
         image: postgres:16-alpine
@@ -122,9 +123,20 @@ jobs:
           GOOSE_DBSTRING: "host=localhost user=postgres password=postgres dbname=employees sslmode=disable"
         run: goose -dir internal/adapters/postgresql/migrations up
 
-      - name: Run login e2e tests
+      - name: Run command e2e tests
         env:
           DATABASE_DSN: "host=localhost user=postgres password=postgres dbname=employees sslmode=disable"
+          # buildApplication always constructs an odoo.Client, even though
+          # this suite (build tag "dbe2e") never calls it — odoo.Config.validate
+          # rejects an empty BaseURL/ClientID/ClientSecret/Username/Password/
+          # Database before the app is usable at all, so these must be
+          # present, but their values are otherwise unused here.
+          ODOO_BASE_URL: "http://localhost:1"
+          ODOO_CLIENT_ID: "dbe2e-unused"
+          ODOO_CLIENT_SECRET: "dbe2e-unused"
+          ODOO_USERNAME: "dbe2e-unused"
+          ODOO_PASSWORD: "dbe2e-unused"
+          ODOO_DATABASE: "dbe2e-unused"
         run: go test -tags dbe2e -race -count=1 ./cmd/...
 
   security:
