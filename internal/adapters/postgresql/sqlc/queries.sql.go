@@ -737,6 +737,21 @@ func (q *Queries) InsertStoreWifiMacs(ctx context.Context, arg InsertStoreWifiMa
 	return err
 }
 
+const invalidatePasswordResetTokensByEmployeeID = `-- name: InvalidatePasswordResetTokensByEmployeeID :exec
+UPDATE password_reset_tokens
+SET used_at = now()
+WHERE employee_id = $1
+  AND used_at IS NULL
+`
+
+// Marks every still-outstanding (unused) token for an Employee as consumed.
+// Called by issuePasswordResetToken before it inserts a new token, so at
+// most one issued token is ever redeemable per Employee at a time.
+func (q *Queries) InvalidatePasswordResetTokensByEmployeeID(ctx context.Context, employeeID int64) error {
+	_, err := q.db.Exec(ctx, invalidatePasswordResetTokensByEmployeeID, employeeID)
+	return err
+}
+
 const isEmployeeAdmin = `-- name: IsEmployeeAdmin :one
 SELECT EXISTS (
     SELECT 1

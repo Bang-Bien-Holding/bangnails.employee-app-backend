@@ -89,6 +89,15 @@ FROM (
 WHERE employees.odoo_employee_id = data.odoo_employee_id
 RETURNING employees.id, employees.odoo_employee_id, false AS inserted;
 
+-- name: InvalidatePasswordResetTokensByEmployeeID :exec
+-- Marks every still-outstanding (unused) token for an Employee as consumed.
+-- Called by issuePasswordResetToken before it inserts a new token, so at
+-- most one issued token is ever redeemable per Employee at a time.
+UPDATE password_reset_tokens
+SET used_at = now()
+WHERE employee_id = $1
+  AND used_at IS NULL;
+
 -- name: CreatePasswordResetToken :one
 INSERT INTO password_reset_tokens (employee_id, token_hash, expires_at)
 VALUES ($1, $2, $3)

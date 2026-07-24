@@ -746,10 +746,19 @@ func (s *service) issuePasswordResetToken(ctx context.Context, employee repo.Emp
 		return "", err
 	}
 
-	_, err = s.repo.CreatePasswordResetToken(ctx, repo.CreatePasswordResetTokenParams{
-		EmployeeID: employee.ID,
-		TokenHash:  tokenx.Hash(token),
-		ExpiresAt:  pgtype.Timestamptz{Time: time.Now().Add(activationTokenTTL), Valid: true},
+	// Invalidating prior tokens and inserting the new one run in the same
+	// transaction so a failure between the two never leaves the Employee
+	// with zero redeemable tokens.
+	err = s.withTx(ctx, func(q repo.Querier) error {
+		if err := q.InvalidatePasswordResetTokensByEmployeeID(ctx, employee.ID); err != nil {
+			return err
+		}
+		_, err := q.CreatePasswordResetToken(ctx, repo.CreatePasswordResetTokenParams{
+			EmployeeID: employee.ID,
+			TokenHash:  tokenx.Hash(token),
+			ExpiresAt:  pgtype.Timestamptz{Time: time.Now().Add(activationTokenTTL), Valid: true},
+		})
+		return err
 	})
 	if err != nil {
 		return "", err

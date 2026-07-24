@@ -765,4 +765,26 @@ func TestActivationThenLoginE2E(t *testing.T) {
 			t.Errorf("expected 400 (ErrInvalidOrExpiredToken), got %d: %s", resp.status, resp.raw)
 		}
 	})
+
+	// Covers issue #37: issuing a new token for an Employee must invalidate
+	// that Employee's prior unused token. token1 is seeded directly (like
+	// the other cases here), then the real admin bulk-resend endpoint —
+	// the same entry point BulkSendPasswordResetLinks itself.
+	t.Run("issuing a new token invalidates a still-unused prior token", func(t *testing.T) {
+		employee := fixtures.Employee(t, employeeSeed{Activated: true})
+		admin := fixtures.Employee(t, employeeSeed{Activated: true, Admin: true})
+
+		token1 := fixtures.ActivationToken(t, employee.ID, time.Now().Add(time.Hour))
+
+		adminLogin := client.MustLogin(t, admin.Username, admin.Password, loginE2EFarLat, loginE2EFarLong, "")
+		resendResp := client.BulkSendPasswordResetLinks(t, adminLogin.Token, []int64{employee.ID})
+		if resendResp.status != http.StatusOK {
+			t.Fatalf("POST /employees/password-reset-links: expected 200, got %d: %s", resendResp.status, resendResp.raw)
+		}
+
+		stale := client.Activate(t, token1, "some-new-password")
+		if stale.status != http.StatusBadRequest {
+			t.Errorf("activating with the now-stale token1: expected 400 (ErrInvalidOrExpiredToken), got %d: %s", stale.status, stale.raw)
+		}
+	})
 }

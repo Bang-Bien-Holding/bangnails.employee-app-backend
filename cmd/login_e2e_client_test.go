@@ -117,6 +117,18 @@ func (c *loginE2EClient) AdminGET(t *testing.T, token string) apiResponse {
 	return c.authRequest(t, http.MethodGet, "/employees", token, nil)
 }
 
+// BulkSendPasswordResetLinks hits the real admin-gated
+// POST /v1/employees/password-reset-links endpoint — the one entry point
+// TestActivationThenLoginE2E's stale-token case drives to prove
+// issuePasswordResetToken's invalidation (issue #37) fires through a real
+// HTTP call, not just the mocked unit test.
+func (c *loginE2EClient) BulkSendPasswordResetLinks(t *testing.T, token string, ids []int64) apiResponse {
+	t.Helper()
+	return c.authRequest(t, http.MethodPost, "/employees/password-reset-links", token, map[string]any{
+		"ids": ids,
+	})
+}
+
 // authRequest is the Bearer-authenticated request builder every
 // token-taking method funnels through — the one place
 // "Authorization: Bearer <token>" gets set. token == "" omits the header

@@ -143,6 +143,10 @@ type Querier interface {
 	InsertStoreWifiIPs(ctx context.Context, arg InsertStoreWifiIPsParams) error
 	// MAC-address counterpart of InsertStoreWifiIPs.
 	InsertStoreWifiMacs(ctx context.Context, arg InsertStoreWifiMacsParams) error
+	// Marks every still-outstanding (unused) token for an Employee as consumed.
+	// Called by issuePasswordResetToken before it inserts a new token, so at
+	// most one issued token is ever redeemable per Employee at a time.
+	InvalidatePasswordResetTokensByEmployeeID(ctx context.Context, employeeID int64) error
 	// The single centralized "does this Employee hold the Admin Position" check
 	// ADR-0015 calls for — an exact, case-insensitive match on the Position
 	// name "Admin", not a pattern. Shared by Login's presence-check bypass

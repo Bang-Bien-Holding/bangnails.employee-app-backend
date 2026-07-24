@@ -498,6 +498,20 @@ func (mr *MockQuerierMockRecorder) InsertStoreWifiMacs(ctx, arg any) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InsertStoreWifiMacs", reflect.TypeOf((*MockQuerier)(nil).InsertStoreWifiMacs), ctx, arg)
 }
 
+// InvalidatePasswordResetTokensByEmployeeID mocks base method.
+func (m *MockQuerier) InvalidatePasswordResetTokensByEmployeeID(ctx context.Context, employeeID int64) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "InvalidatePasswordResetTokensByEmployeeID", ctx, employeeID)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// InvalidatePasswordResetTokensByEmployeeID indicates an expected call of InvalidatePasswordResetTokensByEmployeeID.
+func (mr *MockQuerierMockRecorder) InvalidatePasswordResetTokensByEmployeeID(ctx, employeeID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "InvalidatePasswordResetTokensByEmployeeID", reflect.TypeOf((*MockQuerier)(nil).InvalidatePasswordResetTokensByEmployeeID), ctx, employeeID)
+}
+
 // IsEmployeeAdmin mocks base method.
 func (m *MockQuerier) IsEmployeeAdmin(ctx context.Context, employeeID int64) (bool, error) {
 	m.ctrl.T.Helper()
