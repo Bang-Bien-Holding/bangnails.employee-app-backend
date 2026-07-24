@@ -789,7 +789,7 @@ func (q *Queries) ListEmployeeIDsByIDs(ctx context.Context, ids []int64) ([]int6
 
 const listEmployees = `-- name: ListEmployees :many
 SELECT id, odoo_employee_id, full_name, email, username, password, is_active, created_at, updated_at, failed_login_attempts, locked_until FROM employees
-WHERE ($1::text IS NULL OR full_name ILIKE '%' || $1::text || '%' OR email ILIKE '%' || $1::text || '%')
+WHERE ($1::text IS NULL OR full_name ILIKE '%' || replace(replace(replace($1::text, '\', '\\'), '%', '\%'), '_', '\_') || '%' OR email ILIKE '%' || replace(replace(replace($1::text, '\', '\\'), '%', '\%'), '_', '\_') || '%')
   AND ($2::bigint[] IS NULL OR id IN (SELECT employee_id FROM employee_positions WHERE position_id = ANY($2::bigint[])))
   AND ($3::bigint[] IS NULL OR id IN (SELECT employee_id FROM employee_stores WHERE store_id = ANY($3::bigint[])))
   AND ($4::bigint[] IS NULL OR odoo_employee_id = ANY($4::bigint[]))

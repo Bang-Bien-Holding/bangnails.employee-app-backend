@@ -29,7 +29,7 @@ WHERE username = $1;
 -- full_name (user story 10) since Postgres' default collation is
 -- case-sensitive.
 SELECT * FROM employees
-WHERE (sqlc.narg(q)::text IS NULL OR full_name ILIKE '%' || sqlc.narg(q)::text || '%' OR email ILIKE '%' || sqlc.narg(q)::text || '%')
+WHERE (sqlc.narg(q)::text IS NULL OR full_name ILIKE '%' || replace(replace(replace(sqlc.narg(q)::text, '\', '\\'), '%', '\%'), '_', '\_') || '%' OR email ILIKE '%' || replace(replace(replace(sqlc.narg(q)::text, '\', '\\'), '%', '\%'), '_', '\_') || '%')
   AND (sqlc.narg(position_ids)::bigint[] IS NULL OR id IN (SELECT employee_id FROM employee_positions WHERE position_id = ANY(sqlc.narg(position_ids)::bigint[])))
   AND (sqlc.narg(store_ids)::bigint[] IS NULL OR id IN (SELECT employee_id FROM employee_stores WHERE store_id = ANY(sqlc.narg(store_ids)::bigint[])))
   AND (sqlc.narg(odoo_employee_ids)::bigint[] IS NULL OR odoo_employee_id = ANY(sqlc.narg(odoo_employee_ids)::bigint[]))
