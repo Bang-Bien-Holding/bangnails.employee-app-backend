@@ -30,7 +30,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -257,7 +259,10 @@ func latestMailpitMessageBody(t *testing.T, to string) (body string, ok bool) {
 func mailpitGET(t *testing.T, path string, v any) {
 	t.Helper()
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, mailpitAPIBase+path, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, mailpitAPIBase+path, nil)
 	if err != nil {
 		t.Fatalf("build mailpit request %s: %v", path, err)
 	}
@@ -266,6 +271,11 @@ func mailpitGET(t *testing.T, path string, v any) {
 		t.Fatalf("GET mailpit %s: %v (is `docker compose up -d mailpit` running?)", path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET mailpit %s: expected 2xx, got %d: %s", path, resp.StatusCode, body)
+	}
 
 	if err := json.NewDecoder(resp.Body).Decode(v); err != nil {
 		t.Fatalf("decode mailpit response %s: %v", path, err)
