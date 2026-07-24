@@ -196,8 +196,13 @@ func buildStoreDetail(ctx context.Context, q repo.Querier, store repo.Store) (St
 // queries.sql for how ordering and whitelist aggregation are done in one
 // round trip, unlike GetStoreByID/buildStoreDetail's per-store follow-up
 // queries.
-func (s *service) ListStores(ctx context.Context) ([]StoreDetail, error) {
-	rows, err := s.repo.ListStores(ctx)
+func (s *service) ListStores(ctx context.Context, filter ListStoresFilter) ([]StoreDetail, error) {
+	rows, err := s.repo.ListStores(ctx, repo.ListStoresParams{
+		StoreName:            textPtrToText(filter.StoreName),
+		City:                 textPtrToText(filter.City),
+		WifiWhitelistEnabled: boolPtrToBool(filter.WifiWhitelistEnabled),
+		OdooStoreIds:         filter.OdooStoreIDs,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -460,6 +465,26 @@ func int32PtrToInt4(i *int32) pgtype.Int4 {
 		return pgtype.Int4{}
 	}
 	return pgtype.Int4{Int32: *i, Valid: true}
+}
+
+// textPtrToText converts an optional filter field to the nullable
+// pgtype.Text ListStores' query expects — nil means "don't filter on this
+// facet" (mirrors employees.textPtrToText).
+func textPtrToText(s *string) pgtype.Text {
+	if s == nil {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: *s, Valid: true}
+}
+
+// boolPtrToBool converts an optional filter field to the nullable
+// pgtype.Bool ListStores' query expects — nil means "don't filter on this
+// facet" (mirrors employees.boolPtrToBool).
+func boolPtrToBool(b *bool) pgtype.Bool {
+	if b == nil {
+		return pgtype.Bool{}
+	}
+	return pgtype.Bool{Bool: *b, Valid: true}
 }
 
 // parseAddresses converts patchStoreParams.IPAddresses/MACAddresses'

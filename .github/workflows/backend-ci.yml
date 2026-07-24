@@ -86,8 +86,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: lint
     # Login/Logout/Heartbeat/Activate (cmd/login_e2e_test.go, build tag
-    # "dbe2e") and employees search (cmd/employees_search_e2e_test.go, same
-    # tag) touch zero Odoo — unlike cmd/e2e_test.go's Odoo suite (build tag
+    # "dbe2e"), employees search (cmd/employees_search_e2e_test.go, same
+    # tag), and stores search (cmd/stores_search_e2e_test.go, same tag)
+    # touch zero Odoo — unlike cmd/e2e_test.go's Odoo suite (build tag
     # "e2e", still local-only, see that file's doc comment), these only need
     # a real Postgres, so they run here on every PR.
     services:

@@ -1107,8 +1107,19 @@ LEFT JOIN LATERAL (
     FROM store_wifi_mac
     WHERE store_id = s.id
 ) mac ON true
-ORDER BY s.city, s.store_name
+WHERE ($1::text IS NULL OR s.store_name ILIKE '%' || replace(replace(replace($1::text, '\', '\\'), '%', '\%'), '_', '\_') || '%')
+  AND ($2::text IS NULL OR s.city ILIKE '%' || replace(replace(replace($2::text, '\', '\\'), '%', '\%'), '_', '\_') || '%')
+  AND ($3::bool IS NULL OR s.wifi_whitelist_enabled = $3::bool)
+  AND ($4::varchar[] IS NULL OR s.odoo_store_id = ANY($4::varchar[]))
+ORDER BY lower(s.store_name) ASC
 `
+
+type ListStoresParams struct {
+	StoreName            pgtype.Text `json:"store_name"`
+	City                 pgtype.Text `json:"city"`
+	WifiWhitelistEnabled pgtype.Bool `json:"wifi_whitelist_enabled"`
+	OdooStoreIds         []string    `json:"odoo_store_ids"`
+}
 
 type ListStoresRow struct {
 	Store        Store              `json:"store"`
@@ -1122,8 +1133,28 @@ type ListStoresRow struct {
 // query per store. LATERAL subqueries (rather than a single LEFT JOIN +
 // array_agg) keep the two independent whitelists from cross-joining each
 // other.
-func (q *Queries) ListStores(ctx context.Context) ([]ListStoresRow, error) {
-	rows, err := q.db.Query(ctx, listStores)
+//
+// Optional-filter search for issues #32/#33/#34: every sqlc.narg(...) IS
+// NULL check skips that facet entirely when the caller omitted the
+// corresponding query parameter (stores.ListStoresFilter's zero value), same
+// "$n IS NULL means skip this filter" pattern as ListEmployees (issue #28).
+// store_name and city are independent, AND-across facets, each a
+// case-insensitive substring match; city never matches a store with no city
+// set, since NULL city ILIKE anything is NULL (falsy), not true.
+// wifi_whitelist_enabled (issue #33) is an exact-match boolean facet, AND'd
+// with the rest. odoo_store_ids (issue #34) is OR-within/AND-across, same
+// shape as ListStoresByOdooStoreIDs' odoo_store_id = ANY(...) — matched
+// against s.odoo_store_id, VARCHAR not bigint (unlike ListEmployees'
+// odoo_employee_ids), so a NULL odoo_store_id never matches, same as city.
+// Sorted case-insensitively by store_name (issue #32), replacing the former
+// ORDER BY s.city, s.store_name.
+func (q *Queries) ListStores(ctx context.Context, arg ListStoresParams) ([]ListStoresRow, error) {
+	rows, err := q.db.Query(ctx, listStores,
+		arg.StoreName,
+		arg.City,
+		arg.WifiWhitelistEnabled,
+		arg.OdooStoreIds,
+	)
 	if err != nil {
 		return nil, err
 	}

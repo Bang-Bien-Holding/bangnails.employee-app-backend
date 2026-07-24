@@ -664,18 +664,18 @@ func (mr *MockQuerierMockRecorder) ListStoreWifiMacsByStoreID(ctx, storeID any) 
 }
 
 // ListStores mocks base method.
-func (m *MockQuerier) ListStores(ctx context.Context) ([]repo.ListStoresRow, error) {
+func (m *MockQuerier) ListStores(ctx context.Context, arg repo.ListStoresParams) ([]repo.ListStoresRow, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListStores", ctx)
+	ret := m.ctrl.Call(m, "ListStores", ctx, arg)
 	ret0, _ := ret[0].([]repo.ListStoresRow)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListStores indicates an expected call of ListStores.
-func (mr *MockQuerierMockRecorder) ListStores(ctx any) *gomock.Call {
+func (mr *MockQuerierMockRecorder) ListStores(ctx, arg any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStores", reflect.TypeOf((*MockQuerier)(nil).ListStores), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStores", reflect.TypeOf((*MockQuerier)(nil).ListStores), ctx, arg)
 }
 
 // ListStoresByOdooStoreIDs mocks base method.

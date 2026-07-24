@@ -86,18 +86,18 @@ func (mr *MockServiceMockRecorder) GetStoreByID(ctx, id any) *gomock.Call {
 }
 
 // ListStores mocks base method.
-func (m *MockService) ListStores(ctx context.Context) ([]StoreDetail, error) {
+func (m *MockService) ListStores(ctx context.Context, filter ListStoresFilter) ([]StoreDetail, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "ListStores", ctx)
+	ret := m.ctrl.Call(m, "ListStores", ctx, filter)
 	ret0, _ := ret[0].([]StoreDetail)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // ListStores indicates an expected call of ListStores.
-func (mr *MockServiceMockRecorder) ListStores(ctx any) *gomock.Call {
+func (mr *MockServiceMockRecorder) ListStores(ctx, filter any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStores", reflect.TypeOf((*MockService)(nil).ListStores), ctx)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListStores", reflect.TypeOf((*MockService)(nil).ListStores), ctx, filter)
 }
 
 // SetStoreWifiWhitelistEnabled mocks base method.

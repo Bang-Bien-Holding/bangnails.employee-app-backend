@@ -172,6 +172,21 @@ ORDER BY id;
 -- query per store. LATERAL subqueries (rather than a single LEFT JOIN +
 -- array_agg) keep the two independent whitelists from cross-joining each
 -- other.
+--
+-- Optional-filter search for issues #32/#33/#34: every sqlc.narg(...) IS
+-- NULL check skips that facet entirely when the caller omitted the
+-- corresponding query parameter (stores.ListStoresFilter's zero value), same
+-- "$n IS NULL means skip this filter" pattern as ListEmployees (issue #28).
+-- store_name and city are independent, AND-across facets, each a
+-- case-insensitive substring match; city never matches a store with no city
+-- set, since NULL city ILIKE anything is NULL (falsy), not true.
+-- wifi_whitelist_enabled (issue #33) is an exact-match boolean facet, AND'd
+-- with the rest. odoo_store_ids (issue #34) is OR-within/AND-across, same
+-- shape as ListStoresByOdooStoreIDs' odoo_store_id = ANY(...) — matched
+-- against s.odoo_store_id, VARCHAR not bigint (unlike ListEmployees'
+-- odoo_employee_ids), so a NULL odoo_store_id never matches, same as city.
+-- Sorted case-insensitively by store_name (issue #32), replacing the former
+-- ORDER BY s.city, s.store_name.
 SELECT
     sqlc.embed(s),
     COALESCE(ip.ip_addresses, '{}')::inet[] AS ip_addresses,
@@ -187,7 +202,11 @@ LEFT JOIN LATERAL (
     FROM store_wifi_mac
     WHERE store_id = s.id
 ) mac ON true
-ORDER BY s.city, s.store_name;
+WHERE (sqlc.narg(store_name)::text IS NULL OR s.store_name ILIKE '%' || replace(replace(replace(sqlc.narg(store_name)::text, '\', '\\'), '%', '\%'), '_', '\_') || '%')
+  AND (sqlc.narg(city)::text IS NULL OR s.city ILIKE '%' || replace(replace(replace(sqlc.narg(city)::text, '\', '\\'), '%', '\%'), '_', '\_') || '%')
+  AND (sqlc.narg(wifi_whitelist_enabled)::bool IS NULL OR s.wifi_whitelist_enabled = sqlc.narg(wifi_whitelist_enabled)::bool)
+  AND (sqlc.narg(odoo_store_ids)::varchar[] IS NULL OR s.odoo_store_id = ANY(sqlc.narg(odoo_store_ids)::varchar[]))
+ORDER BY lower(s.store_name) ASC;
 
 -- name: UpdateStoreGeofence :one
 -- Updates a store's geofence, and unconditionally bumps updated_at whenever
