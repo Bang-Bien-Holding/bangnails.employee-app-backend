@@ -3,6 +3,8 @@ package employees
 import (
 	"context"
 	"errors"
+	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -109,6 +111,9 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 						Email:          defaultParams.Email,
 						Username:       defaultParams.Username,
 					}, nil)
+				mockRepo.EXPECT().
+					InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), gomock.Any()).
+					Return(nil)
 				mockRepo.EXPECT().
 					CreatePasswordResetToken(gomock.Any(), gomock.Any()).
 					Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
@@ -222,6 +227,9 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 						Username:       defaultParams.Username,
 					}, nil)
 				mockRepo.EXPECT().
+					InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), gomock.Any()).
+					Return(nil)
+				mockRepo.EXPECT().
 					CreatePasswordResetToken(gomock.Any(), gomock.Any()).
 					Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 			},
@@ -259,6 +267,9 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 						Username:       defaultParams.Username,
 					}, nil)
 				mockRepo.EXPECT().
+					InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), gomock.Any()).
+					Return(nil)
+				mockRepo.EXPECT().
 					CreatePasswordResetToken(gomock.Any(), gomock.Any()).
 					Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 			},
@@ -292,6 +303,9 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 						Email:          defaultParams.Email,
 						Username:       defaultParams.Username,
 					}, nil)
+				mockRepo.EXPECT().
+					InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), gomock.Any()).
+					Return(nil)
 				mockRepo.EXPECT().
 					CreatePasswordResetToken(gomock.Any(), gomock.Any()).
 					Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
@@ -338,6 +352,9 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 						EmployeeID:  1,
 						PositionIds: []int64{10, 20},
 					}).
+					Return(nil)
+				mockRepo.EXPECT().
+					InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), gomock.Any()).
 					Return(nil)
 				mockRepo.EXPECT().
 					CreatePasswordResetToken(gomock.Any(), gomock.Any()).
@@ -401,6 +418,9 @@ func TestEmployeeService_CreateEmployee(t *testing.T) {
 						Email:          defaultParams.Email,
 						Username:       defaultParams.Username,
 					}, nil)
+				mockRepo.EXPECT().
+					InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), gomock.Any()).
+					Return(nil)
 				mockRepo.EXPECT().
 					CreatePasswordResetToken(gomock.Any(), gomock.Any()).
 					Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
@@ -1738,6 +1758,140 @@ func TestEmployeeService_BulkDeleteEmployees(t *testing.T) {
 	}
 }
 
+// TestEmployeeService_IssuePasswordResetToken_InvalidatesPriorTokens covers
+// issue #37: issuePasswordResetToken is the single choke point shared by
+// sendActivationEmail and BulkSendPasswordResetLinks, so the invalidation
+// fix lives here rather than in either caller. gomock.InOrder pins down not
+// just that the invalidation call happens, but that it happens for the
+// right Employee and strictly before the new token is inserted — issuing a
+// new token while an old one could still be redeemable would defeat the
+// fix.
+func TestEmployeeService_IssuePasswordResetToken_InvalidatesPriorTokens(t *testing.T) {
+	ctx := context.Background()
+	employee := repo.Employee{ID: 7, FullName: "Nguyen Van A", Email: "van-a@example.com"}
+
+	ctrl := gomock.NewController(t)
+	mockRepo := mocks.NewMockQuerier(ctrl)
+	mockMailer := mailermocks.NewMockClient(ctrl)
+	mockOdoo := odoomocks.NewMockClient(ctrl)
+
+	invalidate := mockRepo.EXPECT().
+		InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), employee.ID).
+		Return(nil)
+	mockRepo.EXPECT().
+		CreatePasswordResetToken(gomock.Any(), gomock.Any()).
+		Return(repo.PasswordResetToken{ID: 1, EmployeeID: employee.ID}, nil).
+		After(invalidate)
+
+	svc := newTestService(mockRepo, mockMailer, mockOdoo)
+
+	if _, err := svc.issuePasswordResetToken(ctx, employee, "/activate"); err != nil {
+		t.Fatalf("expected no error, but got: %v", err)
+	}
+}
+
+// TestEmployeeService_IssuePasswordResetToken_InvalidationFails covers
+// issue #37: if invalidating prior tokens fails, issuePasswordResetToken
+// must not proceed to issue a new one — the caller (activation email or
+// bulk resend) would otherwise hand out a link while an old one might still
+// be redeemable.
+func TestEmployeeService_IssuePasswordResetToken_InvalidationFails(t *testing.T) {
+	ctx := context.Background()
+	employee := repo.Employee{ID: 7, FullName: "Nguyen Van A", Email: "van-a@example.com"}
+	dbErr := errors.New("connection refused")
+
+	ctrl := gomock.NewController(t)
+	mockRepo := mocks.NewMockQuerier(ctrl)
+	mockMailer := mailermocks.NewMockClient(ctrl)
+	mockOdoo := odoomocks.NewMockClient(ctrl)
+
+	mockRepo.EXPECT().
+		InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), employee.ID).
+		Return(dbErr)
+	// No CreatePasswordResetToken expectation: ctrl fails the test if it's
+	// still called after invalidation errors.
+
+	svc := newTestService(mockRepo, mockMailer, mockOdoo)
+
+	if _, err := svc.issuePasswordResetToken(ctx, employee, "/activate"); !errors.Is(err, dbErr) {
+		t.Errorf("expected error %v, got %v", dbErr, err)
+	}
+}
+
+// concurrentTokenStoreQuerier is a minimal, stateful stand-in for
+// repo.Querier that mimics Postgres' read-committed semantics for
+// InvalidatePasswordResetTokensByEmployeeID/CreatePasswordResetToken: each
+// call takes its own lock rather than the pair being atomic, so it
+// reproduces the invalidate-then-insert race an unlocked
+// issuePasswordResetToken is exposed to. Every other repo.Querier method is
+// left nil and would panic if called — none are expected here.
+type concurrentTokenStoreQuerier struct {
+	repo.Querier
+	mu     sync.Mutex
+	unused map[int64]int // employee id -> count of still-redeemable tokens
+}
+
+func (f *concurrentTokenStoreQuerier) InvalidatePasswordResetTokensByEmployeeID(ctx context.Context, employeeID int64) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unused[employeeID] = 0
+	return nil
+}
+
+func (f *concurrentTokenStoreQuerier) CreatePasswordResetToken(ctx context.Context, arg repo.CreatePasswordResetTokenParams) (repo.PasswordResetToken, error) {
+	// Widen the race window between the two statements (unguarded, like the
+	// real invalidate-then-insert gap) so an unlocked caller reliably
+	// interleaves instead of only occasionally.
+	time.Sleep(time.Millisecond)
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unused[arg.EmployeeID]++
+	return repo.PasswordResetToken{EmployeeID: arg.EmployeeID}, nil
+}
+
+// TestEmployeeService_IssuePasswordResetToken_SerializesConcurrentRequests
+// covers issue #37 follow-up: two simultaneous issuance requests for the
+// same Employee (e.g. two admins clicking "resend" at once) must serialize
+// around invalidate-then-insert, or both can invalidate the prior token
+// before either inserts its new one, leaving more than one redeemable
+// token. Different Employees must not be serialized against each other.
+func TestEmployeeService_IssuePasswordResetToken_SerializesConcurrentRequests(t *testing.T) {
+	ctx := context.Background()
+	employeeA := repo.Employee{ID: 7, FullName: "Nguyen Van A", Email: "van-a@example.com"}
+	employeeB := repo.Employee{ID: 8, FullName: "Tran Thi B", Email: "tran-b@example.com"}
+
+	store := &concurrentTokenStoreQuerier{unused: map[int64]int{}}
+	svc := newTestService(store, nil, nil)
+
+	const attemptsPerEmployee = 10
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	wg.Add(2 * attemptsPerEmployee)
+	for _, employee := range []repo.Employee{employeeA, employeeB} {
+		for range attemptsPerEmployee {
+			go func(employee repo.Employee) {
+				defer wg.Done()
+				<-start
+				if _, err := svc.issuePasswordResetToken(ctx, employee, "/activate"); err != nil {
+					t.Errorf("employee %d: unexpected error: %v", employee.ID, err)
+				}
+			}(employee)
+		}
+	}
+	close(start)
+	wg.Wait()
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if got := store.unused[employeeA.ID]; got != 1 {
+		t.Errorf("employee A: expected exactly 1 redeemable token after concurrent issuance, got %d", got)
+	}
+	if got := store.unused[employeeB.ID]; got != 1 {
+		t.Errorf("employee B: expected exactly 1 redeemable token after concurrent issuance, got %d", got)
+	}
+}
+
 func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 	ctx := context.Background()
 
@@ -1758,6 +1912,7 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(activeEmployee, nil)
 				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
 				mockRepo.EXPECT().ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
+				mockRepo.EXPECT().InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), int64(1)).Return(nil)
 				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 				mockMailer.EXPECT().Send(gomock.Any(), activeEmployee.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(nil)
 			},
@@ -1771,6 +1926,7 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(activeEmployee, nil)
 				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
 				mockRepo.EXPECT().ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
+				mockRepo.EXPECT().InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), int64(1)).Return(nil)
 				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 				mockMailer.EXPECT().Send(gomock.Any(), activeEmployee.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(nil)
 			},
@@ -1789,6 +1945,7 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(activeEmployee, nil)
 				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
 				mockRepo.EXPECT().ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
+				mockRepo.EXPECT().InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), int64(1)).Return(nil)
 				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 				mockMailer.EXPECT().Send(gomock.Any(), activeEmployee.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(nil)
 			},
@@ -1804,6 +1961,7 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 				mockRepo.EXPECT().GetEmployeeByID(gomock.Any(), int64(1)).Return(activeEmployee, nil)
 				mockRepo.EXPECT().ListPositionIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
 				mockRepo.EXPECT().ListStoreIDsByEmployeeID(gomock.Any(), int64(1)).Return([]int64{}, nil)
+				mockRepo.EXPECT().InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), int64(1)).Return(nil)
 				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: 1}, nil)
 				mockMailer.EXPECT().Send(gomock.Any(), activeEmployee.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(dbErr)
 			},
@@ -1837,6 +1995,113 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 	}
 }
 
+// TestEmployeeService_RequestPasswordReset covers issue #38's self-service
+// entry point: every branch below must return without error to the caller
+// (RequestPasswordReset has no error return by design — see service.go) and
+// must only ever call the mailer for the two eligible branches.
+func TestEmployeeService_RequestPasswordReset(t *testing.T) {
+	ctx := context.Background()
+	dbErr := errors.New("connection refused")
+	clientIP := netip.MustParseAddr("203.0.113.7")
+
+	activeWithPassword := repo.Employee{ID: 1, FullName: "Nguyen Van A", Email: "van-a@example.com", IsActive: true, Password: []byte("hashed")}
+	activeNoPassword := repo.Employee{ID: 2, FullName: "Tran Thi B", Email: "tran-b@example.com", IsActive: true, Password: nil}
+	inactiveEmployee := repo.Employee{ID: 3, FullName: "Le Van C", Email: "le-c@example.com", IsActive: false, Password: []byte("hashed")}
+
+	tests := []struct {
+		name      string
+		email     string
+		setupMock func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient)
+	}{
+		{
+			name:  "TC-REQRESET-01: Unknown email sends no email",
+			email: "unknown@example.com",
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), "unknown@example.com").Return(repo.Employee{}, pgx.ErrNoRows)
+			},
+		},
+		{
+			name:  "TC-REQRESET-02: Employee lookup database error sends no email",
+			email: "unknown@example.com",
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), "unknown@example.com").Return(repo.Employee{}, dbErr)
+			},
+		},
+		{
+			name:  "TC-REQRESET-03: Inactive employee sends no email",
+			email: inactiveEmployee.Email,
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), inactiveEmployee.Email).Return(inactiveEmployee, nil)
+			},
+		},
+		{
+			name:  "TC-REQRESET-04: Active employee never activated resends the activation email",
+			email: activeNoPassword.Email,
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), activeNoPassword.Email).Return(activeNoPassword, nil)
+				mockRepo.EXPECT().InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), activeNoPassword.ID).Return(nil)
+				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: activeNoPassword.ID}, nil)
+				mockMailer.EXPECT().Send(gomock.Any(), activeNoPassword.Email, mailer.AccountActivationTemplate, gomock.Any()).Return(nil)
+			},
+		},
+		{
+			name:  "TC-REQRESET-05: Active employee with a password gets a password-reset email",
+			email: activeWithPassword.Email,
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), activeWithPassword.Email).Return(activeWithPassword, nil)
+				mockRepo.EXPECT().InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), activeWithPassword.ID).Return(nil)
+				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 2, EmployeeID: activeWithPassword.ID}, nil)
+				mockMailer.EXPECT().Send(gomock.Any(), activeWithPassword.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(nil)
+			},
+		},
+		{
+			name:  "TC-REQRESET-06: Token issuance failure for an eligible employee is swallowed, no mailer call",
+			email: activeWithPassword.Email,
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), activeWithPassword.Email).Return(activeWithPassword, nil)
+				mockRepo.EXPECT().InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), activeWithPassword.ID).Return(dbErr)
+			},
+		},
+		{
+			name:  "TC-REQRESET-07: Mailer failure for an eligible employee is swallowed",
+			email: activeWithPassword.Email,
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), activeWithPassword.Email).Return(activeWithPassword, nil)
+				mockRepo.EXPECT().InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), activeWithPassword.ID).Return(nil)
+				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 3, EmployeeID: activeWithPassword.ID}, nil)
+				mockMailer.EXPECT().Send(gomock.Any(), activeWithPassword.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(dbErr)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockRepo := mocks.NewMockQuerier(ctrl)
+			mockMailer := mailermocks.NewMockClient(ctrl)
+			mockOdoo := odoomocks.NewMockClient(ctrl)
+
+			// allowPasswordResetRequest (issue #39, locking added for #42) always
+			// runs first and is covered on its own in ratelimit_test.go — here
+			// it's always under both limits so every branch below still gets
+			// exercised.
+			mockRepo.EXPECT().LockPasswordResetRequestKey(gomock.Any(), gomock.Any()).Return(nil).Times(2)
+			mockRepo.EXPECT().DeletePasswordResetRequestsOlderThan(gomock.Any(), gomock.Any()).Return(int64(0), nil)
+			mockRepo.EXPECT().CountPasswordResetRequestsByEmail(gomock.Any(), gomock.Any()).Return(int64(0), nil)
+			mockRepo.EXPECT().CountPasswordResetRequestsByIPAddress(gomock.Any(), gomock.Any()).Return(int64(0), nil)
+			mockRepo.EXPECT().CreatePasswordResetRequest(gomock.Any(), gomock.Any()).Return(nil)
+
+			tc.setupMock(mockRepo, mockMailer)
+
+			svc := newTestService(mockRepo, mockMailer, mockOdoo)
+
+			// No error return to assert on (see service.go) — ctrl itself
+			// fails the test if an unexpected/missing mock call happened.
+			svc.RequestPasswordReset(ctx, tc.email, clientIP)
+		})
+	}
+}
+
 func TestEmployeeService_CompleteActivation(t *testing.T) {
 	ctx := context.Background()
 
@@ -1851,7 +2116,7 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 	}{
 		{
 			name:        "TC-ACTIVATE-01: Completes activation successfully",
-			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret"},
+			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(validToken, nil)
 				mockRepo.EXPECT().
@@ -1865,12 +2130,14 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 						}
 						return 1, nil
 					})
+				mockRepo.EXPECT().DeleteSessionByEmployeeID(gomock.Any(), validToken.EmployeeID).Return(int64(1), nil)
+				mockRepo.EXPECT().ResetFailedLoginAttempts(gomock.Any(), validToken.EmployeeID).Return(nil)
 			},
 			expectedErr: nil,
 		},
 		{
 			name:        "TC-ACTIVATE-02: Unknown/expired/used token translates to ErrInvalidOrExpiredToken",
-			inputParams: completeActivationParams{Token: "badtoken", Password: "supersecret"},
+			inputParams: completeActivationParams{Token: "badtoken", Password: "supersecret", ConfirmPassword: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("badtoken")).Return(repo.PasswordResetToken{}, pgx.ErrNoRows)
 			},
@@ -1878,7 +2145,7 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 		},
 		{
 			name:        "TC-ACTIVATE-03: Fails on database error redeeming the token",
-			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret"},
+			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(repo.PasswordResetToken{}, dbErr)
 			},
@@ -1886,10 +2153,31 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 		},
 		{
 			name:        "TC-ACTIVATE-04: Fails on database error setting the password",
-			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret"},
+			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(validToken, nil)
 				mockRepo.EXPECT().SetEmployeePassword(gomock.Any(), gomock.Any()).Return(int64(0), dbErr)
+			},
+			expectedErr: dbErr,
+		},
+		{
+			name:        "TC-ACTIVATE-05: Session deletion failure fails activation and rolls back the password change",
+			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "supersecret"},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(validToken, nil)
+				mockRepo.EXPECT().SetEmployeePassword(gomock.Any(), gomock.Any()).Return(int64(1), nil)
+				mockRepo.EXPECT().DeleteSessionByEmployeeID(gomock.Any(), validToken.EmployeeID).Return(int64(0), dbErr)
+			},
+			expectedErr: dbErr,
+		},
+		{
+			name:        "TC-ACTIVATE-06: Failed-login-attempts reset failure fails activation and rolls back the password change",
+			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "supersecret"},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(validToken, nil)
+				mockRepo.EXPECT().SetEmployeePassword(gomock.Any(), gomock.Any()).Return(int64(1), nil)
+				mockRepo.EXPECT().DeleteSessionByEmployeeID(gomock.Any(), validToken.EmployeeID).Return(int64(1), nil)
+				mockRepo.EXPECT().ResetFailedLoginAttempts(gomock.Any(), validToken.EmployeeID).Return(dbErr)
 			},
 			expectedErr: dbErr,
 		},
@@ -1961,6 +2249,9 @@ func TestEmployeeService_CreateEmployee_SendsActivationEmailAsynchronously(t *te
 			Email:          params.Email,
 			Username:       params.Username,
 		}, nil)
+	mockRepo.EXPECT().
+		InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), gomock.Any()).
+		Return(nil)
 	mockRepo.EXPECT().
 		CreatePasswordResetToken(gomock.Any(), gomock.Any()).
 		Return(repo.PasswordResetToken{ID: 2, EmployeeID: 2}, nil)

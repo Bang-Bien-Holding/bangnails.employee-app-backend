@@ -8,6 +8,8 @@ import (
 	"context"
 	"net"
 	"net/netip"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
@@ -21,12 +23,15 @@ type Querier interface {
 	// (see ADR-0011) — a count short of the distinct submitted ids means at
 	// least one id isn't a real employee.
 	CountEmployeesByIDs(ctx context.Context, ids []int64) (int64, error)
+	CountPasswordResetRequestsByEmail(ctx context.Context, arg CountPasswordResetRequestsByEmailParams) (int64, error)
+	CountPasswordResetRequestsByIPAddress(ctx context.Context, arg CountPasswordResetRequestsByIPAddressParams) (int64, error)
 	// Used to validate a submitted set of position ids in one round trip: if the
 	// count of matching rows is less than the count of distinct submitted ids,
 	// at least one id doesn't reference a real position (see ADR-0008 — this
 	// must be a clear client error, not a raw FK-violation 500).
 	CountPositionsByIDs(ctx context.Context, ids []int64) (int64, error)
 	CreateEmployee(ctx context.Context, arg CreateEmployeeParams) (Employee, error)
+	CreatePasswordResetRequest(ctx context.Context, arg CreatePasswordResetRequestParams) error
 	CreatePasswordResetToken(ctx context.Context, arg CreatePasswordResetTokenParams) (PasswordResetToken, error)
 	CreatePosition(ctx context.Context, name string) (Position, error)
 	DeleteEmployee(ctx context.Context, id int64) (int64, error)
@@ -50,6 +55,10 @@ type Querier interface {
 	// employee_positions' diff pair, only runSync ever calls this — store
 	// membership is Odoo-owned, never admin-writable (see ADR-0009).
 	DeleteEmployeeStoresNotIn(ctx context.Context, arg DeleteEmployeeStoresNotInParams) error
+	// Opportunistic cleanup (issue #39): run before the count checks on every
+	// password-reset request so the table never accumulates rows outside the
+	// rate-limit window, with no separate cleanup job needed.
+	DeletePasswordResetRequestsOlderThan(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error)
 	DeletePosition(ctx context.Context, id int64) (int64, error)
 	// Bulk-delete counterpart of DeletePosition (see issue #13) — deletes every
 	// submitted id in one statement. BulkDeletePositions pre-checks all ids
@@ -57,6 +66,12 @@ type Querier interface {
 	// only the "delete" half of an all-or-nothing count-check-then-delete, not
 	// an existence check itself.
 	DeletePositions(ctx context.Context, ids []int64) (int64, error)
+	// CompleteActivation (issue #38): signs out any device holding a Session
+	// under the Employee's old password once they've completed an
+	// activation/reset. employee_id is UNIQUE on sessions, so this ends at most
+	// one row; an Employee with no open Session returns 0 rows rather than an
+	// error.
+	DeleteSessionByEmployeeID(ctx context.Context, employeeID int64) (int64, error)
 	// Logout: ends the Session matching this bearer token's hash immediately,
 	// no re-authentication required. A hash matching no row (already logged
 	// out, expired and reaped, or never valid) still returns 0 rows rather than
@@ -143,6 +158,10 @@ type Querier interface {
 	InsertStoreWifiIPs(ctx context.Context, arg InsertStoreWifiIPsParams) error
 	// MAC-address counterpart of InsertStoreWifiIPs.
 	InsertStoreWifiMacs(ctx context.Context, arg InsertStoreWifiMacsParams) error
+	// Marks every still-outstanding (unused) token for an Employee as consumed.
+	// Called by issuePasswordResetToken before it inserts a new token, so at
+	// most one issued token is ever redeemable per Employee at a time.
+	InvalidatePasswordResetTokensByEmployeeID(ctx context.Context, employeeID int64) error
 	// The single centralized "does this Employee hold the Admin Position" check
 	// ADR-0015 calls for — an exact, case-insensitive match on the Position
 	// name "Admin", not a pattern. Shared by Login's presence-check bypass
@@ -222,6 +241,16 @@ type Querier interface {
 	// Store row so the caller can gate the IP/MAC tiers per store without a
 	// second query; geofence columns are on the same row for the same reason.
 	ListStoresForLoginByEmployeeID(ctx context.Context, employeeID int64) ([]ListStoresForLoginByEmployeeIDRow, error)
+	// Closes issue #42's TOCTOU race: a transaction-scoped Postgres advisory
+	// lock (pg_advisory_xact_lock), released automatically on commit/rollback,
+	// taken around the whole cleanup/count/insert sequence in
+	// allowPasswordResetRequest. classid namespaces the lock space so the
+	// email dimension and the IP dimension can never collide on the same key
+	// by coincidence (hashtext is 32-bit); callers must always acquire the
+	// email lock before the IP lock, in that fixed order, so two concurrent
+	// requests can never deadlock by acquiring the two dimensions in opposite
+	// order.
+	LockPasswordResetRequestKey(ctx context.Context, arg LockPasswordResetRequestKeyParams) error
 	// Atomically increments failed_login_attempts and, only once the new count
 	// reaches sqlc.arg(threshold), sets locked_until to sqlc.arg(locked_until)
 	// (computed in Go as now + the lockout duration, so the duration itself

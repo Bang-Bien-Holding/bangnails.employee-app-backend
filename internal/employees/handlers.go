@@ -10,6 +10,7 @@ import (
 
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/httpx"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/json"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-playground/validator/v10"
 )
 
@@ -243,6 +244,53 @@ func (h *Handler) CompleteActivation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// requestPasswordResetResponse is the one and only body
+// RequestPasswordReset ever returns, on every request regardless of
+// outcome — see requestPasswordResetGenericMessage.
+type requestPasswordResetResponse struct {
+	Message string `json:"message"`
+}
+
+// requestPasswordResetGenericMessage is deliberately identical for every
+// case RequestPasswordReset's service call can branch into — unknown email,
+// inactive employee, pending-activation employee, or active employee — so
+// none of those cases is distinguishable from the HTTP response (issue #38,
+// #36's anti-enumeration requirement).
+const requestPasswordResetGenericMessage = "If an account with that email exists, we've sent instructions."
+
+// RequestPasswordReset is a public, unauthenticated endpoint — any caller
+// can submit any email, no admin session required. It always responds
+// 200 OK with the same generic message; the exceptions are a syntactically
+// malformed email, rejected below by validate.Struct before the service is
+// ever called, and an undeterminable client IP, both pure
+// input/infrastructure conditions that reveal nothing about account
+// existence (unlike the rate limiting from issue #39, which the service
+// layer enforces with no observable difference in this response). The IP
+// itself comes from middleware.GetClientIPAddr, not the body — same
+// ADR-0013 pattern as auth.Handler.Login.
+func (h *Handler) RequestPasswordReset(w http.ResponseWriter, r *http.Request) {
+	var params requestPasswordResetParams
+	if err := json.Read(w, r, &params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := validate.Struct(params); err != nil {
+		http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	clientIP := middleware.GetClientIPAddr(r.Context())
+	if !clientIP.IsValid() {
+		http.Error(w, "could not determine client IP", http.StatusInternalServerError)
+		return
+	}
+
+	h.service.RequestPasswordReset(r.Context(), params.Email, clientIP)
+
+	json.Write(w, http.StatusOK, requestPasswordResetResponse{Message: requestPasswordResetGenericMessage})
 }
 
 // ListEmployees handles GET /employees' optional search/filter query

@@ -89,6 +89,15 @@ FROM (
 WHERE employees.odoo_employee_id = data.odoo_employee_id
 RETURNING employees.id, employees.odoo_employee_id, false AS inserted;
 
+-- name: InvalidatePasswordResetTokensByEmployeeID :exec
+-- Marks every still-outstanding (unused) token for an Employee as consumed.
+-- Called by issuePasswordResetToken before it inserts a new token, so at
+-- most one issued token is ever redeemable per Employee at a time.
+UPDATE password_reset_tokens
+SET used_at = now()
+WHERE employee_id = $1
+  AND used_at IS NULL;
+
 -- name: CreatePasswordResetToken :one
 INSERT INTO password_reset_tokens (employee_id, token_hash, expires_at)
 VALUES ($1, $2, $3)
@@ -551,6 +560,15 @@ RETURNING *;
 DELETE FROM sessions
 WHERE token_hash = sqlc.arg(token_hash);
 
+-- name: DeleteSessionByEmployeeID :execrows
+-- CompleteActivation (issue #38): signs out any device holding a Session
+-- under the Employee's old password once they've completed an
+-- activation/reset. employee_id is UNIQUE on sessions, so this ends at most
+-- one row; an Employee with no open Session returns 0 rows rather than an
+-- error.
+DELETE FROM sessions
+WHERE employee_id = sqlc.arg(employee_id);
+
 -- name: GetSessionByTokenHash :one
 -- Heartbeat's (issue #23) and ValidateSession's (issue #25) lookup of the
 -- Session a bearer token currently names. A hash matching no row — never
@@ -627,3 +645,36 @@ WHERE employee_id = sqlc.arg(employee_id)
 INSERT INTO employee_stores (employee_id, store_id)
 SELECT sqlc.arg(employee_id), unnest(sqlc.arg(store_ids)::bigint[])
 ON CONFLICT (employee_id, store_id) DO NOTHING;
+
+-- name: DeletePasswordResetRequestsOlderThan :execrows
+-- Opportunistic cleanup (issue #39): run before the count checks on every
+-- password-reset request so the table never accumulates rows outside the
+-- rate-limit window, with no separate cleanup job needed.
+DELETE FROM password_reset_requests
+WHERE created_at < sqlc.arg(cutoff);
+
+-- name: CountPasswordResetRequestsByEmail :one
+SELECT count(*) FROM password_reset_requests
+WHERE email = sqlc.arg(email)
+  AND created_at >= sqlc.arg(since);
+
+-- name: CountPasswordResetRequestsByIPAddress :one
+SELECT count(*) FROM password_reset_requests
+WHERE ip_address = sqlc.arg(ip_address)
+  AND created_at >= sqlc.arg(since);
+
+-- name: CreatePasswordResetRequest :exec
+INSERT INTO password_reset_requests (ip_address, email)
+VALUES (sqlc.arg(ip_address), sqlc.arg(email));
+
+-- name: LockPasswordResetRequestKey :exec
+-- Closes issue #42's TOCTOU race: a transaction-scoped Postgres advisory
+-- lock (pg_advisory_xact_lock), released automatically on commit/rollback,
+-- taken around the whole cleanup/count/insert sequence in
+-- allowPasswordResetRequest. classid namespaces the lock space so the
+-- email dimension and the IP dimension can never collide on the same key
+-- by coincidence (hashtext is 32-bit); callers must always acquire the
+-- email lock before the IP lock, in that fixed order, so two concurrent
+-- requests can never deadlock by acquiring the two dimensions in opposite
+-- order.
+SELECT pg_advisory_xact_lock(sqlc.arg(classid)::int, hashtext(sqlc.arg(key)::text));

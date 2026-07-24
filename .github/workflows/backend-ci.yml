@@ -87,10 +87,13 @@ jobs:
     needs: lint
     # Login/Logout/Heartbeat/Activate (cmd/login_e2e_test.go, build tag
     # "dbe2e"), employees search (cmd/employees_search_e2e_test.go, same
-    # tag), and stores search (cmd/stores_search_e2e_test.go, same tag)
-    # touch zero Odoo — unlike cmd/e2e_test.go's Odoo suite (build tag
-    # "e2e", still local-only, see that file's doc comment), these only need
-    # a real Postgres, so they run here on every PR.
+    # tag), stores search (cmd/stores_search_e2e_test.go, same tag), and
+    # password reset (cmd/password_reset_e2e_test.go, same tag) touch zero
+    # Odoo — unlike cmd/e2e_test.go's Odoo suite (build tag "e2e", still
+    # local-only, see that file's doc comment), these only need a real
+    # Postgres (and, for password reset, Mailpit to read back the emailed
+    # token — see docker-compose.yaml's mailpit service), so they run here
+    # on every PR.
     services:
       postgres:
         image: postgres:16-alpine
@@ -105,6 +108,11 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      mailpit:
+        image: axllent/mailpit@sha256:b868afa176bfd6cce2323ea316cd99ccad77915e51e595748f6d786700ecf109 # v1.30.5
+        ports:
+          - 1025:1025 # SMTP (MAILPIT_ADDR default: localhost:1025)
+          - 8025:8025 # HTTP API (password_reset_e2e_test.go's mailpitAPIBase)
     steps:
       - uses: actions/checkout@v4
         with:

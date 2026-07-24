@@ -90,11 +90,26 @@ func (c *loginE2EClient) Logout(t *testing.T, token string) apiResponse {
 	return c.authRequest(t, http.MethodPost, "/auth/logout", token, nil)
 }
 
+// Activate sends confirmPassword equal to password — every existing call
+// site here is exercising something other than the confirmPassword check
+// (reuse, expiry, staleness), so it needs the confirm to match for the
+// request to even reach that code path (issue #38's eqfield validation runs
+// before the service call). TestPasswordResetE2E's own file covers a
+// deliberate mismatch via RawActivate.
 func (c *loginE2EClient) Activate(t *testing.T, token, password string) apiResponse {
 	t.Helper()
+	return c.RawActivate(t, token, password, password)
+}
+
+// RawActivate posts an arbitrary confirmPassword alongside token/password —
+// the escape hatch past Activate's matching-confirm convenience, for tests
+// that need a deliberate mismatch.
+func (c *loginE2EClient) RawActivate(t *testing.T, token, password, confirmPassword string) apiResponse {
+	t.Helper()
 	return e2eRequest(t, c.http, http.MethodPost, c.base+"/activate", map[string]any{
-		"token":    token,
-		"password": password,
+		"token":           token,
+		"password":        password,
+		"confirmPassword": confirmPassword,
 	})
 }
 
@@ -108,6 +123,17 @@ func (c *loginE2EClient) MustActivate(t *testing.T, token, password string) {
 	}
 }
 
+// RequestPasswordReset hits the real public, unauthenticated
+// POST /password-reset-requests endpoint (issue #38) — the entry point
+// TestPasswordResetE2E drives, as opposed to seeding a token directly via
+// fixtures.ActivationToken.
+func (c *loginE2EClient) RequestPasswordReset(t *testing.T, email string) apiResponse {
+	t.Helper()
+	return e2eRequest(t, c.http, http.MethodPost, c.base+"/password-reset-requests", map[string]any{
+		"email": email,
+	})
+}
+
 // AdminGET hits the one real admin-gated route (GET /v1/employees)
 // TestAdminOnlyGatingE2E exercises the AdminOnly gate through — the gate
 // itself, not what it protects, is the point, so this stays fixed rather
@@ -115,6 +141,18 @@ func (c *loginE2EClient) MustActivate(t *testing.T, token, password string) {
 func (c *loginE2EClient) AdminGET(t *testing.T, token string) apiResponse {
 	t.Helper()
 	return c.authRequest(t, http.MethodGet, "/employees", token, nil)
+}
+
+// BulkSendPasswordResetLinks hits the real admin-gated
+// POST /v1/employees/password-reset-links endpoint — the one entry point
+// TestActivationThenLoginE2E's stale-token case drives to prove
+// issuePasswordResetToken's invalidation (issue #37) fires through a real
+// HTTP call, not just the mocked unit test.
+func (c *loginE2EClient) BulkSendPasswordResetLinks(t *testing.T, token string, ids []int64) apiResponse {
+	t.Helper()
+	return c.authRequest(t, http.MethodPost, "/employees/password-reset-links", token, map[string]any{
+		"ids": ids,
+	})
 }
 
 // authRequest is the Bearer-authenticated request builder every

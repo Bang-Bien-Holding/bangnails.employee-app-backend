@@ -35,6 +35,13 @@ type EmployeeStore struct {
 	StoreID    int64 `json:"store_id"`
 }
 
+type PasswordResetRequest struct {
+	ID        int64              `json:"id"`
+	IpAddress netip.Addr         `json:"ip_address"`
+	Email     string             `json:"email"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type PasswordResetToken struct {
 	ID         int64              `json:"id"`
 	EmployeeID int64              `json:"employee_id"`

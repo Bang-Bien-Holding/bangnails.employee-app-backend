@@ -72,6 +72,42 @@ func (q *Queries) CountEmployeesByIDs(ctx context.Context, ids []int64) (int64, 
 	return count, err
 }
 
+const countPasswordResetRequestsByEmail = `-- name: CountPasswordResetRequestsByEmail :one
+SELECT count(*) FROM password_reset_requests
+WHERE email = $1
+  AND created_at >= $2
+`
+
+type CountPasswordResetRequestsByEmailParams struct {
+	Email string             `json:"email"`
+	Since pgtype.Timestamptz `json:"since"`
+}
+
+func (q *Queries) CountPasswordResetRequestsByEmail(ctx context.Context, arg CountPasswordResetRequestsByEmailParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPasswordResetRequestsByEmail, arg.Email, arg.Since)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countPasswordResetRequestsByIPAddress = `-- name: CountPasswordResetRequestsByIPAddress :one
+SELECT count(*) FROM password_reset_requests
+WHERE ip_address = $1
+  AND created_at >= $2
+`
+
+type CountPasswordResetRequestsByIPAddressParams struct {
+	IpAddress netip.Addr         `json:"ip_address"`
+	Since     pgtype.Timestamptz `json:"since"`
+}
+
+func (q *Queries) CountPasswordResetRequestsByIPAddress(ctx context.Context, arg CountPasswordResetRequestsByIPAddressParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countPasswordResetRequestsByIPAddress, arg.IpAddress, arg.Since)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPositionsByIDs = `-- name: CountPositionsByIDs :one
 SELECT count(*) FROM positions
 WHERE id = ANY($1::bigint[])
@@ -123,6 +159,21 @@ func (q *Queries) CreateEmployee(ctx context.Context, arg CreateEmployeeParams) 
 		&i.LockedUntil,
 	)
 	return i, err
+}
+
+const createPasswordResetRequest = `-- name: CreatePasswordResetRequest :exec
+INSERT INTO password_reset_requests (ip_address, email)
+VALUES ($1, $2)
+`
+
+type CreatePasswordResetRequestParams struct {
+	IpAddress netip.Addr `json:"ip_address"`
+	Email     string     `json:"email"`
+}
+
+func (q *Queries) CreatePasswordResetRequest(ctx context.Context, arg CreatePasswordResetRequestParams) error {
+	_, err := q.db.Exec(ctx, createPasswordResetRequest, arg.IpAddress, arg.Email)
+	return err
 }
 
 const createPasswordResetToken = `-- name: CreatePasswordResetToken :one
@@ -247,6 +298,22 @@ func (q *Queries) DeleteEmployeeStoresNotIn(ctx context.Context, arg DeleteEmplo
 	return err
 }
 
+const deletePasswordResetRequestsOlderThan = `-- name: DeletePasswordResetRequestsOlderThan :execrows
+DELETE FROM password_reset_requests
+WHERE created_at < $1
+`
+
+// Opportunistic cleanup (issue #39): run before the count checks on every
+// password-reset request so the table never accumulates rows outside the
+// rate-limit window, with no separate cleanup job needed.
+func (q *Queries) DeletePasswordResetRequestsOlderThan(ctx context.Context, cutoff pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deletePasswordResetRequestsOlderThan, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deletePosition = `-- name: DeletePosition :execrows
 DELETE FROM positions
 WHERE id = $1
@@ -272,6 +339,24 @@ WHERE id = ANY($1::bigint[])
 // an existence check itself.
 func (q *Queries) DeletePositions(ctx context.Context, ids []int64) (int64, error) {
 	result, err := q.db.Exec(ctx, deletePositions, ids)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteSessionByEmployeeID = `-- name: DeleteSessionByEmployeeID :execrows
+DELETE FROM sessions
+WHERE employee_id = $1
+`
+
+// CompleteActivation (issue #38): signs out any device holding a Session
+// under the Employee's old password once they've completed an
+// activation/reset. employee_id is UNIQUE on sessions, so this ends at most
+// one row; an Employee with no open Session returns 0 rows rather than an
+// error.
+func (q *Queries) DeleteSessionByEmployeeID(ctx context.Context, employeeID int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSessionByEmployeeID, employeeID)
 	if err != nil {
 		return 0, err
 	}
@@ -734,6 +819,21 @@ type InsertStoreWifiMacsParams struct {
 // MAC-address counterpart of InsertStoreWifiIPs.
 func (q *Queries) InsertStoreWifiMacs(ctx context.Context, arg InsertStoreWifiMacsParams) error {
 	_, err := q.db.Exec(ctx, insertStoreWifiMacs, arg.StoreID, arg.MacAddresses)
+	return err
+}
+
+const invalidatePasswordResetTokensByEmployeeID = `-- name: InvalidatePasswordResetTokensByEmployeeID :exec
+UPDATE password_reset_tokens
+SET used_at = now()
+WHERE employee_id = $1
+  AND used_at IS NULL
+`
+
+// Marks every still-outstanding (unused) token for an Employee as consumed.
+// Called by issuePasswordResetToken before it inserts a new token, so at
+// most one issued token is ever redeemable per Employee at a time.
+func (q *Queries) InvalidatePasswordResetTokensByEmployeeID(ctx context.Context, employeeID int64) error {
+	_, err := q.db.Exec(ctx, invalidatePasswordResetTokensByEmployeeID, employeeID)
 	return err
 }
 
@@ -1287,6 +1387,29 @@ func (q *Queries) ListStoresForLoginByEmployeeID(ctx context.Context, employeeID
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockPasswordResetRequestKey = `-- name: LockPasswordResetRequestKey :exec
+SELECT pg_advisory_xact_lock($1::int, hashtext($2::text))
+`
+
+type LockPasswordResetRequestKeyParams struct {
+	Classid int32  `json:"classid"`
+	Key     string `json:"key"`
+}
+
+// Closes issue #42's TOCTOU race: a transaction-scoped Postgres advisory
+// lock (pg_advisory_xact_lock), released automatically on commit/rollback,
+// taken around the whole cleanup/count/insert sequence in
+// allowPasswordResetRequest. classid namespaces the lock space so the
+// email dimension and the IP dimension can never collide on the same key
+// by coincidence (hashtext is 32-bit); callers must always acquire the
+// email lock before the IP lock, in that fixed order, so two concurrent
+// requests can never deadlock by acquiring the two dimensions in opposite
+// order.
+func (q *Queries) LockPasswordResetRequestKey(ctx context.Context, arg LockPasswordResetRequestKeyParams) error {
+	_, err := q.db.Exec(ctx, lockPasswordResetRequestKey, arg.Classid, arg.Key)
+	return err
 }
 
 const recordFailedLoginAttempt = `-- name: RecordFailedLoginAttempt :one

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"sort"
 	"strconv"
 	"time"
@@ -70,6 +71,10 @@ type service struct {
 	odoo   odoo.Client
 
 	syncGuard syncx.Guard
+
+	// passwordResetLocks serializes issuePasswordResetToken per Employee —
+	// see the lock/defer unlock there for why.
+	passwordResetLocks syncx.KeyedMutex[int64]
 }
 
 func NewService(pool *pgxpool.Pool, m mailer.Client, o odoo.Client) Service {
@@ -392,15 +397,50 @@ func (s *service) BulkDeleteEmployees(ctx context.Context, ids []int64) []BulkAc
 	return results
 }
 
-// CompleteActivation redeems the token (unexpired, unused) and sets the
-// employee's password (bcrypt-hashed). Serves both first-time activation and
-// an admin-triggered reset — both send the employee the same kind of token,
-// and completing either is the same operation from the DB's point of view.
-// RedeemPasswordResetToken's UPDATE...RETURNING is atomic: its row lock
-// means only one concurrent caller can redeem a given token, so the password
-// update below only ever runs after that caller has exclusively claimed it.
+// CompleteActivation redeems the token (unexpired, unused), sets the
+// employee's password (bcrypt-hashed), deletes their existing Session (if
+// any), and clears their failed-login-attempt count/lockout, all within one
+// transaction. Serves first-time activation, an admin-triggered reset, and a
+// self-service reset (issue #38) alike — all three send the employee the
+// same kind of token, and completing any of them is the same operation from
+// the DB's point of view. RedeemPasswordResetToken's UPDATE...RETURNING is
+// atomic: its row lock means only one concurrent caller can redeem a given
+// token, so the rest of the transaction only ever runs after that caller has
+// exclusively claimed it.
+//
+// The session deletion and lockout reset (issue #38) exist so the employee
+// can log in immediately with the new password on any device, without a
+// stale session or lockout from before the reset getting in the way; a
+// session left behind by a failed delete would also mean the reset didn't
+// actually revoke whatever access that session held, defeating the point of
+// resetting the password. So unlike the mailer-facing branches elsewhere in
+// this file, a failure in either is propagated and rolls back the whole
+// transaction (including the password change) rather than being swallowed.
 func (s *service) CompleteActivation(ctx context.Context, params completeActivationParams) error {
-	resetToken, err := s.repo.RedeemPasswordResetToken(ctx, tokenx.Hash(params.Token))
+	err := s.withTx(ctx, func(q repo.Querier) error {
+		resetToken, err := q.RedeemPasswordResetToken(ctx, tokenx.Hash(params.Token))
+		if err != nil {
+			return err
+		}
+
+		hashed, err := bcrypt.GenerateFromPassword([]byte(params.Password), bcrypt.DefaultCost)
+		if err != nil {
+			return err
+		}
+
+		if _, err := q.SetEmployeePassword(ctx, repo.SetEmployeePasswordParams{
+			ID:       resetToken.EmployeeID,
+			Password: hashed,
+		}); err != nil {
+			return err
+		}
+
+		if _, err := q.DeleteSessionByEmployeeID(ctx, resetToken.EmployeeID); err != nil {
+			return err
+		}
+
+		return q.ResetFailedLoginAttempts(ctx, resetToken.EmployeeID)
+	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrInvalidOrExpiredToken
@@ -408,16 +448,77 @@ func (s *service) CompleteActivation(ctx context.Context, params completeActivat
 		return err
 	}
 
-	hashed, err := bcrypt.GenerateFromPassword([]byte(params.Password), bcrypt.DefaultCost)
+	return nil
+}
+
+// RequestPasswordReset is the public, unauthenticated
+// POST /password-reset-requests endpoint's entry point (issue #38). It has
+// no error return: the handler always returns the same generic 200
+// regardless of what happens here, so every branch below either sends an
+// email or silently does nothing, and any lookup/issuance/send failure is
+// swallowed (logged only) rather than surfaced — surfacing it would let a
+// caller distinguish "unknown email" (fails fast, no DB error) from "known
+// email, transient failure" (same generic response either way) by
+// timing/behavior, which is exactly the enumeration signal this endpoint
+// must not leak. The same applies to rate limiting (issue #39):
+// allowPasswordResetRequest's decision, and any error it returns, are both
+// treated as "don't send" with no observable difference to the caller.
+//
+// Branches by Employee state at request time (see issue #36's spec):
+//   - unknown email, or found but is_active = false: no email sent.
+//   - found, active, no password ever set (pending activation): resend the
+//     activation email instead of a reset email — mirrors
+//     auth.Service.Login's notActivated check (len(Password) == 0).
+//   - found, active, password already set: send the password-reset email.
+func (s *service) RequestPasswordReset(ctx context.Context, email string, clientIP netip.Addr) {
+	allow, err := s.allowPasswordResetRequest(ctx, email, clientIP)
+	if err != nil {
+		slog.Error("employees: request password reset rate limit", "error", err)
+		return
+	}
+	if !allow {
+		return
+	}
+
+	employee, err := s.repo.GetEmployeeByEmail(ctx, email)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.Error("employees: request password reset lookup", "error", err)
+		}
+		return
+	}
+
+	if !employee.IsActive {
+		return
+	}
+
+	if len(employee.Password) == 0 {
+		s.sendActivationEmail(ctx, employee)
+		return
+	}
+
+	if err := s.sendPasswordResetEmail(ctx, employee); err != nil {
+		slog.Error("employees: send password reset email", "employee_id", employee.ID, "error", err)
+	}
+}
+
+// sendPasswordResetEmail issues a token via issuePasswordResetToken and
+// emails the resulting link using the password-reset template, returning
+// whichever of the two failed so each caller can apply its own error policy
+// (surfaced per-id in BulkSendPasswordResetLinks vs swallowed-and-logged in
+// RequestPasswordReset).
+func (s *service) sendPasswordResetEmail(ctx context.Context, employee repo.Employee) error {
+	link, err := s.issuePasswordResetToken(ctx, employee, "/reset-password")
 	if err != nil {
 		return err
 	}
 
-	_, err = s.repo.SetEmployeePassword(ctx, repo.SetEmployeePasswordParams{
-		ID:       resetToken.EmployeeID,
-		Password: hashed,
-	})
-	return err
+	data := mailer.PasswordResetData{
+		FullName:   employee.FullName,
+		Link:       link,
+		TTLMinutes: int(activationTokenTTL.Minutes()),
+	}
+	return s.mailer.Send(ctx, employee.Email, mailer.PasswordResetTemplate, data)
 }
 
 func (s *service) GetEmployeeByID(ctx context.Context, id int64) (EmployeeDetail, error) {
@@ -472,18 +573,7 @@ func (s *service) BulkSendPasswordResetLinks(ctx context.Context, ids []int64) [
 			continue
 		}
 
-		link, err := s.issuePasswordResetToken(ctx, employee, "/reset-password")
-		if err != nil {
-			results[i].Error = err.Error()
-			continue
-		}
-
-		data := mailer.PasswordResetData{
-			FullName:   employee.FullName,
-			Link:       link,
-			TTLMinutes: int(activationTokenTTL.Minutes()),
-		}
-		if err := s.mailer.Send(ctx, employee.Email, mailer.PasswordResetTemplate, data); err != nil {
+		if err := s.sendPasswordResetEmail(ctx, employee); err != nil {
 			results[i].Error = err.Error()
 			continue
 		}
@@ -746,10 +836,27 @@ func (s *service) issuePasswordResetToken(ctx context.Context, employee repo.Emp
 		return "", err
 	}
 
-	_, err = s.repo.CreatePasswordResetToken(ctx, repo.CreatePasswordResetTokenParams{
-		EmployeeID: employee.ID,
-		TokenHash:  tokenx.Hash(token),
-		ExpiresAt:  pgtype.Timestamptz{Time: time.Now().Add(activationTokenTTL), Valid: true},
+	// Concurrent issuance for the same Employee (e.g. two admins clicking
+	// "resend" at once) must serialize around invalidate-then-insert:
+	// without this lock, both requests could invalidate the prior token
+	// before either inserts its new one, leaving two redeemable tokens.
+	// Different Employees never contend for the same lock.
+	unlock := s.passwordResetLocks.Lock(employee.ID)
+	defer unlock()
+
+	// Invalidating prior tokens and inserting the new one run in the same
+	// transaction so a failure between the two never leaves the Employee
+	// with zero redeemable tokens.
+	err = s.withTx(ctx, func(q repo.Querier) error {
+		if err := q.InvalidatePasswordResetTokensByEmployeeID(ctx, employee.ID); err != nil {
+			return err
+		}
+		_, err := q.CreatePasswordResetToken(ctx, repo.CreatePasswordResetTokenParams{
+			EmployeeID: employee.ID,
+			TokenHash:  tokenx.Hash(token),
+			ExpiresAt:  pgtype.Timestamptz{Time: time.Now().Add(activationTokenTTL), Valid: true},
+		})
+		return err
 	})
 	if err != nil {
 		return "", err

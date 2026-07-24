@@ -37,3 +37,31 @@ func (g *Guard) Syncing() bool {
 	defer g.mu.Unlock()
 	return g.syncing
 }
+
+// KeyedMutex is a set of independent locks keyed by an arbitrary comparable
+// value: callers that lock the same key serialize against each other, while
+// callers locking different keys never block one another. The zero value is
+// ready to use.
+type KeyedMutex[K comparable] struct {
+	mu    sync.Mutex
+	locks map[K]*sync.Mutex
+}
+
+// Lock claims the lock for key, blocking until it's free, and returns a func
+// that releases it. Entries are never removed from the underlying map, so K
+// should be drawn from a bounded domain (e.g. an Employee id).
+func (m *KeyedMutex[K]) Lock(key K) func() {
+	m.mu.Lock()
+	if m.locks == nil {
+		m.locks = make(map[K]*sync.Mutex)
+	}
+	l, ok := m.locks[key]
+	if !ok {
+		l = &sync.Mutex{}
+		m.locks[key] = l
+	}
+	m.mu.Unlock()
+
+	l.Lock()
+	return l.Unlock
+}
