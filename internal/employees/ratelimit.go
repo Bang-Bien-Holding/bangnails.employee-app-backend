@@ -3,6 +3,7 @@ package employees
 import (
 	"context"
 	"net/netip"
+	"strings"
 	"time"
 
 	repo "github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/adapters/postgresql/sqlc"
@@ -34,6 +35,12 @@ const (
 // for the same email/IP can let more than the limit through before any
 // request's insert commits. Deferred — see the issue for why.
 func (s *service) allowPasswordResetRequest(ctx context.Context, email string, clientIP netip.Addr) (bool, error) {
+	// employees.email is CITEXT (case-insensitive); password_reset_requests.email
+	// is plain TEXT, so this table must be lowercased on the way in — otherwise
+	// resubmitting the same address with different casing evades the per-email
+	// throttle below despite resolving to the same employee row.
+	email = strings.ToLower(email)
+
 	since := pgtype.Timestamptz{Time: time.Now().Add(-passwordResetRequestWindow), Valid: true}
 
 	if _, err := s.repo.DeletePasswordResetRequestsOlderThan(ctx, since); err != nil {
