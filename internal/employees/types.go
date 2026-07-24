@@ -134,12 +134,27 @@ type bulkSendPasswordResetLinksParams struct {
 }
 
 // completeActivationParams is the body for the public POST /activate
-// endpoint — serves both first-time activation and an admin-triggered
-// password reset, since both land the employee on a page that consumes a
-// password_reset_tokens row the same way.
+// endpoint — serves both first-time activation and an admin-triggered or
+// self-service password reset, since all three land the employee on a page
+// that consumes a password_reset_tokens row the same way. ConfirmPassword is
+// enforced server-side via eqfield (issue #38) rather than left to the
+// frontend alone — a mismatch fails validate.Struct the same way any other
+// invalid field does, surfacing as the handler's existing 400 path.
 type completeActivationParams struct {
-	Token    string `json:"token" validate:"required"`
-	Password string `json:"password" validate:"required,min=8"`
+	Token           string `json:"token" validate:"required"`
+	Password        string `json:"password" validate:"required,min=8"`
+	ConfirmPassword string `json:"confirmPassword" validate:"required,eqfield=Password"`
+}
+
+// requestPasswordResetParams is the body for the public
+// POST /password-reset-requests endpoint (issue #38) — an Employee submits
+// their own email, with no admin involvement. The handler's response is
+// always the same generic 200 regardless of what RequestPasswordReset finds
+// (see Handler.RequestPasswordReset) — malformed email syntax is the one
+// exception, rejected by this validate:"email" tag before the service is
+// ever called, since it reveals nothing about account existence.
+type requestPasswordResetParams struct {
+	Email string `json:"email" validate:"required,email"`
 }
 
 // syncEmployeesParams is the body for POST /employees/syncs. IDs are internal
@@ -225,6 +240,7 @@ type Service interface {
 	BulkDeleteEmployees(ctx context.Context, ids []int64) []BulkActionResult
 	BulkSendPasswordResetLinks(ctx context.Context, ids []int64) []BulkActionResult
 	CompleteActivation(ctx context.Context, params completeActivationParams) error
+	RequestPasswordReset(ctx context.Context, email string)
 	SyncEmployees(ctx context.Context, ids []int64) error
 	SyncStatus(ctx context.Context) SyncStatus
 }

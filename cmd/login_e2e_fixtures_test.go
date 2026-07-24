@@ -41,6 +41,7 @@ func newLoginE2EFixtures(pool *pgxpool.Pool, q repo.Querier) *loginE2EFixtures {
 type loginE2EEmployee struct {
 	ID       int64
 	Username string
+	Email    string
 	Password string
 }
 
@@ -121,7 +122,7 @@ func (f *loginE2EFixtures) Employee(t *testing.T, seed employeeSeed) loginE2EEmp
 		}
 	}
 
-	return loginE2EEmployee{ID: employee.ID, Username: username, Password: password}
+	return loginE2EEmployee{ID: employee.ID, Username: username, Email: employee.Email, Password: password}
 }
 
 // ensureAdminPositionID idempotently creates the "Admin" Position ADR-0015
@@ -275,6 +276,21 @@ func (f *loginE2EFixtures) ActivationToken(t *testing.T, employeeID int64, expir
 		t.Fatalf("seed activation token: create: %v", err)
 	}
 	return raw
+}
+
+// UnusedPasswordResetTokenCount reports how many password_reset_tokens rows
+// employeeID still has with used_at IS NULL — what TestPasswordResetE2E's
+// invalidation cases (issue #37, exercised again here through the real
+// self-service endpoint) assert against: 0 means unknown/inactive email or a
+// just-redeemed token, 1 means exactly one live token survives repeated
+// requests.
+func (f *loginE2EFixtures) UnusedPasswordResetTokenCount(t *testing.T, employeeID int64) int {
+	t.Helper()
+	var n int
+	if err := f.pool.QueryRow(t.Context(), `SELECT COUNT(*) FROM password_reset_tokens WHERE employee_id = $1 AND used_at IS NULL`, employeeID).Scan(&n); err != nil {
+		t.Fatalf("count unused password reset tokens for employee %d: %v", employeeID, err)
+	}
+	return n
 }
 
 // SetLockedUntil overwrites an already-seeded Employee's locked_until

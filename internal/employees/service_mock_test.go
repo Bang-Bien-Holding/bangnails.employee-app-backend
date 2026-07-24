@@ -141,6 +141,18 @@ func (mr *MockServiceMockRecorder) ListEmployees(ctx, filter any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListEmployees", reflect.TypeOf((*MockService)(nil).ListEmployees), ctx, filter)
 }
 
+// RequestPasswordReset mocks base method.
+func (m *MockService) RequestPasswordReset(ctx context.Context, email string) {
+	m.ctrl.T.Helper()
+	m.ctrl.Call(m, "RequestPasswordReset", ctx, email)
+}
+
+// RequestPasswordReset indicates an expected call of RequestPasswordReset.
+func (mr *MockServiceMockRecorder) RequestPasswordReset(ctx, email any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RequestPasswordReset", reflect.TypeOf((*MockService)(nil).RequestPasswordReset), ctx, email)
+}
+
 // SetEmployeeActive mocks base method.
 func (m *MockService) SetEmployeeActive(ctx context.Context, id int64, isActive bool) error {
 	m.ctrl.T.Helper()

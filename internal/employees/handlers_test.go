@@ -860,7 +860,7 @@ func TestEmployeeHandler_BulkSendPasswordResetLinks(t *testing.T) {
 }
 
 func TestEmployeeHandler_CompleteActivation(t *testing.T) {
-	validParams := completeActivationParams{Token: "sometoken", Password: "supersecret"}
+	validParams := completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "supersecret"}
 
 	tests := []struct {
 		name          string
@@ -879,7 +879,7 @@ func TestEmployeeHandler_CompleteActivation(t *testing.T) {
 		},
 		{
 			name:        "TS-HDL-40: Missing/short fields return 400",
-			bodyPayload: completeActivationParams{Token: "sometoken", Password: "short"},
+			bodyPayload: completeActivationParams{Token: "sometoken", Password: "short", ConfirmPassword: "short"},
 			setupMock: func(mockSvc *MockService) {
 				// Service should NOT be called because validation happens at the Handler layer
 			},
@@ -906,6 +906,19 @@ func TestEmployeeHandler_CompleteActivation(t *testing.T) {
 			},
 			expectedCode: http.StatusInternalServerError,
 		},
+		{
+			name:        "TS-HDL-43: confirmPassword mismatch returns 400 without calling the service",
+			bodyPayload: completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "different"},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called — eqfield validation rejects this at the Handler layer.
+			},
+			expectedCode: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				if !bytes.Contains(rec.Body.Bytes(), []byte("validation")) {
+					t.Errorf("expected response to mention validation, got %q", rec.Body.String())
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -925,6 +938,100 @@ func TestEmployeeHandler_CompleteActivation(t *testing.T) {
 			rec := httptest.NewRecorder()
 
 			h.CompleteActivation(rec, req)
+
+			if rec.Code != tc.expectedCode {
+				t.Errorf("expected status %d, got %d", tc.expectedCode, rec.Code)
+			}
+
+			if tc.checkResponse != nil {
+				tc.checkResponse(t, rec)
+			}
+		})
+	}
+}
+
+func TestEmployeeHandler_RequestPasswordReset(t *testing.T) {
+	tests := []struct {
+		name          string
+		bodyPayload   any
+		setupMock     func(mockSvc *MockService)
+		expectedCode  int
+		checkResponse func(t *testing.T, rec *httptest.ResponseRecorder)
+	}{
+		{
+			name:        "TS-HDL-44: Valid email always returns the generic 200 message",
+			bodyPayload: requestPasswordResetParams{Email: "van-a@example.com"},
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().RequestPasswordReset(gomock.Any(), "van-a@example.com")
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var resp requestPasswordResetResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("failed to unmarshal response: %v", err)
+				}
+				if resp.Message != requestPasswordResetGenericMessage {
+					t.Errorf("expected generic message %q, got %q", requestPasswordResetGenericMessage, resp.Message)
+				}
+			},
+		},
+		{
+			name:        "TS-HDL-45: Malformed email returns 400 without calling the service",
+			bodyPayload: requestPasswordResetParams{Email: "not-an-email"},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called — validation happens at the Handler layer.
+			},
+			expectedCode: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				if !bytes.Contains(rec.Body.Bytes(), []byte("validation")) {
+					t.Errorf("expected response to mention validation, got %q", rec.Body.String())
+				}
+			},
+		},
+		{
+			name:        "TS-HDL-46: Missing email returns 400 without calling the service",
+			bodyPayload: requestPasswordResetParams{},
+			setupMock: func(mockSvc *MockService) {
+				// Service should NOT be called — validation happens at the Handler layer.
+			},
+			expectedCode: http.StatusBadRequest,
+		},
+		{
+			name:        "TS-HDL-47: Unknown/inactive/pending-activation employees still get the generic 200 (anti-enumeration)",
+			bodyPayload: requestPasswordResetParams{Email: "unknown@example.com"},
+			setupMock: func(mockSvc *MockService) {
+				mockSvc.EXPECT().RequestPasswordReset(gomock.Any(), "unknown@example.com")
+			},
+			expectedCode: http.StatusOK,
+			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
+				var resp requestPasswordResetResponse
+				if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+					t.Fatalf("failed to unmarshal response: %v", err)
+				}
+				if resp.Message != requestPasswordResetGenericMessage {
+					t.Errorf("expected generic message %q, got %q", requestPasswordResetGenericMessage, resp.Message)
+				}
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockSvc := NewMockService(ctrl)
+
+			tc.setupMock(mockSvc)
+
+			h := NewHandler(mockSvc)
+
+			jsonBody, err := json.Marshal(tc.bodyPayload)
+			if err != nil {
+				t.Fatalf("failed to marshal request body: %v", err)
+			}
+			req := httptest.NewRequest(http.MethodPost, "/password-reset-requests", bytes.NewReader(jsonBody))
+			rec := httptest.NewRecorder()
+
+			h.RequestPasswordReset(rec, req)
 
 			if rec.Code != tc.expectedCode {
 				t.Errorf("expected status %d, got %d", tc.expectedCode, rec.Code)

@@ -57,6 +57,12 @@ type Querier interface {
 	// only the "delete" half of an all-or-nothing count-check-then-delete, not
 	// an existence check itself.
 	DeletePositions(ctx context.Context, ids []int64) (int64, error)
+	// CompleteActivation (issue #38): signs out any device holding a Session
+	// under the Employee's old password once they've completed an
+	// activation/reset. employee_id is UNIQUE on sessions, so this ends at most
+	// one row; an Employee with no open Session returns 0 rows rather than an
+	// error.
+	DeleteSessionByEmployeeID(ctx context.Context, employeeID int64) (int64, error)
 	// Logout: ends the Session matching this bearer token's hash immediately,
 	// no re-authentication required. A hash matching no row (already logged
 	// out, expired and reaped, or never valid) still returns 0 rows rather than

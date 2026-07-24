@@ -90,11 +90,26 @@ func (c *loginE2EClient) Logout(t *testing.T, token string) apiResponse {
 	return c.authRequest(t, http.MethodPost, "/auth/logout", token, nil)
 }
 
+// Activate sends confirmPassword equal to password — every existing call
+// site here is exercising something other than the confirmPassword check
+// (reuse, expiry, staleness), so it needs the confirm to match for the
+// request to even reach that code path (issue #38's eqfield validation runs
+// before the service call). TestPasswordResetE2E's own file covers a
+// deliberate mismatch via RawActivate.
 func (c *loginE2EClient) Activate(t *testing.T, token, password string) apiResponse {
 	t.Helper()
+	return c.RawActivate(t, token, password, password)
+}
+
+// RawActivate posts an arbitrary confirmPassword alongside token/password —
+// the escape hatch past Activate's matching-confirm convenience, for tests
+// that need a deliberate mismatch.
+func (c *loginE2EClient) RawActivate(t *testing.T, token, password, confirmPassword string) apiResponse {
+	t.Helper()
 	return e2eRequest(t, c.http, http.MethodPost, c.base+"/activate", map[string]any{
-		"token":    token,
-		"password": password,
+		"token":           token,
+		"password":        password,
+		"confirmPassword": confirmPassword,
 	})
 }
 
@@ -106,6 +121,17 @@ func (c *loginE2EClient) MustActivate(t *testing.T, token, password string) {
 	if resp.status != http.StatusNoContent {
 		t.Fatalf("POST /activate: expected 204, got %d: %s", resp.status, resp.raw)
 	}
+}
+
+// RequestPasswordReset hits the real public, unauthenticated
+// POST /password-reset-requests endpoint (issue #38) — the entry point
+// TestPasswordResetE2E drives, as opposed to seeding a token directly via
+// fixtures.ActivationToken.
+func (c *loginE2EClient) RequestPasswordReset(t *testing.T, email string) apiResponse {
+	t.Helper()
+	return e2eRequest(t, c.http, http.MethodPost, c.base+"/password-reset-requests", map[string]any{
+		"email": email,
+	})
 }
 
 // AdminGET hits the one real admin-gated route (GET /v1/employees)

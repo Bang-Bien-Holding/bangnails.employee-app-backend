@@ -560,6 +560,15 @@ RETURNING *;
 DELETE FROM sessions
 WHERE token_hash = sqlc.arg(token_hash);
 
+-- name: DeleteSessionByEmployeeID :execrows
+-- CompleteActivation (issue #38): signs out any device holding a Session
+-- under the Employee's old password once they've completed an
+-- activation/reset. employee_id is UNIQUE on sessions, so this ends at most
+-- one row; an Employee with no open Session returns 0 rows rather than an
+-- error.
+DELETE FROM sessions
+WHERE employee_id = sqlc.arg(employee_id);
+
 -- name: GetSessionByTokenHash :one
 -- Heartbeat's (issue #23) and ValidateSession's (issue #25) lookup of the
 -- Session a bearer token currently names. A hash matching no row — never

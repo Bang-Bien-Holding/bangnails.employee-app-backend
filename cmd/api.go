@@ -140,6 +140,12 @@ func (app *application) mount() http.Handler {
 		// ownership, not admin identity.
 		r.Post("/activate", employeeHandler.CompleteActivation)
 
+		// Public, unauthenticated for the same reason as /activate above:
+		// the caller doesn't hold an Admin Session yet, they're asking for
+		// one to be recoverable. The handler never reveals whether the
+		// email matched an Employee (see Handler.RequestPasswordReset).
+		r.Post("/password-reset-requests", employeeHandler.RequestPasswordReset)
+
 		// Every existing admin endpoint (Employees, Stores, Positions) now
 		// requires a valid Admin Session (ADR-0015, issue #25) — the gate
 		// lives entirely at this routing layer, via auth.AdminOnly,

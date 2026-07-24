@@ -1994,6 +1994,102 @@ func TestEmployeeService_BulkSendPasswordResetLinks(t *testing.T) {
 	}
 }
 
+// TestEmployeeService_RequestPasswordReset covers issue #38's self-service
+// entry point: every branch below must return without error to the caller
+// (RequestPasswordReset has no error return by design — see service.go) and
+// must only ever call the mailer for the two eligible branches.
+func TestEmployeeService_RequestPasswordReset(t *testing.T) {
+	ctx := context.Background()
+	dbErr := errors.New("connection refused")
+
+	activeWithPassword := repo.Employee{ID: 1, FullName: "Nguyen Van A", Email: "van-a@example.com", IsActive: true, Password: []byte("hashed")}
+	activeNoPassword := repo.Employee{ID: 2, FullName: "Tran Thi B", Email: "tran-b@example.com", IsActive: true, Password: nil}
+	inactiveEmployee := repo.Employee{ID: 3, FullName: "Le Van C", Email: "le-c@example.com", IsActive: false, Password: []byte("hashed")}
+
+	tests := []struct {
+		name      string
+		email     string
+		setupMock func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient)
+	}{
+		{
+			name:  "TC-REQRESET-01: Unknown email sends no email",
+			email: "unknown@example.com",
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), "unknown@example.com").Return(repo.Employee{}, pgx.ErrNoRows)
+			},
+		},
+		{
+			name:  "TC-REQRESET-02: Employee lookup database error sends no email",
+			email: "unknown@example.com",
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), "unknown@example.com").Return(repo.Employee{}, dbErr)
+			},
+		},
+		{
+			name:  "TC-REQRESET-03: Inactive employee sends no email",
+			email: inactiveEmployee.Email,
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), inactiveEmployee.Email).Return(inactiveEmployee, nil)
+			},
+		},
+		{
+			name:  "TC-REQRESET-04: Active employee never activated resends the activation email",
+			email: activeNoPassword.Email,
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), activeNoPassword.Email).Return(activeNoPassword, nil)
+				mockRepo.EXPECT().InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), activeNoPassword.ID).Return(nil)
+				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 1, EmployeeID: activeNoPassword.ID}, nil)
+				mockMailer.EXPECT().Send(gomock.Any(), activeNoPassword.Email, mailer.AccountActivationTemplate, gomock.Any()).Return(nil)
+			},
+		},
+		{
+			name:  "TC-REQRESET-05: Active employee with a password gets a password-reset email",
+			email: activeWithPassword.Email,
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), activeWithPassword.Email).Return(activeWithPassword, nil)
+				mockRepo.EXPECT().InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), activeWithPassword.ID).Return(nil)
+				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 2, EmployeeID: activeWithPassword.ID}, nil)
+				mockMailer.EXPECT().Send(gomock.Any(), activeWithPassword.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(nil)
+			},
+		},
+		{
+			name:  "TC-REQRESET-06: Token issuance failure for an eligible employee is swallowed, no mailer call",
+			email: activeWithPassword.Email,
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), activeWithPassword.Email).Return(activeWithPassword, nil)
+				mockRepo.EXPECT().InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), activeWithPassword.ID).Return(dbErr)
+			},
+		},
+		{
+			name:  "TC-REQRESET-07: Mailer failure for an eligible employee is swallowed",
+			email: activeWithPassword.Email,
+			setupMock: func(mockRepo *mocks.MockQuerier, mockMailer *mailermocks.MockClient) {
+				mockRepo.EXPECT().GetEmployeeByEmail(gomock.Any(), activeWithPassword.Email).Return(activeWithPassword, nil)
+				mockRepo.EXPECT().InvalidatePasswordResetTokensByEmployeeID(gomock.Any(), activeWithPassword.ID).Return(nil)
+				mockRepo.EXPECT().CreatePasswordResetToken(gomock.Any(), gomock.Any()).Return(repo.PasswordResetToken{ID: 3, EmployeeID: activeWithPassword.ID}, nil)
+				mockMailer.EXPECT().Send(gomock.Any(), activeWithPassword.Email, mailer.PasswordResetTemplate, gomock.Any()).Return(dbErr)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			mockRepo := mocks.NewMockQuerier(ctrl)
+			mockMailer := mailermocks.NewMockClient(ctrl)
+			mockOdoo := odoomocks.NewMockClient(ctrl)
+
+			tc.setupMock(mockRepo, mockMailer)
+
+			svc := newTestService(mockRepo, mockMailer, mockOdoo)
+
+			// No error return to assert on (see service.go) — ctrl itself
+			// fails the test if an unexpected/missing mock call happened.
+			svc.RequestPasswordReset(ctx, tc.email)
+		})
+	}
+}
+
 func TestEmployeeService_CompleteActivation(t *testing.T) {
 	ctx := context.Background()
 
@@ -2008,7 +2104,7 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 	}{
 		{
 			name:        "TC-ACTIVATE-01: Completes activation successfully",
-			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret"},
+			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(validToken, nil)
 				mockRepo.EXPECT().
@@ -2022,12 +2118,14 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 						}
 						return 1, nil
 					})
+				mockRepo.EXPECT().DeleteSessionByEmployeeID(gomock.Any(), validToken.EmployeeID).Return(int64(1), nil)
+				mockRepo.EXPECT().ResetFailedLoginAttempts(gomock.Any(), validToken.EmployeeID).Return(nil)
 			},
 			expectedErr: nil,
 		},
 		{
 			name:        "TC-ACTIVATE-02: Unknown/expired/used token translates to ErrInvalidOrExpiredToken",
-			inputParams: completeActivationParams{Token: "badtoken", Password: "supersecret"},
+			inputParams: completeActivationParams{Token: "badtoken", Password: "supersecret", ConfirmPassword: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("badtoken")).Return(repo.PasswordResetToken{}, pgx.ErrNoRows)
 			},
@@ -2035,7 +2133,7 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 		},
 		{
 			name:        "TC-ACTIVATE-03: Fails on database error redeeming the token",
-			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret"},
+			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(repo.PasswordResetToken{}, dbErr)
 			},
@@ -2043,12 +2141,34 @@ func TestEmployeeService_CompleteActivation(t *testing.T) {
 		},
 		{
 			name:        "TC-ACTIVATE-04: Fails on database error setting the password",
-			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret"},
+			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "supersecret"},
 			setupMock: func(mockRepo *mocks.MockQuerier) {
 				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(validToken, nil)
 				mockRepo.EXPECT().SetEmployeePassword(gomock.Any(), gomock.Any()).Return(int64(0), dbErr)
 			},
 			expectedErr: dbErr,
+		},
+		{
+			name:        "TC-ACTIVATE-05: Session deletion failure is logged but does not fail activation",
+			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "supersecret"},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(validToken, nil)
+				mockRepo.EXPECT().SetEmployeePassword(gomock.Any(), gomock.Any()).Return(int64(1), nil)
+				mockRepo.EXPECT().DeleteSessionByEmployeeID(gomock.Any(), validToken.EmployeeID).Return(int64(0), dbErr)
+				mockRepo.EXPECT().ResetFailedLoginAttempts(gomock.Any(), validToken.EmployeeID).Return(nil)
+			},
+			expectedErr: nil,
+		},
+		{
+			name:        "TC-ACTIVATE-06: Failed-login-attempts reset failure is logged but does not fail activation",
+			inputParams: completeActivationParams{Token: "sometoken", Password: "supersecret", ConfirmPassword: "supersecret"},
+			setupMock: func(mockRepo *mocks.MockQuerier) {
+				mockRepo.EXPECT().RedeemPasswordResetToken(gomock.Any(), tokenx.Hash("sometoken")).Return(validToken, nil)
+				mockRepo.EXPECT().SetEmployeePassword(gomock.Any(), gomock.Any()).Return(int64(1), nil)
+				mockRepo.EXPECT().DeleteSessionByEmployeeID(gomock.Any(), validToken.EmployeeID).Return(int64(1), nil)
+				mockRepo.EXPECT().ResetFailedLoginAttempts(gomock.Any(), validToken.EmployeeID).Return(dbErr)
+			},
+			expectedErr: nil,
 		},
 	}
 

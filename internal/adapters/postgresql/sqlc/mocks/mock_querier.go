@@ -220,6 +220,21 @@ func (mr *MockQuerierMockRecorder) DeletePositions(ctx, ids any) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeletePositions", reflect.TypeOf((*MockQuerier)(nil).DeletePositions), ctx, ids)
 }
 
+// DeleteSessionByEmployeeID mocks base method.
+func (m *MockQuerier) DeleteSessionByEmployeeID(ctx context.Context, employeeID int64) (int64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteSessionByEmployeeID", ctx, employeeID)
+	ret0, _ := ret[0].(int64)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// DeleteSessionByEmployeeID indicates an expected call of DeleteSessionByEmployeeID.
+func (mr *MockQuerierMockRecorder) DeleteSessionByEmployeeID(ctx, employeeID any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteSessionByEmployeeID", reflect.TypeOf((*MockQuerier)(nil).DeleteSessionByEmployeeID), ctx, employeeID)
+}
+
 // DeleteSessionByTokenHash mocks base method.
 func (m *MockQuerier) DeleteSessionByTokenHash(ctx context.Context, tokenHash string) (int64, error) {
 	m.ctrl.T.Helper()

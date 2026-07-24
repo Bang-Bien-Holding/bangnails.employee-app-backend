@@ -245,6 +245,43 @@ func (h *Handler) CompleteActivation(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// requestPasswordResetResponse is the one and only body
+// RequestPasswordReset ever returns, on every request regardless of
+// outcome — see requestPasswordResetGenericMessage.
+type requestPasswordResetResponse struct {
+	Message string `json:"message"`
+}
+
+// requestPasswordResetGenericMessage is deliberately identical for every
+// case RequestPasswordReset's service call can branch into — unknown email,
+// inactive employee, pending-activation employee, or active employee — so
+// none of those cases is distinguishable from the HTTP response (issue #38,
+// #36's anti-enumeration requirement).
+const requestPasswordResetGenericMessage = "If an account with that email exists, we've sent instructions."
+
+// RequestPasswordReset is a public, unauthenticated endpoint — any caller
+// can submit any email, no admin session required. It always responds
+// 200 OK with the same generic message; the one exception is a
+// syntactically malformed email, rejected below by validate.Struct before
+// the service is ever called, since that's pure input validation and
+// reveals nothing about account existence.
+func (h *Handler) RequestPasswordReset(w http.ResponseWriter, r *http.Request) {
+	var params requestPasswordResetParams
+	if err := json.Read(w, r, &params); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if err := validate.Struct(params); err != nil {
+		http.Error(w, "validation failed: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	h.service.RequestPasswordReset(r.Context(), params.Email)
+
+	json.Write(w, http.StatusOK, requestPasswordResetResponse{Message: requestPasswordResetGenericMessage})
+}
+
 // ListEmployees handles GET /employees' optional search/filter query
 // parameters (issue #28): q, position_ids, store_ids, odoo_employee_ids,
 // is_active — see parseListEmployeesFilter for how each is read.
