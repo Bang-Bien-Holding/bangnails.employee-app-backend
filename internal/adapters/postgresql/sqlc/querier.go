@@ -191,7 +191,22 @@ type Querier interface {
 	// query per store. LATERAL subqueries (rather than a single LEFT JOIN +
 	// array_agg) keep the two independent whitelists from cross-joining each
 	// other.
-	ListStores(ctx context.Context) ([]ListStoresRow, error)
+	//
+	// Optional-filter search for issues #32/#33/#34: every sqlc.narg(...) IS
+	// NULL check skips that facet entirely when the caller omitted the
+	// corresponding query parameter (stores.ListStoresFilter's zero value), same
+	// "$n IS NULL means skip this filter" pattern as ListEmployees (issue #28).
+	// store_name and city are independent, AND-across facets, each a
+	// case-insensitive substring match; city never matches a store with no city
+	// set, since NULL city ILIKE anything is NULL (falsy), not true.
+	// wifi_whitelist_enabled (issue #33) is an exact-match boolean facet, AND'd
+	// with the rest. odoo_store_ids (issue #34) is OR-within/AND-across, same
+	// shape as ListStoresByOdooStoreIDs' odoo_store_id = ANY(...) — matched
+	// against s.odoo_store_id, VARCHAR not bigint (unlike ListEmployees'
+	// odoo_employee_ids), so a NULL odoo_store_id never matches, same as city.
+	// Sorted case-insensitively by store_name (issue #32), replacing the former
+	// ORDER BY s.city, s.store_name.
+	ListStores(ctx context.Context, arg ListStoresParams) ([]ListStoresRow, error)
 	// Resolves a batch of Odoo store ids (matched against store's VARCHAR
 	// odoo_store_id join key — the same one SyncStores already uses) to this
 	// system's internal store.id, for employee sync to map each employee's

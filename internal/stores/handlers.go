@@ -2,8 +2,11 @@ package stores
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/httpx"
 	"github.com/Bang-Bien-Holding/bangnails.employee-app-backend/internal/json"
@@ -70,14 +73,76 @@ func (h *Handler) GetStoreByID(w http.ResponseWriter, r *http.Request) {
 	json.Write(w, http.StatusOK, newStoreResponse(detail))
 }
 
+// ListStores handles GET /v1/stores' optional search/filter query
+// parameters (issues #32/#33/#34): store_name, city, wifi_whitelist_enabled,
+// and odoo_store_ids — see parseListStoresFilter for how each is read.
 func (h *Handler) ListStores(w http.ResponseWriter, r *http.Request) {
-	details, err := h.service.ListStores(r.Context())
+	filter, err := parseListStoresFilter(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	details, err := h.service.ListStores(r.Context(), filter)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	json.Write(w, http.StatusOK, newStoreResponses(details))
+}
+
+// parseListStoresFilter reads ListStores' query parameters into a
+// ListStoresFilter. Every field defaults to "don't filter on this facet"
+// when its query parameter is absent or empty — the only failure mode is
+// wifi_whitelist_enabled holding something ParseBool doesn't recognize
+// (issue #33). odoo_store_ids (issue #34) has no such failure mode: it's a
+// plain comma-separated string list, every element valid by construction,
+// unlike employees' numeric id-list params.
+func parseListStoresFilter(r *http.Request) (ListStoresFilter, error) {
+	var filter ListStoresFilter
+
+	if storeName := r.URL.Query().Get("store_name"); storeName != "" {
+		filter.StoreName = &storeName
+	}
+	if city := r.URL.Query().Get("city"); city != "" {
+		filter.City = &city
+	}
+	if raw := r.URL.Query().Get("wifi_whitelist_enabled"); raw != "" {
+		wifiWhitelistEnabled, err := strconv.ParseBool(raw)
+		if err != nil {
+			return ListStoresFilter{}, fmt.Errorf("invalid wifi_whitelist_enabled: %q is not a valid boolean", raw)
+		}
+		filter.WifiWhitelistEnabled = &wifiWhitelistEnabled
+	}
+	filter.OdooStoreIDs = parseStringListQueryParam(r, "odoo_store_ids")
+
+	return filter, nil
+}
+
+// parseStringListQueryParam parses name's comma-separated query parameter
+// (e.g. "odoo_store_ids=A1,A2,A3") into a []string. Returns nil when the
+// parameter is absent or empty, so the caller can tell "not filtering on
+// this facet" apart from "filter to nothing" further down — mirrors
+// employees.parseInt64ListQueryParam, minus the per-element numeric parse
+// (and its failure mode) since every string is already valid. Empty
+// elements (a double comma or a trailing comma) are dropped rather than
+// kept as "" — they can never match a real odoo_store_id, so keeping them
+// would just be dead weight in the filter list.
+func parseStringListQueryParam(r *http.Request, name string) []string {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return nil
+	}
+
+	parts := strings.Split(raw, ",")
+	values := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			values = append(values, trimmed)
+		}
+	}
+	return values
 }
 
 func (h *Handler) PatchStore(w http.ResponseWriter, r *http.Request) {

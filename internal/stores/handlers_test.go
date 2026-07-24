@@ -587,7 +587,7 @@ func TestStoreHandler_ListStores(t *testing.T) {
 		{
 			name: "returns 200 with an array covering active and inactive stores, and stores with empty wifi lists",
 			setupMock: func(mockSvc *MockService) {
-				mockSvc.EXPECT().ListStores(gomock.Any()).Return([]StoreDetail{
+				mockSvc.EXPECT().ListStores(gomock.Any(), gomock.Any()).Return([]StoreDetail{
 					{
 						Store:        repo.Store{ID: 10, StoreName: "Hanoi 1", City: pgtype.Text{String: "Hanoi", Valid: true}, WifiWhitelistEnabled: true},
 						IPAddresses:  []string{"138.101.10.1"},
@@ -623,7 +623,7 @@ func TestStoreHandler_ListStores(t *testing.T) {
 		{
 			name: "an empty store list returns 200 with an empty array, not null",
 			setupMock: func(mockSvc *MockService) {
-				mockSvc.EXPECT().ListStores(gomock.Any()).Return([]StoreDetail{}, nil)
+				mockSvc.EXPECT().ListStores(gomock.Any(), gomock.Any()).Return([]StoreDetail{}, nil)
 			},
 			expectedCode: http.StatusOK,
 			checkResponse: func(t *testing.T, rec *httptest.ResponseRecorder) {
@@ -635,7 +635,7 @@ func TestStoreHandler_ListStores(t *testing.T) {
 		{
 			name: "an unexpected service error maps to 500",
 			setupMock: func(mockSvc *MockService) {
-				mockSvc.EXPECT().ListStores(gomock.Any()).Return(nil, errors.New("db exploded"))
+				mockSvc.EXPECT().ListStores(gomock.Any(), gomock.Any()).Return(nil, errors.New("db exploded"))
 			},
 			expectedCode: http.StatusInternalServerError,
 		},

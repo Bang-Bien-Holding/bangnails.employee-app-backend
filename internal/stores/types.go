@@ -183,12 +183,31 @@ type StoreWifiToggleResult struct {
 	UpdatedAt            pgtype.Timestamptz
 }
 
+// ListStoresFilter holds GET /v1/stores' optional search/filter query
+// parameters (issues #32, #33, #34). Every field's zero value (nil) means
+// "don't filter on this facet" — an omitted or empty query parameter, not an
+// explicit empty-match. All fields are independent, AND-across facets: every
+// given facet must match.
+type ListStoresFilter struct {
+	// StoreName is a case-insensitive substring match against store_name.
+	StoreName *string
+	// City is a case-insensitive substring match against city.
+	City *string
+	// WifiWhitelistEnabled is an exact-match filter against
+	// wifi_whitelist_enabled (issue #33).
+	WifiWhitelistEnabled *bool
+	// OdooStoreIDs matches a store's odoo_store_id against any id in the
+	// list — OR-within, AND-across with the other facets (issue #34). A
+	// well-formed but nonexistent id simply matches nothing.
+	OdooStoreIDs []string
+}
+
 type Service interface {
 	SyncStores(ctx context.Context) error
 	SyncStatus(ctx context.Context) SyncStatus
 	GetStoreByID(ctx context.Context, id int64) (StoreDetail, error)
 	UpdateStore(ctx context.Context, id int64, params patchStoreParams) (StoreDetail, error)
-	ListStores(ctx context.Context) ([]StoreDetail, error)
+	ListStores(ctx context.Context, filter ListStoresFilter) ([]StoreDetail, error)
 	DeleteWifiWhitelistEntries(ctx context.Context, id int64, params deleteWifiWhitelistParams) ([]WifiWhitelistDeleteResult, error)
 	SetStoreWifiWhitelistEnabled(ctx context.Context, id int64, params setWifiWhitelistEnabledParams) (StoreWifiToggleResult, error)
 	BulkSetWifiWhitelistEnabled(ctx context.Context, params bulkSetWifiWhitelistEnabledParams) ([]StoreWifiToggleResult, error)

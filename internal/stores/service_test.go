@@ -134,7 +134,7 @@ func TestStoreService_ListStores(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
-		mockRepo.EXPECT().ListStores(gomock.Any()).Return([]repo.ListStoresRow{
+		mockRepo.EXPECT().ListStores(gomock.Any(), gomock.Any()).Return([]repo.ListStoresRow{
 			{
 				Store:        repo.Store{ID: 10, StoreName: "Hanoi 1", City: pgtype.Text{String: "Hanoi", Valid: true}, WifiWhitelistEnabled: true},
 				IpAddresses:  []netip.Addr{netip.MustParseAddr("138.101.10.1")},
@@ -149,7 +149,7 @@ func TestStoreService_ListStores(t *testing.T) {
 
 		svc := newTestService(mockRepo, nil)
 
-		details, err := svc.ListStores(t.Context())
+		details, err := svc.ListStores(t.Context(), ListStoresFilter{})
 		if err != nil {
 			t.Fatalf("ListStores() error = %v", err)
 		}
@@ -176,11 +176,11 @@ func TestStoreService_ListStores(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
-		mockRepo.EXPECT().ListStores(gomock.Any()).Return([]repo.ListStoresRow{}, nil)
+		mockRepo.EXPECT().ListStores(gomock.Any(), gomock.Any()).Return([]repo.ListStoresRow{}, nil)
 
 		svc := newTestService(mockRepo, nil)
 
-		details, err := svc.ListStores(t.Context())
+		details, err := svc.ListStores(t.Context(), ListStoresFilter{})
 		if err != nil {
 			t.Fatalf("ListStores() error = %v", err)
 		}
@@ -194,11 +194,11 @@ func TestStoreService_ListStores(t *testing.T) {
 		mockRepo := sqlcmocks.NewMockQuerier(ctrl)
 
 		boom := errors.New("boom")
-		mockRepo.EXPECT().ListStores(gomock.Any()).Return(nil, boom)
+		mockRepo.EXPECT().ListStores(gomock.Any(), gomock.Any()).Return(nil, boom)
 
 		svc := newTestService(mockRepo, nil)
 
-		if _, err := svc.ListStores(t.Context()); !errors.Is(err, boom) {
+		if _, err := svc.ListStores(t.Context(), ListStoresFilter{}); !errors.Is(err, boom) {
 			t.Errorf("ListStores() error = %v, want %v", err, boom)
 		}
 	})
