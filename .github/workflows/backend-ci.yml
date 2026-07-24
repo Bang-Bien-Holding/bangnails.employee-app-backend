@@ -109,7 +109,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       mailpit:
-        image: axllent/mailpit
+        image: axllent/mailpit@sha256:b868afa176bfd6cce2323ea316cd99ccad77915e51e595748f6d786700ecf109 # v1.30.5
         ports:
           - 1025:1025 # SMTP (MAILPIT_ADDR default: localhost:1025)
           - 8025:8025 # HTTP API (password_reset_e2e_test.go's mailpitAPIBase)
